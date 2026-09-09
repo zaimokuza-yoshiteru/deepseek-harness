@@ -57,7 +57,7 @@ jobs:
       - name: Prepare embedded runtime
         run: pnpm --dir apps/desktop run prepare:runtime
       - name: Test desktop package management
-        run: pnpm exec vitest run apps/desktop/tests/npm-environment.spec.ts apps/desktop/tests/project-manager.spec.ts apps/desktop/tests/distribution.spec.ts apps/desktop/tests/package-target.spec.ts
+        run: pnpm exec vitest run apps/desktop/tests/npm-environment.spec.ts apps/desktop/tests/project-manager.spec.ts apps/desktop/tests/distribution.spec.ts apps/desktop/tests/package-target.spec.ts apps/desktop/tests/host-process.spec.ts
       - name: Build application ZIP
         id: package
         run: pnpm --dir apps/desktop run ${{ matrix.script }}
