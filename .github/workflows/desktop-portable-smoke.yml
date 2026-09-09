@@ -1,0 +1,50 @@
+name: Desktop portable smoke replay
+
+on:
+  push:
+    branches: [desktop]
+    paths: [.github/workflows/desktop-portable-smoke.yml]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Build run containing the application artifact
+        required: true
+      target:
+        description: Application platform
+        type: choice
+        options: [win-x64, mac-arm64]
+        default: win-x64
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  smoke:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ${{ inputs.target == 'win-x64' && 'windows-2025' || 'macos-15' }}
+    defaults:
+      run:
+        shell: ${{ inputs.target == 'win-x64' && 'pwsh' || 'bash' }}
+    env:
+      DESKTOP_SMOKE_TARGET: ${{ inputs.target }}
+      DSH_TELEMETRY_MODE: DISABLED
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24.17.0'
+          package-manager-cache: false
+      - uses: pnpm/action-setup@v4
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@v4
+        with:
+          name: dsh-desktop-${{ inputs.target }}
+          path: .artifacts/smoke-input
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+      - name: Verify downloaded application
+        run: node apps/desktop/scripts/replay-portable-smoke.mjs

@@ -31,3 +31,5 @@ Runtime preparation runs before the full CI build and logs download, extraction,
 Application archives are larger and platform-specific. npm credentials stay on the recipient's machine. Exact adapter version and integrity checks bind the release; agent executables remain external. Users replace the whole application for desktop upgrades. Plugin compatibility with the desktop's pipe transport remains required.
 
 Verification includes a real self-signed HTTPS registry, configuration precedence tests, a same-base build upgrade test, and a packaged-host smoke that installs from an empty home with an unreachable registry and checks adapter inventory. The smoke does not exercise live ACP agents or model services; CI owns native Windows build execution.
+
+Smoke logs distinguish installation, host startup, asset transport, and activation. Completed ZIPs remain available when a later smoke fails, and a manual replay workflow can test those resources without rebuilding the core. A replay is diagnostic evidence; a changed product still needs a complete successful build before distribution.

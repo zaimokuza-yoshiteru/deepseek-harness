@@ -81,3 +81,5 @@ portable 命令不使用 Developer ID、Apple 公证、Windows EV Token 或上�
 ## 验证
 
 定向测试覆盖真实 npmrc registry/TLS 请求、环境变量优先级、独立数据目录、构建序号、插件事务和目标选择。`pnpm exec tsx apps/desktop/scripts/smoke-portable.ts mac-arm64`（或 `win-x64`）使用全新的临时数据目录与不可达 registry 启动打包后端，检查前端资源并验证已安装适配器的精确版本。它不测试真实模型或 ACP agent。[fork 分发决策](../../.agents/notes/implemented/architecture/2026-09-10-desktop-portable-distribution.zh.md)记录了取舍。
+
+诊断时可以在该冒烟命令后追加应用 ZIP 路径，或在 Actions 中运行 **Desktop portable smoke replay**，填写原构建的 run ID 与平台。ZIP 会解压到临时目录。失败构建会保留已完成的 ZIP 用于诊断，分发前仍须确认完整构建与冒烟检查通过。重跑使用所选源码版本的测试驱动和下载应用中的资源，因此产品改动仍需重新完整构建后才能交付。

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import extractZip from '@electron-internal/extract-zip'
 import { DesktopProjectManager } from '../src/project-manager.ts'
 import { DesktopHostProcess } from '../src/host-process.ts'
 import { resolveDesktopPaths } from '../src/paths.ts'
@@ -10,7 +11,20 @@ import { desktopTargetBuildPaths } from './desktop-build-paths.mjs'
 
 const target = process.argv[2]
 if (target !== 'mac-arm64' && target !== 'win-x64') throw new Error('Expected mac-arm64 or win-x64')
-const artifacts = desktopTargetBuildPaths(target).artifacts
+const archive = process.argv[3]
+const artifacts = archive === undefined
+  ? desktopTargetBuildPaths(target).artifacts
+  : mkdtempSync(join(tmpdir(), 'dsh-portable-archive-'))
+if (archive !== undefined) {
+  const unpacked = join(artifacts, target === 'mac-arm64' ? 'mac-arm64' : 'win-unpacked')
+  console.log(`Packaged smoke: extracting ${archive}`)
+  try {
+    await extractZip(archive, { dir: unpacked })
+  } catch (error) {
+    rmSync(artifacts, { recursive: true, force: true })
+    throw error
+  }
+}
 const resources = target === 'mac-arm64'
   ? join(artifacts, 'mac-arm64', 'DSH Desktop.app', 'Contents', 'Resources')
   : join(artifacts, 'win-unpacked', 'resources')
@@ -59,4 +73,5 @@ try {
   clearTimeout(timeout)
   await host?.stop()
   rmSync(home, { recursive: true, force: true })
+  if (archive !== undefined) rmSync(artifacts, { recursive: true, force: true })
 }
