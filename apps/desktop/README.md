@@ -10,7 +10,7 @@ Download the application ZIP from the fork's GitHub Release assets. GitHub's aut
 
 The Mac application uses ad-hoc signing without Apple notarization; the Windows application is unsigned. Operating-system or company application policies can require approval before first opening. These packages do not guarantee a prompt-free launch.
 
-The first launch installs the packaged seed offline into a separate writable profile and verifies that the backend boots. Model requests and configured ACP agents can still require network access. No automatic desktop update runs; replace the application with a newer release ZIP while it is closed.
+The first launch installs the packaged seed offline into a separate writable profile and verifies that the backend boots. It adopts the extracted store directly when no desktop store exists; upgrades merge into the existing store to preserve downloaded plugins. Model requests and configured ACP agents can still require network access. No automatic desktop update runs; replace the application with a newer release ZIP while it is closed.
 
 ## Data and plugins
 

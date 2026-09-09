@@ -212,11 +212,14 @@ describe('desktop project transactions', () => {
     try {
       await expect(manager.applyRelease(seed, '2.0.0', hooks())).rejects.toThrow(/does not match Electron/u)
       await manager.applyRelease(seed, '1.0.0', hooks())
+      expect(readFileSync(join(paths.pnpm.store, 'seed-entry'), 'utf8')).toBe('content')
+      writeFileSync(join(paths.pnpm.store, 'plugin-store-entry'), 'installed plugin')
       writeFileSync(
         join(paths.profile, 'node_modules', '@deepseek-ai', 'dsh-desktop-host', 'package.json'),
         '{"name":"@deepseek-ai/dsh-desktop-host","version":"0.9.0"}\n',
       )
       await expect(manager.applyRelease(seed, '1.0.0', hooks())).resolves.toBe(true)
+      expect(readFileSync(join(paths.pnpm.store, 'plugin-store-entry'), 'utf8')).toBe('installed plugin')
     } finally {
       if (previousLog === undefined) delete process.env.TEST_PNPM_LOG
       else process.env.TEST_PNPM_LOG = previousLog

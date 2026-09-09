@@ -512,7 +512,12 @@ export class DesktopProjectManager {
     const extractedStore = join(transactionRoot, 'store')
     try {
       extractPnpmStoreArchives(seedDir, extractedStore)
-      mergePnpmStore(extractedStore, this.paths.pnpm.store)
+      if (existsSync(this.paths.pnpm.store)) {
+        mergePnpmStore(extractedStore, this.paths.pnpm.store)
+      } else {
+        mkdirSync(this.paths.pnpm.root, { recursive: true, mode: 0o700 })
+        renameSync(extractedStore, this.paths.pnpm.store)
+      }
     } finally {
       removeOwnedDirectory(transactionRoot)
     }
