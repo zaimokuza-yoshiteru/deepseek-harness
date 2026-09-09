@@ -31,6 +31,7 @@ function target(): { platform: RuntimePlatform; arch: RuntimeArch } {
 }
 
 async function download(url: string, path: string): Promise<void> {
+  console.log(`desktop runtime: downloading ${url}`)
   const response = await fetch(url)
   if (!response.ok) throw new Error(`desktop runtime: ${url} returned HTTP ${String(response.status)}`)
   writeFileSync(path, new Uint8Array(await response.arrayBuffer()), { mode: 0o600 })
@@ -53,11 +54,13 @@ async function prepareNode(platform: RuntimePlatform, arch: RuntimeArch): Promis
   if (actual !== expected) throw new Error(`desktop runtime: checksum mismatch for ${archiveName}`)
 
   const extraction = BUILD_PATHS.nodeExtract
+  console.log(`desktop runtime: extracting ${archiveName}`)
   rmSync(extraction, { recursive: true, force: true })
   mkdirSync(extraction, { recursive: true })
   if (platform === 'win') await extractZip(archive, { dir: extraction })
   else await extract({ cwd: extraction, file: archive })
   const source = join(extraction, folder, platform === 'win' ? 'node.exe' : 'bin/node')
+  console.log('desktop runtime: copying Node executable and license')
   const destinationRoot = join(RUNTIME_ROOT, 'node')
   const destination = join(destinationRoot, platform === 'win' ? 'node.exe' : 'node')
   rmSync(destinationRoot, { recursive: true, force: true })
@@ -97,6 +100,7 @@ async function main(): Promise<void> {
   mkdirSync(DOWNLOAD_ROOT, { recursive: true })
   mkdirSync(RUNTIME_ROOT, { recursive: true })
   await prepareNode(platform, arch)
+  console.log('desktop runtime: copying pnpm')
   const pnpmVersion = preparePnpm()
   writeFileSync(join(RUNTIME_ROOT, 'versions.json'), `${JSON.stringify({
     schemaVersion: 1,

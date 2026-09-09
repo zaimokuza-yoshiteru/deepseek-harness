@@ -54,6 +54,8 @@ jobs:
       - uses: pnpm/action-setup@v4
       - name: Install locked build dependencies
         run: pnpm install --frozen-lockfile
+      - name: Prepare embedded runtime
+        run: pnpm --dir apps/desktop run prepare:runtime
       - name: Test desktop package management
         run: pnpm exec vitest run apps/desktop/tests/npm-environment.spec.ts apps/desktop/tests/project-manager.spec.ts apps/desktop/tests/distribution.spec.ts apps/desktop/tests/package-target.spec.ts
       - name: Build application ZIP
