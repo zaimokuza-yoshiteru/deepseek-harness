@@ -36,6 +36,7 @@
   "devDependencies": {
     "@aws-sdk/client-s3": "3.1067.0",
     "@deepseek-ai/dsh-home-paths": "workspace:^",
+    "@electron-internal/extract-zip": "1.0.5",
     "@electron/notarize": "2.5.0",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.20.0",
@@ -43,7 +44,6 @@
     "app-builder-lib": "26.15.3",
     "electron": "^44.0.0",
     "electron-builder": "^26.15.3",
-    "extract-zip": "^2.0.1",
     "js-yaml": "^4.2.0",
     "msgpackr": "2.0.4",
     "pnpm": "11.7.0",

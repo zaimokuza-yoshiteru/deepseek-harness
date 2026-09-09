@@ -7,7 +7,7 @@ import { chmod, readFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { pipeline } from 'node:stream/promises'
-import extractZip from 'extract-zip'
+import extractZip from '@electron-internal/extract-zip'
 import { extract } from 'tar'
 import { resolveDesktopTargetBuildPaths } from './desktop-build-paths.mjs'
 

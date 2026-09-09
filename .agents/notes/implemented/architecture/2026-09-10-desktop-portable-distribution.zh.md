@@ -16,6 +16,8 @@ Status: implemented
 
 fork 默认采用独立的 DSH 根目录和 Electron 用户数据目录。菜单与启动流程不触发自动更新，遥测默认关闭。仍支持显式指定 DSH 根目录与遥测配置。GitHub tag 构建验证提交属于 desktop 分支，将 ZIP 和校验文件附到 prerelease，不发布 npm 包。
 
+CI 在完整构建之前准备运行时，并记录下载、解压与复制阶段。Windows Node ZIP 使用 Electron 维护的原生解压器；原先的 `extract-zip` 实现在 Windows runner 上完成校验后，以未完成的顶层 await 错误退出。
+
 ## Alternatives considered
 
 **要求系统运行时。** 这可以减小压缩包，但不符合使用者的安装要求，因此内置运行时与离线 seed。

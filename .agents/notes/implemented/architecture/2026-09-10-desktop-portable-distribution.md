@@ -16,6 +16,8 @@ The bundled pnpm reads the user's npmrc without copying it into resources. npm e
 
 The fork defaults to a separate DSH home and Electron user-data directory. Automatic updates are absent from the menu and launch path; telemetry defaults to disabled. Explicit DSH home and telemetry settings remain supported. GitHub tag builds verify desktop-branch ancestry and attach ZIPs and checksums to a prerelease without publishing npm packages.
 
+Runtime preparation runs before the full CI build and logs download, extraction, and copying stages. Windows Node ZIP extraction uses Electron's maintained native extractor; the previous `extract-zip` implementation exited with an unsettled top-level await on the Windows runner after checksum verification.
+
 ## Alternatives considered
 
 **Require a system runtime.** This would reduce the archive size but contradict the recipient's installation requirements. The runtime and offline seed are included instead.
