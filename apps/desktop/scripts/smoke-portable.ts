@@ -1,5 +1,7 @@
 /** Exercise the packaged seed and bundled Node with an empty, disposable offline profile. */
 import assert from 'node:assert/strict'
+import type { ChildProcess } from 'node:child_process'
+import { subscribe, unsubscribe } from 'node:diagnostics_channel'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -43,11 +45,36 @@ const seed = join(resources, 'seed')
 const release = JSON.parse(readFileSync(join(seed, 'desktop-release.json'), 'utf8')) as { distributionVersion: string }
 let host: DesktopHostProcess | undefined
 let stage = 'installing the packaged seed'
+const children = new Set<ChildProcess>()
+function childDiagnostic(message: unknown): void {
+  const { process: child } = message as { process: ChildProcess }
+  children.add(child)
+  const stdout = (chunk: Buffer | string): void => { process.stdout.write(chunk) }
+  const stderr = (chunk: Buffer | string): void => { process.stderr.write(chunk) }
+  child.once('spawn', () => {
+    console.log(`Packaged smoke: child ${String(child.pid)} spawned`)
+    child.stdout?.on('data', stdout)
+    child.stderr?.on('data', stderr)
+  })
+  child.once('exit', (code, signal) => {
+    console.log(`Packaged smoke: child ${String(child.pid)} exited (${String(code ?? signal)})`)
+  })
+  child.once('close', () => {
+    child.stdout?.off('data', stdout)
+    child.stderr?.off('data', stderr)
+    children.delete(child)
+  })
+}
 function progress(next: string): void {
   stage = next
   console.log(`Packaged smoke: ${stage}`)
 }
-const timeout = setTimeout(() => { console.error(`Packaged host smoke timed out while ${stage}`); process.exit(1) }, 180_000)
+const timeout = setTimeout(() => {
+  console.error(`Packaged host smoke timed out while ${stage}`)
+  for (const child of children) console.error({ pid: child.pid, exitCode: child.exitCode, signalCode: child.signalCode })
+  process.exit(1)
+}, 180_000)
+subscribe('child_process', childDiagnostic)
 try {
   progress(stage)
   await manager.applyRelease(seed, release.distributionVersion, {
@@ -71,6 +98,7 @@ try {
   console.log('Packaged offline install, host boot, frontend asset and ACP adapter: passed')
 } finally {
   clearTimeout(timeout)
+  unsubscribe('child_process', childDiagnostic)
   await host?.stop()
   rmSync(home, { recursive: true, force: true })
   if (archive !== undefined) rmSync(artifacts, { recursive: true, force: true })
