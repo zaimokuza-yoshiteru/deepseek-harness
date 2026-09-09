@@ -1,0 +1,94 @@
+name: Desktop portable
+
+on:
+  push:
+    branches: [desktop]
+    tags: ['0.1.5-alpha.2.*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Desktop build version (manual runs upload artifacts only)
+        required: true
+        default: '0.1.5-alpha.2.1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-portable-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: mac-arm64
+            runner: macos-15
+            shell: bash
+            script: package:portable:mac:arm64
+          - target: win-x64
+            runner: windows-2025
+            shell: pwsh
+            script: package:portable:win:x64
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    env:
+      DSH_DESKTOP_DISTRIBUTION_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || inputs.version || '0.1.5-alpha.2.1' }}
+      DSH_TELEMETRY_MODE: DISABLED
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24.17.0'
+          package-manager-cache: false
+      - name: Verify tag and source branch
+        run: node apps/desktop/scripts/verify-portable-tag.mjs
+      - uses: pnpm/action-setup@v4
+      - name: Install locked build dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Test desktop package management
+        run: pnpm exec vitest run apps/desktop/tests/npm-environment.spec.ts apps/desktop/tests/project-manager.spec.ts apps/desktop/tests/distribution.spec.ts apps/desktop/tests/package-target.spec.ts
+      - name: Build application ZIP
+        run: pnpm --dir apps/desktop run ${{ matrix.script }}
+      - name: Verify packaged offline host and adapter
+        run: pnpm exec tsx apps/desktop/scripts/smoke-portable.ts ${{ matrix.target }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dsh-desktop-${{ matrix.target }}
+          path: apps/desktop/.desktop-build/targets/${{ matrix.target }}/artifacts/*.zip
+          if-no-files-found: error
+          compression-level: 0
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dsh-desktop-*
+          path: artifacts
+          merge-multiple: true
+      - name: Publish application assets only
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DESKTOP_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          cd artifacts
+          sha256sum ./*.zip > SHA256SUMS.txt
+          if ! gh release view "$DESKTOP_TAG" >/dev/null 2>&1; then
+            gh release create "$DESKTOP_TAG" --verify-tag --prerelease --title "DSH Desktop $DESKTOP_TAG" --notes "DSH 0.1.5-alpha.2 + ACP adapter 0.1.5-alpha.2. Extract the complete ZIP before opening. macOS arm64 uses ad-hoc signing without notarization; Windows x64 is unsigned. No npm package is published."
+          fi
+          gh release upload "$DESKTOP_TAG" ./*.zip SHA256SUMS.txt --clobber

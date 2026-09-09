@@ -16,9 +16,12 @@ import { resolveDesktopPaths } from './paths.ts'
 import { DesktopProjectManager, type DesktopProjectHooks } from './project-manager.ts'
 import { DesktopHostProcess } from './host-process.ts'
 import { DESKTOP_IPC, type DesktopUpdateState } from './ipc.ts'
-import { formatDesktopMessage, resolveDesktopLocale } from './locale.ts'
+import { resolveDesktopLocale } from './locale.ts'
 import { claimDesktopSingleInstance } from './single-instance.ts'
 import { DesktopUpdateCoordinator } from './update-coordinator.ts'
+import { configureDesktopDistribution } from './distribution.ts'
+
+app.setPath('userData', configureDesktopDistribution())
 
 const SCHEME = 'dsh-app'
 let focusPrimaryWindow = (): void => {}
@@ -270,48 +273,6 @@ async function main(): Promise<void> {
     await updates.install()
   })
 
-  const checkAndPrompt = async (manual: boolean): Promise<void> => {
-    const state = await updates.check()
-    if (state.phase === 'error') {
-      if (manual) {
-        await dialog.showMessageBox({
-          type: 'error',
-          title: messages.updateCheckFailedTitle,
-          message: state.message ?? messages.unknownError,
-        })
-      }
-      return
-    }
-    if (state.phase !== 'available') {
-      if (manual) {
-        await dialog.showMessageBox({
-          type: 'info',
-          title: messages.updateCheckTitle,
-          message: state.message ?? messages.updateCurrent,
-        })
-      }
-      return
-    }
-    const result = await dialog.showMessageBox({
-      type: 'info',
-      title: messages.updateTitle,
-      message: messages.updateAvailable,
-      detail: formatDesktopMessage(messages.updateDetail, { version: state.version ?? '' }),
-      buttons: [messages.installAndRestart, messages.later],
-      defaultId: 0,
-      cancelId: 1,
-    })
-    if (result.response !== 0) return
-    const installed = await updates.install()
-    if (installed.phase === 'error') {
-      await dialog.showMessageBox({
-        type: 'error',
-        title: messages.updateFailedTitle,
-        message: installed.message ?? messages.unknownError,
-      })
-    }
-  }
-
   const openPluginWindow = (): void => {
     if (pluginWindow !== undefined && !pluginWindow.isDestroyed()) {
       pluginWindow.focus()
@@ -334,7 +295,6 @@ async function main(): Promise<void> {
         enabled: development === undefined,
         click: openPluginWindow,
       },
-      { label: messages.checkUpdatesMenu, click: () => { void checkAndPrompt(true) } },
       { type: 'separator' },
       { role: 'quit' },
     ],
@@ -365,7 +325,6 @@ async function main(): Promise<void> {
     mainWindow.webContents.openDevTools({ mode: 'detach' })
   }
   publishUpdate(updateState)
-  setTimeout(() => { void checkAndPrompt(false) }, 10_000)
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) focusPrimaryWindow()

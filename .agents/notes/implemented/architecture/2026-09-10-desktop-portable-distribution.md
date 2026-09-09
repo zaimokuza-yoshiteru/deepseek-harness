@@ -1,0 +1,31 @@
+# Agent Note: Desktop ZIP distribution with npm configuration
+
+Status: implemented
+
+English | [中文](2026-09-10-desktop-portable-distribution.zh.md)
+
+## Problem
+
+Internal recipients need a double-click desktop application without separately installing the harness or its JavaScript tools. They also need their existing Nexus registry and TLS configuration when installing plugins. Upstream signed releases require certificate infrastructure and use a fixed package registry.
+
+## Decision
+
+The `desktop` branch packages macOS arm64 and Windows x64 ZIPs with a local core package set, upstream Node.js, pnpm, and the exact ACP adapter release. The desktop distribution version appends a positive build counter to the pinned DSH version. The seed records both versions, and profile reconciliation compares the counter so a same-base desktop rebuild replaces backend resources.
+
+The bundled pnpm reads the user's npmrc without copying it into resources. npm environment variables retain their public spelling; general network overrides are also mapped to pnpm 11's environment spelling. Package-manager storage remains application-owned. TLS relaxation applies to the package-manager configuration, not a process-wide Node TLS switch.
+
+The fork defaults to a separate DSH home and Electron user-data directory. Automatic updates are absent from the menu and launch path; telemetry defaults to disabled. Explicit DSH home and telemetry settings remain supported. GitHub tag builds verify desktop-branch ancestry and attach ZIPs and checksums to a prerelease without publishing npm packages.
+
+## Alternatives considered
+
+**Require a system runtime.** This would reduce the archive size but contradict the recipient's installation requirements. The runtime and offline seed are included instead.
+
+**Reuse upstream signed installers.** Developer ID, notarization, and Windows EV token provisioning are outside this internal distribution. macOS uses ad-hoc signing and Windows is unsigned; operating-system approval prompts remain possible.
+
+**Replace registry constants only.** A fixed Nexus URL cannot serve recipients with different registries, authentication, or CA settings. User npmrc handling preserves those existing configurations.
+
+## Consequences
+
+Application archives are larger and platform-specific. npm credentials stay on the recipient's machine. Exact adapter version and integrity checks bind the release; agent executables remain external. Users replace the whole application for desktop upgrades. Plugin compatibility with the desktop's pipe transport remains required.
+
+Verification includes a real self-signed HTTPS registry, configuration precedence tests, a same-base build upgrade test, and a packaged-host smoke that installs from an empty home with an unreachable registry and checks adapter inventory. The smoke does not exercise live ACP agents or model services; CI owns native Windows build execution.

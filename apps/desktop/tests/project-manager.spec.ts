@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { dirname, join, relative, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -239,11 +239,28 @@ describe('desktop project transactions', () => {
     expect(invocation.args).toContain('--trust-lockfile')
     expect(invocation.args).toContain(`--config.store-dir=${paths.pnpm.store}`)
     expect(invocation.args).toContain('--config.enable-global-virtual-store=false')
-    expect(invocation.args).toContain('--config.registry=https://registry.npmjs.org/')
-    expect(invocation.env.NPM_CONFIG_REGISTRY).toBe('https://registry.npmjs.org/')
+    expect(invocation.args.some(arg => arg.startsWith('--config.registry='))).toBe(false)
+    expect(invocation.env.NPM_CONFIG_REGISTRY).toBeUndefined()
     expect(invocation.env.NPM_CONFIG_STORE_DIR).toBe(paths.pnpm.store)
-    expect(invocation.env.NPM_CONFIG_USERCONFIG).toBe(join(paths.pnpm.config, 'npmrc'))
-    expect(invocation.env.npm_config_registry).toBeUndefined()
+    expect(invocation.env.npm_config_userconfig).toBe(process.env.npm_config_userconfig ?? process.env.NPM_CONFIG_USERCONFIG ?? join(homedir(), '.npmrc'))
+    expect(invocation.env.npm_config_registry).toBe('https://user-registry.invalid')
+  })
+
+  it('reinstalls a new desktop build on the same pinned DSH base', async () => {
+    const root = temporaryRoot()
+    const seed = join(root, 'seed')
+    const paths = resolveDesktopPaths(join(root, 'home'))
+    const manager = new DesktopProjectManager(paths, { node: process.execPath, pnpm: writeFakePnpm(root) })
+    const base = release('0.1.5-alpha.2')
+    createTestSeedMetadata(seed, { ...base, distributionVersion: '0.1.5-alpha.2.1' })
+    archiveStore(seed)
+    writeIntegrity(seed)
+    await expect(manager.applyRelease(seed, '0.1.5-alpha.2.1', hooks())).resolves.toBe(true)
+    await expect(manager.applyRelease(seed, '0.1.5-alpha.2.1', hooks())).resolves.toBe(false)
+    createSeedMetadata(seed, { ...base, distributionVersion: '0.1.5-alpha.2.2' })
+    writeIntegrity(seed)
+    await expect(manager.applyRelease(seed, '0.1.5-alpha.2.2', hooks())).resolves.toBe(true)
+    expect(manager.dshVersion()).toBe('0.1.5-alpha.2')
   })
 
   it('restores the active project when the replacement backend cannot start', async () => {
@@ -365,8 +382,8 @@ describe('desktop project transactions', () => {
     const invocation = JSON.parse(readFileSync(log, 'utf8')) as { args: string[]; env: Record<string, string> }
     expect(invocation.args).toContain('add')
     expect(invocation.args).toContain('@scope/plugin@2.0.0')
-    expect(invocation.args).toContain('--config.registry=https://registry.npmjs.org/')
-    expect(invocation.env.NPM_CONFIG_REGISTRY).toBe('https://registry.npmjs.org/')
+    expect(invocation.args.some(arg => arg.startsWith('--config.registry='))).toBe(false)
+    expect(invocation.env.NPM_CONFIG_REGISTRY).toBeUndefined()
   })
 
   it('reconciles dsh to the packaged release without removing desktop plugins', async () => {

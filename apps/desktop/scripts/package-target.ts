@@ -152,6 +152,7 @@ interface DesktopPackageInvocation {
   readonly target: DesktopPackageTarget
   readonly directory: boolean
   readonly prepareOnly: boolean
+  readonly portable: boolean
 }
 
 function hostTargetName(platform: NodeJS.Platform, arch: string): DesktopPackageTargetName {
@@ -178,6 +179,7 @@ export function parseDesktopPackageInvocation(
     options: {
       dir: { type: 'boolean', default: false },
       'prepare-only': { type: 'boolean', default: false },
+      portable: { type: 'boolean', default: false },
     },
   })
   if (positionals.length > 1) throw new Error('desktop package: expected at most one target')
@@ -186,6 +188,7 @@ export function parseDesktopPackageInvocation(
     target: resolveDesktopPackageTarget(name, hostPlatform, hostArch),
     directory: values.dir,
     prepareOnly: values['prepare-only'],
+    portable: values.portable,
   }
 }
 
@@ -198,12 +201,13 @@ export function parseDesktopPackageInvocation(
 export function desktopElectronBuilderArguments(
   target: DesktopPackageTarget,
   directory: boolean,
+  portable = false,
 ): readonly string[] {
   return [
     'exec',
     'electron-builder',
     '--config',
-    'electron-builder.config.mjs',
+    portable ? 'electron-builder.portable.config.mjs' : 'electron-builder.config.mjs',
     target.builderPlatform,
     target.builderArch,
     '--publish',
@@ -238,6 +242,9 @@ function runPnpm(
 async function main(): Promise<void> {
   const invocation = parseDesktopPackageInvocation(process.argv.slice(2))
   const { target } = invocation
+  if (invocation.portable && target.name === 'mac-x64') {
+    throw new Error('desktop portable: only mac-arm64 and win-x64 are supported')
+  }
   const buildPaths = desktopTargetBuildPaths(target.name)
   const releaseRecordPath = join(buildPaths.artifacts, desktopBuildRecordFilename(target.name))
   if (!invocation.prepareOnly) {
@@ -249,6 +256,11 @@ async function main(): Promise<void> {
     ...buildEnv,
     DSH_DESKTOP_TARGET_PLATFORM: target.platform,
     DSH_DESKTOP_TARGET_ARCH: target.arch,
+    ...(invocation.portable ? {
+      DSH_DESKTOP_PORTABLE: '1',
+      DSH_DESKTOP_DISTRIBUTION_VERSION: process.env.DSH_DESKTOP_DISTRIBUTION_VERSION ?? '0.1.5-alpha.2.1',
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false',
+    } : {}),
   }
   const electronBuilderEnv = { ...targetEnv }
   for (const name of WINDOWS_SIGNING_ENV_NAMES) {
@@ -278,8 +290,9 @@ async function main(): Promise<void> {
   await runPnpm(['run', 'prepare:packages'], targetEnv)
   await runPnpm(['run', 'prepare:seed'], targetEnv)
   if (invocation.prepareOnly) return
-  await runPnpm(desktopElectronBuilderArguments(target, invocation.directory), electronBuilderEnv)
-  if (!invocation.directory) writeReleaseRecord(target, electronBuilderEnv, buildPaths.artifacts)
+  await runPnpm(['run', 'build'], targetEnv)
+  await runPnpm(desktopElectronBuilderArguments(target, invocation.directory, invocation.portable), electronBuilderEnv)
+  if (!invocation.directory && !invocation.portable) writeReleaseRecord(target, electronBuilderEnv, buildPaths.artifacts)
 }
 
 if (process.argv[1] !== undefined && import.meta.filename === resolve(process.argv[1])) await main()

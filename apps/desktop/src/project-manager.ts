@@ -34,6 +34,7 @@ import {
 import type { DesktopPaths } from './paths.ts'
 import { parseDesktopRelease, type DesktopRelease } from './release.ts'
 import { extractPnpmStoreArchives, mergePnpmStore } from './seed-store.ts'
+import { desktopNpmEnvironment } from './npm-environment.ts'
 
 /** Files the package transaction copies between active and staging projects. */
 const DESKTOP_PROJECT_FILES = [
@@ -104,10 +105,10 @@ const DSH_PACKAGE = '@deepseek-ai/dsh'
 const CORE_BUILD_PACKAGE = '@deepseek-ai/dsh-subprocess-local'
 const DESKTOP_PROFILE_BUNDLES = ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'] as const
 const WORKSPACE_SETTINGS = 'nodeLinker: hoisted\nautoInstallPeers: false\nstrictDepBuilds: true\n'
+  + "minimumReleaseAgeExclude:\n  - '@zaimokuza/dsh-acp-adapter@0.1.5-alpha.2'\n"
 const PACKAGE_NAME_PATTERN = /^(?:@[a-z0-9][a-z0-9._~-]*\/[a-z0-9][a-z0-9._~-]*|[a-z0-9][a-z0-9._~-]*)$/u
 const VERSION_PATTERN = /^[0-9A-Za-z][0-9A-Za-z.+_-]*$/u
 const MAX_PNPM_DIAGNOSTIC_BYTES = 64 * 1024
-const DESKTOP_REGISTRY = 'https://registry.npmjs.org/'
 
 function errorOf(reason: unknown, fallback: string): Error {
   return reason instanceof Error ? reason : new Error(fallback)
@@ -397,10 +398,11 @@ export class DesktopProjectManager {
       verifySeedIntegrity(seedDir)
       const target = releaseFile(seedDir)
       verifyDesktopCorePackageSet(seedDir, target.version)
-      if (target.version !== electronVersion) {
+      if ((target.distributionVersion ?? target.version) !== electronVersion) {
         throw new Error(`desktop project: seed ${target.version} does not match Electron ${electronVersion}`)
       }
       if (existsSync(this.paths.profile) && this.releaseVersion() === target.version
+        && releaseFile(this.paths.profile).distributionVersion === target.distributionVersion
         && this.dshVersion() === target.version
         && this.installedPackageVersion(DESKTOP_HOST_PACKAGE) === target.version) {
         verifyDesktopCorePackageSet(this.paths.profile, target.version)
@@ -555,28 +557,21 @@ export class DesktopProjectManager {
       this.paths.pnpm.state, this.paths.pnpm.config, this.paths.pnpm.home]) {
       mkdirSync(path, { recursive: true, mode: 0o700 })
     }
-    const npmrc = join(this.paths.pnpm.config, 'npmrc')
-    if (!existsSync(npmrc)) writeFileSync(npmrc, '', { mode: 0o600 })
-    const inherited = Object.fromEntries(Object.entries(process.env).filter(([name]) => (
-      !/^DSH_DESKTOP_/u.test(name) && !/^(?:npm|pnpm|corepack)_/iu.test(name)
-    )))
+    const npm = desktopNpmEnvironment()
     await new Promise<void>((settle, reject) => {
       const child = spawn(this.runtime.node, [
         this.runtime.pnpm,
-        `--config.registry=${DESKTOP_REGISTRY}`,
         `--config.store-dir=${this.paths.pnpm.store}`,
         '--config.enable-global-virtual-store=false',
-        `--config.userconfig=${npmrc}`,
+        `--config.userconfig=${npm.userconfig}`,
         command,
         ...commandArgs,
       ], {
         cwd: projectDir,
         env: {
-          ...inherited,
+          ...npm.env,
           COREPACK_HOME: this.paths.pnpm.home,
-          NPM_CONFIG_REGISTRY: DESKTOP_REGISTRY,
           NPM_CONFIG_STORE_DIR: this.paths.pnpm.store,
-          NPM_CONFIG_USERCONFIG: npmrc,
           PATH: `${dirname(this.runtime.node)}${delimiter}${process.env.PATH ?? ''}`,
           PNPM_HOME: this.paths.pnpm.home,
           XDG_CACHE_HOME: this.paths.pnpm.cache,
@@ -682,16 +677,28 @@ export class DesktopProjectManager {
   }
 }
 
-/** Create seed metadata for one exact Electron and dsh release. */
-export function createSeedMetadata(seedDir: string, release: DesktopRelease): void {
+/**
+ * Create seed metadata for an exact DSH release and optional desktop build.
+ * @param seedDir - Directory containing the verified core package set.
+ * @param release - Pinned runtime versions and optional distribution counter.
+ * @param plugins - Exact plugin versions preinstalled with the seed.
+ */
+export function createSeedMetadata(
+  seedDir: string,
+  release: DesktopRelease,
+  plugins: readonly DesktopPluginRecord[] = [],
+): void {
   mkdirSync(seedDir, { recursive: true, mode: 0o700 })
   const packageSet = verifyDesktopCorePackageSet(seedDir, release.version)
   const manifest: DesktopProjectManifest = {
     name: PROJECT_NAME,
     private: true,
     version: '0.0.0',
-    dependencies: desktopCorePackageOverrides(packageSet),
-    dsh: { profile: { bundles: [...DESKTOP_PROFILE_BUNDLES] } },
+    dependencies: {
+      ...desktopCorePackageOverrides(packageSet),
+      ...Object.fromEntries(plugins.map(plugin => [plugin.name, plugin.version])),
+    },
+    dsh: { profile: { bundles: [...DESKTOP_PROFILE_BUNDLES, ...plugins.map(plugin => plugin.name)] } },
   }
   writeJson(join(seedDir, 'package.json'), manifest)
   writeFileSync(

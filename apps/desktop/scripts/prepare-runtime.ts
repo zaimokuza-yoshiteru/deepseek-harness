@@ -62,6 +62,7 @@ async function prepareNode(platform: RuntimePlatform, arch: RuntimeArch): Promis
   const destination = join(destinationRoot, platform === 'win' ? 'node.exe' : 'node')
   rmSync(destinationRoot, { recursive: true, force: true })
   mkdirSync(destinationRoot, { recursive: true })
+  cpSync(join(extraction, folder, 'LICENSE'), join(destinationRoot, 'LICENSE'))
   // A fresh write prevents macOS from retaining invalid code-signature vnode state from a tar-extracted Mach-O clone.
   await pipeline(createReadStream(source), createWriteStream(destination, { flags: 'wx' }))
   if (platform !== 'win') await chmod(destination, 0o755)
