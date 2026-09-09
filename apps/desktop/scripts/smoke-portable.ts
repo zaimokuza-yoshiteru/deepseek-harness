@@ -69,11 +69,12 @@ function progress(next: string): void {
   stage = next
   console.log(`Packaged smoke: ${stage}`)
 }
+// Windows cold-store preparation measured 154s before the roughly 53s dependency install.
 const timeout = setTimeout(() => {
   console.error(`Packaged host smoke timed out while ${stage}`)
   for (const child of children) console.error({ pid: child.pid, exitCode: child.exitCode, signalCode: child.signalCode })
   process.exit(1)
-}, 180_000)
+}, target === 'win-x64' ? 300_000 : 180_000)
 subscribe('child_process', childDiagnostic)
 try {
   progress(stage)
