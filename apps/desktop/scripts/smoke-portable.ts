@@ -28,21 +28,30 @@ const manager = new DesktopProjectManager(paths, runtime)
 const seed = join(resources, 'seed')
 const release = JSON.parse(readFileSync(join(seed, 'desktop-release.json'), 'utf8')) as { distributionVersion: string }
 let host: DesktopHostProcess | undefined
-const timeout = setTimeout(() => { console.error('Packaged host smoke timed out'); process.exit(1) }, 180_000)
+let stage = 'installing the packaged seed'
+function progress(next: string): void {
+  stage = next
+  console.log(`Packaged smoke: ${stage}`)
+}
+const timeout = setTimeout(() => { console.error(`Packaged host smoke timed out while ${stage}`); process.exit(1) }, 180_000)
 try {
+  progress(stage)
   await manager.applyRelease(seed, release.distributionVersion, {
     healthCheck: async (project) => {
+      progress('starting the installed host')
       host = new DesktopHostProcess(runtime.node, project)
       const ready = await host.start()
       assert.equal(ready.dshVersion, '0.1.5-alpha.2')
+      progress('fetching the frontend asset')
       const response = await host.fetch(new Request('dsh-app://app/index.html'))
       assert.equal(response.status, 200)
       assert.match(await response.text(), /<html/u)
+      progress('stopping the staged host')
       await host.stop()
       host = undefined
     },
-    beforeActivate: async () => {},
-    afterActivate: async () => {},
+    beforeActivate: async () => { progress('activating the installed profile') },
+    afterActivate: async () => { progress('checking the active plugin inventory') },
   })
   assert.deepEqual(manager.listPlugins(), [{ name: '@zaimokuza/dsh-acp-adapter', version: '0.1.5-alpha.2' }])
   console.log('Packaged offline install, host boot, frontend asset and ACP adapter: passed')

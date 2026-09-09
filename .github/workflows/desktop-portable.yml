@@ -59,10 +59,12 @@ jobs:
       - name: Test desktop package management
         run: pnpm exec vitest run apps/desktop/tests/npm-environment.spec.ts apps/desktop/tests/project-manager.spec.ts apps/desktop/tests/distribution.spec.ts apps/desktop/tests/package-target.spec.ts
       - name: Build application ZIP
+        id: package
         run: pnpm --dir apps/desktop run ${{ matrix.script }}
       - name: Verify packaged offline host and adapter
         run: pnpm exec tsx apps/desktop/scripts/smoke-portable.ts ${{ matrix.target }}
       - uses: actions/upload-artifact@v4
+        if: always() && steps.package.outcome == 'success'
         with:
           name: dsh-desktop-${{ matrix.target }}
           path: apps/desktop/.desktop-build/targets/${{ matrix.target }}/artifacts/*.zip
