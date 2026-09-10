@@ -9,7 +9,7 @@ on:
       version:
         description: Desktop build version (manual runs upload artifacts only)
         required: true
-        default: '0.1.5-alpha.2.1'
+        default: '0.1.5-alpha.2.2'
 
 permissions:
   contents: read
@@ -37,7 +37,7 @@ jobs:
       run:
         shell: ${{ matrix.shell }}
     env:
-      DSH_DESKTOP_DISTRIBUTION_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || inputs.version || '0.1.5-alpha.2.1' }}
+      DSH_DESKTOP_DISTRIBUTION_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || inputs.version || '0.1.5-alpha.2.2' }}
       DSH_TELEMETRY_MODE: DISABLED
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
     steps:

@@ -10,6 +10,8 @@
 
 Mac 应用采用 ad-hoc 签名，未经 Apple 公证；Windows 应用未签名。首次打开可能需要操作系统或公司应用策略批准，这些包不保证免提示启动。
 
+两个应用都采用仓库 Web favicon 中的 DeepSeek 鲸鱼，显示为白色圆角底上的蓝色图案。[桌面 SVG](assets/icon.svg) 提供 macOS 和 Windows 图标；Windows 写入图标与版本信息，同时保持代码签名关闭。
+
 首次启动会将内置 seed 离线安装到独立的可写 profile，并验证后端可以启动。尚无桌面 store 时直接采用已解压的 store；升级时合并到已有 store，保留下载过的插件。模型请求和所配置的 ACP agent 仍可能需要网络。桌面端不运行自动更新；更新时关闭应用，再用新版本 ZIP 替换应用。
 
 ## 数据与插件
@@ -65,15 +67,15 @@ pnpm --dir apps/desktop run package:portable:mac:arm64
 pnpm --dir apps/desktop run package:portable:win:x64
 ```
 
-输出 ZIP 位于 `apps/desktop/.desktop-build/targets/<mac-arm64|win-x64>/artifacts`。本地构建默认桌面版本为 `0.1.5-alpha.2.1`，设置 `DSH_DESKTOP_DISTRIBUTION_VERSION` 可以选择其他正整数构建序号。DSH 与适配器依赖始终保留精确基线版本。seed 准备阶段校验适配器 npm 包的完整性。seed 包含依赖字节、锁文件、本地核心包、许可证和完整性清单；打包前会验证离线安装。
+输出 ZIP 位于 `apps/desktop/.desktop-build/targets/<mac-arm64|win-x64>/artifacts`。本地构建默认桌面版本为 `0.1.5-alpha.2.2`，设置 `DSH_DESKTOP_DISTRIBUTION_VERSION` 可以选择其他正整数构建序号。DSH 与适配器依赖始终保留精确基线版本。seed 准备阶段校验适配器 npm 包的完整性。seed 包含依赖字节、锁文件、本地核心包、许可证和完整性清单；打包前会验证离线安装。
 
 先推送分支，再对已检查的提交打 tag：
 
 ```sh
 git switch desktop
 git push -u origin desktop
-git tag 0.1.5-alpha.2.1
-git push origin 0.1.5-alpha.2.1
+git tag 0.1.5-alpha.2.2
+git push origin 0.1.5-alpha.2.2
 ```
 
 `Desktop portable` 工作流验证 tag 提交属于 `origin/desktop`，分别构建 macOS arm64 与 Windows x64，运行打包后端的离线冒烟检查，并把两个 ZIP 和 `SHA256SUMS.txt` 附到 GitHub prerelease。后续桌面修订依次使用 `.2`、`.3`。该工作流不发布 npm 包。分支推送和手动触发工作流仅上传 Actions artifacts。工作流成功完成前，tag 本身不包含应用二进制。

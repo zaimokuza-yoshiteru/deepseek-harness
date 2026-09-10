@@ -1,11 +1,13 @@
 /** Internal ZIP distribution; no npm publication, installer, or automatic updater. */
 import { resolveDesktopTargetBuildPaths } from './scripts/desktop-build-paths.mjs'
+import { fileURLToPath } from 'node:url'
 
-const version = process.env.DSH_DESKTOP_DISTRIBUTION_VERSION ?? '0.1.5-alpha.2.1'
+const version = process.env.DSH_DESKTOP_DISTRIBUTION_VERSION ?? '0.1.5-alpha.2.2'
 if (!/^0\.1\.5-alpha\.2\.[1-9][0-9]*$/u.test(version)) {
   throw new Error('desktop portable: expected distribution version 0.1.5-alpha.2.<positive integer>')
 }
 const paths = resolveDesktopTargetBuildPaths()
+const icon = fileURLToPath(new URL('./assets/icon.svg', import.meta.url))
 
 export default {
   appId: 'io.github.zaimokuza-yoshiteru.dsh-desktop',
@@ -23,6 +25,7 @@ export default {
     { from: '../../THIRD_PARTY_NOTICES.md', to: 'notices/DSH-THIRD-PARTY-NOTICES.md' },
   ],
   mac: {
+    icon,
     category: 'public.app-category.developer-tools',
     identity: '-',
     hardenedRuntime: false,
@@ -30,7 +33,8 @@ export default {
     target: [{ target: 'zip', arch: ['arm64'] }],
   },
   win: {
-    signAndEditExecutable: false,
+    icon,
+    signExecutable: false,
     target: [{ target: 'zip', arch: ['x64'] }],
   },
   publish: null,
