@@ -14,6 +14,8 @@ Mac 应用采用 ad-hoc 签名，未经 Apple 公证；Windows 应用未签名�
 
 ## 数据与插件
 
+原生**编辑**菜单为当前窗口提供标准编辑快捷键，适用于聊天输入区和插件管理器输入框。macOS 使用 `Cmd+A/C/V/X` 全选、复制、粘贴或剪切，使用 `Cmd+Z` 撤销、`Cmd+Shift+Z` 重做。
+
 macOS 的默认数据根目录为 `~/.dsh-desktop`，Windows 为 `%USERPROFILE%\.dsh-desktop`。该目录下的 `profiles/desktop` 存放桌面 profile，`desktop/pnpm` 存放包管理状态，`electron-user-data` 存放 Electron 状态。显式设置 `DSH_HOME` 可以覆盖根目录。应用不导入已有 Web profile。遥测默认设置为 `DSH_TELEMETRY_MODE=DISABLED`，显式启动配置可以覆盖。
 
 从应用菜单打开插件管理器，或按 `Cmd+,` / `Ctrl+,`，可以按 npm 包名安装插件、更新到指定版本或卸载。它是已安装插件管理器，不提供市场搜索。适配器预装并显示在列表中。第三方插件必须兼容桌面 host。

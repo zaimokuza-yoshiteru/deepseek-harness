@@ -14,6 +14,8 @@ The first launch installs the packaged seed offline into a separate writable pro
 
 ## Data and plugins
 
+The native **Edit** menu supplies standard editing shortcuts for the focused window, including the chat input and plugin-manager fields. On macOS, use `Cmd+A/C/V/X` to select all, copy, paste, or cut, `Cmd+Z` to undo, and `Cmd+Shift+Z` to redo.
+
 By default, product data lives under `~/.dsh-desktop` on macOS or `%USERPROFILE%\.dsh-desktop` on Windows. The desktop profile is `profiles/desktop`, package state is `desktop/pnpm`, and Electron state is `electron-user-data` below that home. An explicit `DSH_HOME` overrides this root. The application does not import an existing Web profile. Telemetry defaults to `DSH_TELEMETRY_MODE=DISABLED`; explicit launch configuration can override it.
 
 Open the application menu's plugin manager (or press `Cmd+,` / `Ctrl+,`) to install by npm package name, update to a version, or remove a plugin. This is an installed-plugin manager, not a searchable marketplace. The adapter is preinstalled and appears in this list. Third-party plugins must support the desktop host.
