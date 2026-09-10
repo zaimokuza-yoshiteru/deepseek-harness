@@ -10,6 +10,7 @@ import {
   DesktopProjectManager,
   packageNameFromSpec,
   verifySeedIntegrity,
+  type DesktopPluginRecord,
   type DesktopProjectHooks,
 } from '../src/project-manager.ts'
 import { DESKTOP_HOST_PROTOCOL_VERSION } from '../src/host-protocol.ts'
@@ -77,9 +78,9 @@ function writeCorePackageSet(seed: string, version: string): void {
   })}\n`)
 }
 
-function createTestSeedMetadata(seed: string, desktopRelease: DesktopRelease): void {
+function createTestSeedMetadata(seed: string, desktopRelease: DesktopRelease, plugins: readonly DesktopPluginRecord[] = []): void {
   writeCorePackageSet(seed, desktopRelease.version)
-  createSeedMetadata(seed, desktopRelease)
+  createSeedMetadata(seed, desktopRelease, plugins)
 }
 
 function writeFakePnpm(root: string): string {
@@ -264,6 +265,37 @@ describe('desktop project transactions', () => {
     writeIntegrity(seed)
     await expect(manager.applyRelease(seed, '0.1.5-alpha.2.2', hooks())).resolves.toBe(true)
     expect(manager.dshVersion()).toBe('0.1.5-alpha.2')
+  })
+
+  it.each([false, true])('upgrades the bundled adapter from alpha to rc while preserving extra plugins: %s', async (extraPlugin) => {
+    const root = temporaryRoot()
+    const paths = resolveDesktopPaths(join(root, 'home'))
+    const manager = new DesktopProjectManager(paths, { node: process.execPath, pnpm: writeFakePnpm(root) })
+    const adapter = '@zaimokuza/dsh-acp-adapter'
+    const oldSeed = join(root, 'alpha-seed')
+    createTestSeedMetadata(oldSeed, {
+      ...release('0.1.5-alpha.2'), distributionVersion: '0.1.5-alpha.2.2',
+    }, [{ name: adapter, version: '0.1.5-alpha.2' }])
+    archiveStore(oldSeed)
+    writeIntegrity(oldSeed)
+    await manager.applyRelease(oldSeed, '0.1.5-alpha.2.2', hooks())
+    if (extraPlugin) await manager.mutate({ type: 'plugin-add', spec: '@scope/plugin@2.0.0' }, hooks())
+    expect(readFileSync(join(paths.profile, 'pnpm-workspace.yaml'), 'utf8')).toContain(`${adapter}@0.1.5-alpha.2`)
+
+    const nextSeed = join(root, 'rc-seed')
+    createTestSeedMetadata(nextSeed, {
+      ...release('0.1.5-rc.1'), distributionVersion: '0.1.5-rc.1.1',
+    }, [{ name: adapter, version: '0.1.5-rc.1' }])
+    archiveStore(nextSeed)
+    writeIntegrity(nextSeed)
+    await expect(manager.applyRelease(nextSeed, '0.1.5-rc.1.1', hooks())).resolves.toBe(true)
+    expect(manager.dshVersion()).toBe('0.1.5-rc.1')
+    expect(manager.listPlugins()).toEqual([
+      { name: adapter, version: '0.1.5-rc.1' },
+      ...(extraPlugin ? [{ name: '@scope/plugin', version: '2.0.0' }] : []),
+    ])
+    expect(readFileSync(join(paths.profile, 'pnpm-workspace.yaml'), 'utf8')).toContain(`${adapter}@0.1.5-rc.1`)
+    await expect(manager.applyRelease(nextSeed, '0.1.5-rc.1.1', hooks())).resolves.toBe(false)
   })
 
   it('restores the active project when the replacement backend cannot start', async () => {

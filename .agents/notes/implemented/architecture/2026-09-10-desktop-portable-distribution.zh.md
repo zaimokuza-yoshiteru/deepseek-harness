@@ -12,6 +12,10 @@ Status: implemented
 
 `desktop` 分支将本地核心包、原版 Node.js、pnpm 和精确版本的 ACP adapter 打包为 macOS arm64 与 Windows x64 ZIP。桌面分发版本在固定的 DSH 版本后追加正整数构建序号。seed 记录两个版本，profile 校准会比较构建序号，使相同 DSH 基线的桌面修订也能替换后端资源。
 
+当前分发固定 DSH `0.1.5-rc.1` 的上游提交 `183f08e9c6dde7e36cd2318eaee70b0da08fb35e`，以及 ACP adapter `0.1.5-rc.1` 的源码提交 `51c3bc4f297ed9b85cf448a30a9e730de3ce70f2`；seed 准备阶段校验 npm 包完整性。升级时，seed 中的插件版本优先于这些包原先安装的版本。其他插件保留精确版本和注册。工作区策略按各 profile 记录的 DSH 版本生成，使 alpha profile 仍可读取，而 rc seed 使用对应精确 adapter 版本的发布时间例外。
+
+仅升级时的离线 add 信任已验证的 seed 锁文件，与 seed 安装一致；否则 pnpm 11 即使指定 `--offline`，仍会通过 registry 元数据和证明请求重新检查锁文件条目。普通插件变更保留原有策略检查。
+
 内置 pnpm 读取用户 npmrc，不将其复制进应用资源。npm 环境变量保留公开拼写，通用网络配置也映射为 pnpm 11 的环境变量拼写。包管理存储仍由应用独立管理。放宽 TLS 校验仅作用于包管理配置，不设置 Node 进程级 TLS 开关。
 
 fork 默认采用独立的 DSH 根目录和 Electron 用户数据目录。菜单与启动流程不触发自动更新，遥测默认关闭。仍支持显式指定 DSH 根目录与遥测配置。GitHub tag 构建验证提交属于 desktop 分支，将 ZIP 和校验文件附到 prerelease，不发布 npm 包。

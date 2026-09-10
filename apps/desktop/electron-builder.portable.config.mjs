@@ -2,9 +2,9 @@
 import { resolveDesktopTargetBuildPaths } from './scripts/desktop-build-paths.mjs'
 import { fileURLToPath } from 'node:url'
 
-const version = process.env.DSH_DESKTOP_DISTRIBUTION_VERSION ?? '0.1.5-alpha.2.2'
-if (!/^0\.1\.5-alpha\.2\.[1-9][0-9]*$/u.test(version)) {
-  throw new Error('desktop portable: expected distribution version 0.1.5-alpha.2.<positive integer>')
+const version = process.env.DSH_DESKTOP_DISTRIBUTION_VERSION ?? '0.1.5-rc.1.1'
+if (!/^0\.1\.5-rc\.1\.[1-9][0-9]*$/u.test(version)) {
+  throw new Error('desktop portable: expected distribution version 0.1.5-rc.1.<positive integer>')
 }
 const paths = resolveDesktopTargetBuildPaths()
 const icon = fileURLToPath(new URL('./assets/icon.svg', import.meta.url))

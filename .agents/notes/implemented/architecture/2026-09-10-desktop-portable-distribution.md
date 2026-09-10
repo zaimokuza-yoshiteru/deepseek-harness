@@ -12,6 +12,10 @@ Internal recipients need a double-click desktop application without separately i
 
 The `desktop` branch packages macOS arm64 and Windows x64 ZIPs with a local core package set, upstream Node.js, pnpm, and the exact ACP adapter release. The desktop distribution version appends a positive build counter to the pinned DSH version. The seed records both versions, and profile reconciliation compares the counter so a same-base desktop rebuild replaces backend resources.
 
+The current distribution pins DSH `0.1.5-rc.1` at upstream commit `183f08e9c6dde7e36cd2318eaee70b0da08fb35e` and ACP adapter `0.1.5-rc.1` from source commit `51c3bc4f297ed9b85cf448a30a9e730de3ce70f2`; seed preparation verifies the npm tarball integrity. During upgrades, seed plugin versions take precedence over previous installations of those packages. Other plugins retain their exact versions and registrations. Workspace policy is generated from each profile's recorded DSH version, so an alpha profile remains readable while the rc seed receives its own exact adapter release-age exception.
+
+The upgrade-only offline add trusts the verified seed lockfile, matching seed installation; otherwise pnpm 11 rechecks its entries through registry metadata and attestation requests even with `--offline`. Normal plugin changes retain their existing policy checks.
+
 The bundled pnpm reads the user's npmrc without copying it into resources. npm environment variables retain their public spelling; general network overrides are also mapped to pnpm 11's environment spelling. Package-manager storage remains application-owned. TLS relaxation applies to the package-manager configuration, not a process-wide Node TLS switch.
 
 The fork defaults to a separate DSH home and Electron user-data directory. Automatic updates are absent from the menu and launch path; telemetry defaults to disabled. Explicit DSH home and telemetry settings remain supported. GitHub tag builds verify desktop-branch ancestry and attach ZIPs and checksums to a prerelease without publishing npm packages.

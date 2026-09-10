@@ -83,7 +83,7 @@ try {
       progress('starting the installed host')
       host = new DesktopHostProcess(runtime.node, project)
       const ready = await host.start()
-      assert.equal(ready.dshVersion, '0.1.5-alpha.2')
+      assert.equal(ready.dshVersion, '0.1.5-rc.1')
       progress('fetching the frontend asset')
       const response = await host.fetch(new Request('dsh-app://app/index.html'))
       assert.equal(response.status, 200)
@@ -95,7 +95,7 @@ try {
     beforeActivate: async () => { progress('activating the installed profile') },
     afterActivate: async () => { progress('checking the active plugin inventory') },
   })
-  assert.deepEqual(manager.listPlugins(), [{ name: '@zaimokuza/dsh-acp-adapter', version: '0.1.5-alpha.2' }])
+  assert.deepEqual(manager.listPlugins(), [{ name: '@zaimokuza/dsh-acp-adapter', version: '0.1.5-rc.1' }])
   console.log('Packaged offline install, host boot, frontend asset and ACP adapter: passed')
 } finally {
   clearTimeout(timeout)

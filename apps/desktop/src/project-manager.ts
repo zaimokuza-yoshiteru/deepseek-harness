@@ -105,7 +105,6 @@ const DSH_PACKAGE = '@deepseek-ai/dsh'
 const CORE_BUILD_PACKAGE = '@deepseek-ai/dsh-subprocess-local'
 const DESKTOP_PROFILE_BUNDLES = ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'] as const
 const WORKSPACE_SETTINGS = 'nodeLinker: hoisted\nautoInstallPeers: false\nstrictDepBuilds: true\n'
-  + "minimumReleaseAgeExclude:\n  - '@zaimokuza/dsh-acp-adapter@0.1.5-alpha.2'\n"
 const PACKAGE_NAME_PATTERN = /^(?:@[a-z0-9][a-z0-9._~-]*\/[a-z0-9][a-z0-9._~-]*|[a-z0-9][a-z0-9._~-]*)$/u
 const VERSION_PATTERN = /^[0-9A-Za-z][0-9A-Za-z.+_-]*$/u
 const MAX_PNPM_DIAGNOSTIC_BYTES = 64 * 1024
@@ -122,7 +121,7 @@ function readJson(path: string): unknown {
   return JSON.parse(readFileSync(path, 'utf8'))
 }
 
-function workspaceFile(overrides: Readonly<Record<string, string>> = {}): string {
+function workspaceFile(version: string, overrides: Readonly<Record<string, string>> = {}): string {
   const entries = Object.entries(overrides).sort(([left], [right]) => left.localeCompare(right))
   const overrideSection = entries.length === 0
     ? ''
@@ -131,7 +130,7 @@ function workspaceFile(overrides: Readonly<Record<string, string>> = {}): string
   const coreBuildKey = coreBuildSpec === undefined
     ? CORE_BUILD_PACKAGE
     : `${CORE_BUILD_PACKAGE}@${coreBuildSpec.replace('file:./', 'file:')}`
-  return `packages:\n  - .\n\n${overrideSection}${WORKSPACE_SETTINGS}allowBuilds:\n  node-pty: true\n  koffi: true\n  fs-ext: true\n  ${JSON.stringify(coreBuildKey)}: true\n  '@google/genai': false\n  protobufjs: false\n  node-addon-require-builtin: false\n`
+  return `packages:\n  - .\n\n${overrideSection}${WORKSPACE_SETTINGS}minimumReleaseAgeExclude:\n  - '@zaimokuza/dsh-acp-adapter@${version}'\nallowBuilds:\n  node-pty: true\n  koffi: true\n  fs-ext: true\n  ${JSON.stringify(coreBuildKey)}: true\n  '@google/genai': false\n  protobufjs: false\n  node-addon-require-builtin: false\n`
 }
 
 function releaseFile(projectDir: string): DesktopRelease {
@@ -266,7 +265,7 @@ function projectManifest(projectDir: string): DesktopProjectManifest {
   const expectedOverrides = desktopCorePackageOverrides(packageSet)
   if (manifest.dependencies[DSH_PACKAGE] !== desktopDshPackageSpec(packageSet)
     || Object.entries(expectedOverrides).some(([name, spec]) => manifest.dependencies[name] !== spec)
-    || readFileSync(join(projectDir, 'pnpm-workspace.yaml'), 'utf8') !== workspaceFile(expectedOverrides)) {
+    || readFileSync(join(projectDir, 'pnpm-workspace.yaml'), 'utf8') !== workspaceFile(releaseFile(projectDir).version, expectedOverrides)) {
     throw new Error(`desktop project: core package mapping does not match ${DESKTOP_PACKAGE_SET_FILE}`)
   }
   return manifest
@@ -412,17 +411,20 @@ export class DesktopProjectManager {
       const stagingProfile = this.newStagingProfile()
       try {
         if (existsSync(this.paths.profile)) {
-          const plugins = pluginRecords(this.paths.profile)
+          const bundledNames = new Set(profilePluginNames(seedDir))
+          const plugins = pluginRecords(this.paths.profile).filter(plugin => !bundledNames.has(plugin.name))
           copyMetadata(seedDir, stagingProfile)
           await this.runPnpm(stagingProfile, ['install', '--offline', '--frozen-lockfile', '--trust-lockfile'])
+          const bundledPlugins = pluginRecords(stagingProfile)
           if (plugins.length > 0) {
             await this.runPnpm(stagingProfile, [
               'add',
               ...plugins.map(plugin => `${plugin.name}@${plugin.version}`),
               '--save-exact',
               '--offline',
+              '--trust-lockfile',
             ])
-            writeProfilePlugins(stagingProfile, plugins)
+            writeProfilePlugins(stagingProfile, [...bundledPlugins, ...plugins])
           }
         } else {
           copyMetadata(seedDir, stagingProfile)
@@ -708,7 +710,7 @@ export function createSeedMetadata(
   writeJson(join(seedDir, 'package.json'), manifest)
   writeFileSync(
     join(seedDir, 'pnpm-workspace.yaml'),
-    workspaceFile(desktopCorePackageOverrides(packageSet)),
+    workspaceFile(release.version, desktopCorePackageOverrides(packageSet)),
     { mode: 0o600 },
   )
   writeJson(join(seedDir, 'desktop-release.json'), release)
@@ -732,6 +734,6 @@ export function createDevelopmentProjectMetadata(projectDir: string, release: De
     dsh: { profile: { bundles: [...DESKTOP_PROFILE_BUNDLES] } },
   }
   writeJson(join(projectDir, 'package.json'), manifest)
-  writeFileSync(join(projectDir, 'pnpm-workspace.yaml'), workspaceFile(), { mode: 0o600 })
+  writeFileSync(join(projectDir, 'pnpm-workspace.yaml'), workspaceFile(release.version), { mode: 0o600 })
   writeJson(join(projectDir, 'desktop-release.json'), release)
 }

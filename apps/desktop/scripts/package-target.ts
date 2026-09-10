@@ -258,7 +258,7 @@ async function main(): Promise<void> {
     DSH_DESKTOP_TARGET_ARCH: target.arch,
     ...(invocation.portable ? {
       DSH_DESKTOP_PORTABLE: '1',
-      DSH_DESKTOP_DISTRIBUTION_VERSION: process.env.DSH_DESKTOP_DISTRIBUTION_VERSION ?? '0.1.5-alpha.2.2',
+      DSH_DESKTOP_DISTRIBUTION_VERSION: process.env.DSH_DESKTOP_DISTRIBUTION_VERSION ?? '0.1.5-rc.1.1',
       CSC_IDENTITY_AUTO_DISCOVERY: 'false',
     } : {}),
   }
