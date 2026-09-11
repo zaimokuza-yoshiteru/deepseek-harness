@@ -22,7 +22,7 @@ fork 默认采用独立的 DSH 根目录和 Electron 用户数据目录。菜单
 
 CI 在完整构建之前准备运行时，并记录下载、解压与复制阶段。Windows Node ZIP 使用 Electron 维护的原生解压器；原先的 `extract-zip` 实现在 Windows runner 上完成校验后，以未完成的顶层 await 错误退出。
 
-Agent Teams 默认使用官方 Host 与 Web bundle，按该顺序放在 base 和 Web 之后。它们的依赖闭包从本地发布包复制，profile 校准把这两层视为应用自有组件。升级时仍可读取 alpha.2 与 rc.1 的原有层前缀；新 profile 和插件事务保留 Teams 前缀。adapter 的发布时间例外跟随其精确版本，包括额外的修订序号。DSH 没有独立 Teams 开关，此分发也不另加开关。插件卸载仅在 pnpm 填充暂存项目后读取已安装版本。
+官方 Teams bundle 及其依赖保留在应用包集合中。[桌面 Teams 开关](2026-09-11-desktop-agent-teams-switch.zh.md)负责可选的 profile 注册，取代固定启用的决策。升级时仍可读取 alpha.2 与 rc.1 的原有层前缀。adapter 的发布时间例外跟随其精确版本，包括额外的修订序号。插件卸载仅在 pnpm 填充暂存项目后读取已安装版本。
 
 ## Alternatives considered
 

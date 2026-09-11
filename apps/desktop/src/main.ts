@@ -145,6 +145,7 @@ async function main(): Promise<void> {
   let mainWindow: BrowserWindow | undefined
   let pluginWindow: BrowserWindow | undefined
   let shellInstallerOwnsQuit = false
+  let changingProfile = false
   let updateState: DesktopUpdateState = { phase: 'idle' }
   const locale = resolveDesktopLocale(app.getLocale())
   const messages = locale.messages
@@ -238,9 +239,43 @@ async function main(): Promise<void> {
     if (development !== undefined) {
       throw new Error('dsh desktop: plugin package changes require a packaged application')
     }
-    await manager.mutate(mutation, hooks)
-    if (mainWindow !== undefined && !mainWindow.isDestroyed()) mainWindow.webContents.reload()
+    if (changingProfile) throw new Error(messages.featureSwitchBusy)
+    changingProfile = true
+    try {
+      await manager.mutate(mutation, hooks)
+      if (mainWindow !== undefined && !mainWindow.isDestroyed()) mainWindow.webContents.reload()
+    } finally {
+      changingProfile = false
+    }
   }
+  ipcMain.handle(DESKTOP_IPC.agentTeamsGet, (event) => {
+    assertDesktopSender(event, ['shell'])
+    return manager.agentTeamsEnabled()
+  })
+  ipcMain.handle(DESKTOP_IPC.agentTeamsSet, async (event, enabled: unknown) => {
+    assertDesktopSender(event, ['shell'])
+    if (typeof enabled !== 'boolean') throw new Error('dsh desktop: expected a boolean Agent Teams setting')
+    if (development !== undefined) throw new Error('dsh desktop: feature switching requires a packaged application')
+    if (changingProfile) throw new Error(messages.featureSwitchBusy)
+    if (manager.agentTeamsEnabled() === enabled) return
+    changingProfile = true
+    let stopped = false
+    try {
+      const active = host
+      if (active === undefined) throw new Error(messages.featureSwitchBusy)
+      if (!await active.stopIfIdle()) throw new Error(messages.featureTasksRunning)
+      stopped = true
+      host = undefined
+      await manager.mutate({ type: 'agent-teams', enabled }, hooks)
+    } finally {
+      try {
+        if (stopped && host === undefined) host = await startHost()
+        if (stopped && mainWindow !== undefined && !mainWindow.isDestroyed()) mainWindow.webContents.reload()
+      } finally {
+        changingProfile = false
+      }
+    }
+  })
   ipcMain.handle(DESKTOP_IPC.localeGet, (event) => {
     assertDesktopSender(event, ['shell'])
     return locale

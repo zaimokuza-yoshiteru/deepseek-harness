@@ -194,6 +194,67 @@ describe('desktop package policy', () => {
 })
 
 describe('desktop project transactions', () => {
+  it('switches Teams offline, retains packages and plugins, and preserves disabled state through upgrades', async () => {
+    const root = temporaryRoot()
+    const seed = join(root, 'seed')
+    const paths = resolveDesktopPaths(join(root, 'home'))
+    const runtime = { node: process.execPath, pnpm: writeFakePnpm(root) }
+    const manager = new DesktopProjectManager(paths, runtime)
+    const base = release('0.1.5-rc.2')
+    const adapter = { name: '@zaimokuza/dsh-acp-adapter', version: '0.1.5-rc.2.1' }
+    createTestSeedMetadata(seed, { ...base, distributionVersion: '0.1.5-rc.2.1' }, [adapter])
+    archiveStore(seed)
+    writeIntegrity(seed)
+    await manager.applyRelease(seed, '0.1.5-rc.2.1', hooks())
+    await manager.mutate({ type: 'plugin-add', spec: '@scope/plugin@2.0.0' }, hooks())
+    const manifestPath = join(paths.profile, 'package.json')
+    const readManifest = () => JSON.parse(readFileSync(manifestPath, 'utf8')) as {
+      dependencies: Record<string, string>
+      dsh: { desktop?: { agentTeams: boolean }; profile: { bundles: string[] } }
+    }
+    const before = readManifest()
+    const log = join(root, 'pnpm-log.json')
+    const previousLog = process.env.TEST_PNPM_LOG
+    process.env.TEST_PNPM_LOG = log
+    try {
+      expect(manager.agentTeamsEnabled()).toBe(true)
+      await manager.mutate({ type: 'agent-teams', enabled: false }, hooks())
+      expect(new DesktopProjectManager(paths, runtime).agentTeamsEnabled()).toBe(false)
+      expect(readManifest().dependencies).toEqual(before.dependencies)
+      const expected = JSON.parse(readFileSync(new URL('./expected/teams-disabled.json', import.meta.url), 'utf8')) as unknown
+      expect(readManifest().dsh).toEqual(expected)
+      const invocation = JSON.parse(readFileSync(log, 'utf8')) as { args: string[] }
+      expect(invocation.args).toEqual(expect.arrayContaining(['install', '--offline', '--frozen-lockfile']))
+      expect(invocation.args).not.toContain('remove')
+
+      await expect(manager.mutate({ type: 'agent-teams', enabled: true }, hooks({
+        healthCheck: async () => { throw new Error('probe rejected Teams') },
+      }))).rejects.toThrow('probe rejected Teams')
+      expect(manager.agentTeamsEnabled()).toBe(false)
+      await manager.mutate({ type: 'plugin-update', name: '@scope/plugin', version: '2.1.0' }, hooks())
+      expect(manager.agentTeamsEnabled()).toBe(false)
+      await expect(manager.mutate({
+        type: 'plugin-add', spec: '@deepseek-ai/dsh-experimental-agent-team-profile@0.1.5-rc.2',
+      }, hooks())).rejects.toThrow('use the Agent Teams switch')
+
+      createSeedMetadata(seed, { ...base, distributionVersion: '0.1.5-rc.2.2' }, [adapter])
+      writeIntegrity(seed)
+      await manager.applyRelease(seed, '0.1.5-rc.2.2', hooks())
+      expect(manager.agentTeamsEnabled()).toBe(false)
+      expect(manager.listPlugins()).toEqual([adapter, { name: '@scope/plugin', version: '2.1.0' }])
+      await manager.mutate({ type: 'agent-teams', enabled: true }, hooks())
+      expect(manager.agentTeamsEnabled()).toBe(true)
+      expect(readManifest().dsh.profile.bundles).toEqual([
+        ...before.dsh.profile.bundles.slice(0, 4), adapter.name, '@scope/plugin',
+      ])
+      const enabledInvocation = JSON.parse(readFileSync(log, 'utf8')) as { args: string[] }
+      expect(enabledInvocation.args).toEqual(expect.arrayContaining(['install', '--offline', '--frozen-lockfile']))
+    } finally {
+      if (previousLog === undefined) delete process.env.TEST_PNPM_LOG
+      else process.env.TEST_PNPM_LOG = previousLog
+    }
+  })
+
   it('installs the offline seed and reconciles a mismatched private Host', async () => {
     const root = temporaryRoot()
     const seed = join(root, 'seed')

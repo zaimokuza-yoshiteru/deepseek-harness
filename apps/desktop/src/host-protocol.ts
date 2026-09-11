@@ -41,14 +41,18 @@ export interface DesktopHostRequestStart {
 
 /** Commands retained on Node IPC because they do not carry Fetch payload bytes. */
 export type DesktopHostCommand = {
-  readonly type: 'shutdown'
+  readonly type: 'shutdown' | 'shutdown-if-idle'
 }
 
 /** Lifecycle events retained on Node IPC. */
 export type DesktopHostEvent = {
   readonly type: 'ready'
+  readonly idleRestartSupported?: true
   readonly protocolVersion: typeof DESKTOP_HOST_PROTOCOL_VERSION
   readonly dshVersion: string
+} | {
+  readonly type: 'restart-check'
+  readonly allowed: boolean
 } | {
   readonly type: 'fatal'
   readonly message: string

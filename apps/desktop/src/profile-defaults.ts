@@ -11,10 +11,11 @@ const BASE_BUNDLES = ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'] as co
 /**
  * Read a released profile using its original built-in layer prefix.
  * @param version - DSH version recorded in the profile's release metadata.
+ * @param agentTeams - Persisted opt-in state; omitted preserves the release default.
  * @returns Ordered built-in layers; the alpha.2 and rc.1 releases predate Teams defaults.
  */
-export function desktopProfileBundles(version: string): readonly string[] {
-  return version === '0.1.5-alpha.2' || version === '0.1.5-rc.1'
+export function desktopProfileBundles(version: string, agentTeams = true): readonly string[] {
+  return !agentTeams || version === '0.1.5-alpha.2' || version === '0.1.5-rc.1'
     ? BASE_BUNDLES
     : [...BASE_BUNDLES, ...DESKTOP_AGENT_TEAM_BUNDLES]
 }

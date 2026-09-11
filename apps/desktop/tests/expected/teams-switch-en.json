@@ -1,0 +1,7 @@
+{
+  "heading": "Built-in features",
+  "label": "Agent Teams",
+  "description": "Enable team tools and the team panel together. Dependencies stay installed for offline reactivation. Switching restarts the backend and keeps your conversations.",
+  "role": "switch",
+  "checked": false
+}

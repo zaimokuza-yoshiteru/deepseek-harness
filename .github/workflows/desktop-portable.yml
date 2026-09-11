@@ -9,7 +9,7 @@ on:
       version:
         description: Desktop build version (manual runs upload artifacts only)
         required: true
-        default: '0.1.5-rc.2.1'
+        default: '0.1.5-rc.2.2'
 
 permissions:
   contents: read
@@ -37,7 +37,7 @@ jobs:
       run:
         shell: ${{ matrix.shell }}
     env:
-      DSH_DESKTOP_DISTRIBUTION_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || inputs.version || '0.1.5-rc.2.1' }}
+      DSH_DESKTOP_DISTRIBUTION_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || inputs.version || '0.1.5-rc.2.2' }}
       DSH_TELEMETRY_MODE: DISABLED
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
     steps:
@@ -57,7 +57,12 @@ jobs:
       - name: Prepare embedded runtime
         run: pnpm --dir apps/desktop run prepare:runtime
       - name: Test desktop package management
-        run: pnpm exec vitest run apps/desktop/tests/npm-environment.spec.ts apps/desktop/tests/project-manager.spec.ts apps/desktop/tests/distribution.spec.ts apps/desktop/tests/package-target.spec.ts apps/desktop/tests/host-process.spec.ts apps/desktop/tests/prepare-package-set.spec.ts
+        run: >-
+          pnpm exec vitest run apps/desktop/tests/npm-environment.spec.ts
+          apps/desktop/tests/project-manager.spec.ts apps/desktop/tests/distribution.spec.ts
+          apps/desktop/tests/package-target.spec.ts apps/desktop/tests/host-process.spec.ts
+          apps/desktop/tests/prepare-package-set.spec.ts apps/desktop/tests/host-idle.spec.ts
+          apps/desktop/tests/plugin-manager.spec.ts apps/desktop/tests/locale.spec.ts apps/desktop/tests/icons.spec.ts
       - name: Build application ZIP
         id: package
         run: pnpm --dir apps/desktop run ${{ matrix.script }}

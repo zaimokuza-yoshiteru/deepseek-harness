@@ -75,6 +75,50 @@ afterEach(() => {
 })
 
 describe('desktop host process', () => {
+  it.each([false, true])('only stops after the Host approves an idle restart: %s', async (allowed) => {
+    const project = projectWithHost(`
+process.send({ type: 'ready', protocolVersion: 3, dshVersion: 'idle-check', idleRestartSupported: true })
+process.on('message', message => {
+  if (message.type === 'shutdown-if-idle') process.send({ type: 'restart-check', allowed: ${String(allowed)} })
+})
+function onRequestFrame(frame) {
+  if (frame.type !== 1) return
+  responseStart(frame.streamId)
+  responseData(frame.streamId, 'still running')
+  responseEnd(frame.streamId)
+}
+`)
+    const host = new DesktopHostProcess(process.execPath, project)
+    try {
+      await host.start()
+      expect(await host.stopIfIdle()).toBe(allowed)
+      if (!allowed) {
+        const response = await host.fetch(new Request('dsh-app://app/after-refusal'))
+        expect(await response.text()).toBe('still running')
+      }
+    } finally {
+      await host.stop()
+    }
+  })
+
+  it('refuses feature switching with an older Host without shutting it down', async () => {
+    const host = new DesktopHostProcess(process.execPath, projectWithHost(`
+process.send({ type: 'ready', protocolVersion: 3, dshVersion: 'old-host' })
+function onRequestFrame(frame) {
+  if (frame.type !== 1) return
+  responseStart(frame.streamId, { hasBody: false })
+  responseEnd(frame.streamId)
+}
+`))
+    try {
+      await host.start()
+      await expect(host.stopIfIdle()).rejects.toThrow('requires an application update')
+      expect((await host.fetch(new Request('dsh-app://app/alive'))).status).toBe(200)
+    } finally {
+      await host.stop()
+    }
+  })
+
   it('carries raw request and response bytes and shuts the child down cleanly', async () => {
     const project = projectWithHost(`
 const bodies = new Map()

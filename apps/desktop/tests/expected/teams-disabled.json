@@ -1,0 +1,11 @@
+{
+  "profile": {
+    "bundles": [
+      "@deepseek-ai/dsh-base",
+      "@deepseek-ai/dsh-web-app",
+      "@scope/plugin",
+      "@zaimokuza/dsh-acp-adapter"
+    ]
+  },
+  "desktop": { "agentTeams": false }
+}

@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-09-11-desktop-finder-icons.md
+2026-09-11-desktop-finder-icons.md: 3079e5722e722468c9a90c0992cf2bc562e00448
+2026-09-11-desktop-finder-icons.zh.md: 9928b8aac04da860da6935ce7046543f76199eef

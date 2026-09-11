@@ -22,7 +22,7 @@ The fork defaults to a separate DSH home and Electron user-data directory. Autom
 
 Runtime preparation runs before the full CI build and logs download, extraction, and copying stages. Windows Node ZIP extraction uses Electron's maintained native extractor; the previous `extract-zip` implementation exited with an unsettled top-level await on the Windows runner after checksum verification.
 
-Agent Teams defaults are the official Host and Web bundles in that order after base and Web. Their dependency closures are copied from local release tarballs, and profile reconciliation treats both as application-owned layers. The alpha.2 and rc.1 layer prefixes remain readable during upgrades; new profiles and plugin transactions preserve the Teams prefix. The adapter release-age exception follows the adapter pin, including its extra patch counter. DSH offers no dedicated Teams toggle, so this distribution does not invent one. Plugin removal reads installed versions only after pnpm has populated the staging project.
+The official Teams bundles and their dependencies remain in the application package set. The [desktop Teams switch](2026-09-11-desktop-agent-teams-switch.md) owns their optional profile registration and replaces the fixed-enable decision. The alpha.2 and rc.1 layer prefixes remain readable during upgrades. The adapter release-age exception follows the adapter pin, including its extra patch counter. Plugin removal reads installed versions only after pnpm has populated the staging project.
 
 ## Alternatives considered
 

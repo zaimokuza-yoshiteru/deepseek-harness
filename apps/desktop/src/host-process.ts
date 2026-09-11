@@ -35,6 +35,9 @@ function isDesktopHostEvent(message: unknown): message is DesktopHostEvent {
   switch (candidate.type) {
     case 'ready':
       return candidate.protocolVersion === DESKTOP_HOST_PROTOCOL_VERSION && typeof candidate.dshVersion === 'string'
+        && (candidate.idleRestartSupported === undefined || candidate.idleRestartSupported === true)
+    case 'restart-check':
+      return typeof candidate.allowed === 'boolean'
     case 'fatal':
       return typeof candidate.message === 'string'
     default:
@@ -83,6 +86,8 @@ export class DesktopHostProcess {
   })
   private exitPromise: Promise<void> | undefined
   private stderr = ''
+  private idleRestartSupported = false
+  private restartCheck: { resolve: (allowed: boolean) => void; reject: (error: Error) => void } | undefined
 
   /**
    * @param node - absolute bundled upstream Node.js executable.
@@ -195,6 +200,22 @@ export class DesktopHostProcess {
         this.failPending(streamId, errorOf(error, 'dsh desktop request upload failed'))
       })
     })
+  }
+
+  /** Stop only when the host can atomically begin teardown without interrupting work. */
+  async stopIfIdle(): Promise<boolean> {
+    if (!this.idleRestartSupported) throw new Error('dsh desktop: this host requires an application update before feature switching')
+    if (this.restartCheck !== undefined) throw new Error('dsh desktop: a restart check is already pending')
+    try {
+      const allowed = await new Promise<boolean>((resolve, reject) => {
+        this.restartCheck = { resolve, reject }
+        this.send({ type: 'shutdown-if-idle' })
+      })
+      if (allowed) await this.stop()
+      return allowed
+    } finally {
+      this.restartCheck = undefined
+    }
   }
 
   /** Request graceful teardown, then wait for child exit. */
@@ -388,7 +409,11 @@ export class DesktopHostProcess {
   private handleMessage(message: DesktopHostEvent): void {
     switch (message.type) {
       case 'ready':
+        this.idleRestartSupported = message.idleRestartSupported === true
         this.readyResolve(message)
+        return
+      case 'restart-check':
+        this.restartCheck?.resolve(message.allowed)
         return
       case 'fatal':
         this.fail(new Error(message.message))
@@ -400,6 +425,7 @@ export class DesktopHostProcess {
 
   private fail(error: Error): void {
     this.readyReject(error)
+    this.restartCheck?.reject(error)
     for (const pending of this.pending.values()) {
       void pending.requestReader?.cancel(error).catch(() => undefined)
       if (pending.controller === undefined) pending.reject(error)

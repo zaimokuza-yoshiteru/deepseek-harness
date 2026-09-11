@@ -33,7 +33,7 @@ import {
 } from './core-package-set.ts'
 import type { DesktopPaths } from './paths.ts'
 import { parseDesktopRelease, type DesktopRelease } from './release.ts'
-import { desktopAdapterVersion, desktopProfileBundles } from './profile-defaults.ts'
+import { DESKTOP_AGENT_TEAM_BUNDLES, desktopAdapterVersion, desktopProfileBundles } from './profile-defaults.ts'
 import { extractPnpmStoreArchives, mergePnpmStore } from './seed-store.ts'
 import { desktopNpmEnvironment } from './npm-environment.ts'
 
@@ -59,6 +59,7 @@ interface DesktopProjectManifest {
   readonly version: string
   readonly dependencies: Record<string, string>
   readonly dsh: {
+    readonly desktop?: { readonly agentTeams: boolean }
     readonly profile: {
       readonly bundles: string[]
     }
@@ -91,6 +92,7 @@ export interface DesktopProjectHooks {
 
 /** Supported dependency mutation. */
 export type DesktopProjectMutation =
+  | { readonly type: 'agent-teams'; readonly enabled: boolean }
   | { readonly type: 'plugin-add'; readonly spec: string }
   | { readonly type: 'plugin-remove'; readonly name: string }
   | { readonly type: 'plugin-update'; readonly name: string; readonly version: string }
@@ -260,6 +262,9 @@ function projectManifest(projectDir: string): DesktopProjectManifest {
     || !Array.isArray(profile?.bundles) || !profile.bundles.every(bundle => typeof bundle === 'string')) {
     throw new Error(`desktop project: invalid desktop profile manifest ${path}`)
   }
+  if (dsh?.desktop !== undefined && (!isRecord(dsh.desktop) || typeof dsh.desktop.agentTeams !== 'boolean')) {
+    throw new Error('desktop project: invalid saved Agent Teams setting')
+  }
   const manifest = value as unknown as DesktopProjectManifest
   const packageSet = readDesktopCorePackageSet(projectDir, releaseFile(projectDir).version)
   const expectedOverrides = desktopCorePackageOverrides(packageSet)
@@ -272,8 +277,9 @@ function projectManifest(projectDir: string): DesktopProjectManifest {
 }
 
 function profilePluginNames(projectDir: string): readonly string[] {
-  const bundles = projectManifest(projectDir).dsh.profile.bundles
-  const builtInBundles = desktopProfileBundles(releaseFile(projectDir).version)
+  const manifest = projectManifest(projectDir)
+  const bundles = manifest.dsh.profile.bundles
+  const builtInBundles = desktopProfileBundles(releaseFile(projectDir).version, manifest.dsh.desktop?.agentTeams)
   if (!builtInBundles.every((bundle, index) => bundles[index] === bundle)) {
     throw new Error('desktop project: profile must begin with the built-in desktop bundle list')
   }
@@ -297,8 +303,26 @@ function writeProfilePlugins(projectDir: string, plugins: readonly DesktopPlugin
       ...manifest.dsh,
       profile: {
         ...manifest.dsh.profile,
-        bundles: [...desktopProfileBundles(releaseFile(projectDir).version), ...plugins.map(plugin => plugin.name)],
+        bundles: [
+          ...desktopProfileBundles(releaseFile(projectDir).version, manifest.dsh.desktop?.agentTeams),
+          ...plugins.map(plugin => plugin.name),
+        ],
       },
+    },
+  } satisfies DesktopProjectManifest)
+}
+
+function writeAgentTeams(projectDir: string, enabled: boolean): void {
+  const plugins = profilePluginNames(projectDir)
+  const manifest = projectManifest(projectDir)
+  writeJson(join(projectDir, 'package.json'), {
+    ...manifest,
+    dsh: {
+      ...manifest.dsh,
+      desktop: { agentTeams: enabled },
+      profile: { ...manifest.dsh.profile, bundles: [
+        ...desktopProfileBundles(releaseFile(projectDir).version, enabled), ...plugins,
+      ] },
     },
   } satisfies DesktopProjectManifest)
 }
@@ -369,6 +393,12 @@ export class DesktopProjectManager {
     return pluginRecords(this.paths.profile)
   }
 
+  /** Read the effective Teams state, including the default for existing installations. */
+  agentTeamsEnabled(): boolean {
+    return desktopProfileBundles(this.releaseVersion(), projectManifest(this.paths.profile).dsh.desktop?.agentTeams)
+      .includes(DESKTOP_AGENT_TEAM_BUNDLES[0])
+  }
+
   /** Read the exact dsh version installed in the active desktop project. */
   dshVersion(): string {
     if (!existsSync(this.paths.profile)) throw new Error('desktop project: active profile is not installed')
@@ -415,6 +445,8 @@ export class DesktopProjectManager {
           const bundledNames = new Set([...desktopProfileBundles(target.version), ...profilePluginNames(seedDir)])
           const plugins = pluginRecords(this.paths.profile).filter(plugin => !bundledNames.has(plugin.name))
           copyMetadata(seedDir, stagingProfile)
+          const saved = projectManifest(this.paths.profile).dsh.desktop
+          if (saved !== undefined) writeAgentTeams(stagingProfile, saved.agentTeams)
           await this.runPnpm(stagingProfile, ['install', '--offline', '--frozen-lockfile', '--trust-lockfile'])
           const bundledPlugins = pluginRecords(stagingProfile)
           if (plugins.length > 0) {
@@ -468,9 +500,16 @@ export class DesktopProjectManager {
 
   private async applyMutation(projectDir: string, mutation: DesktopProjectMutation): Promise<void> {
     switch (mutation.type) {
+      case 'agent-teams':
+        writeAgentTeams(projectDir, mutation.enabled)
+        await this.runPnpm(projectDir, ['install', '--offline', '--frozen-lockfile', '--trust-lockfile'])
+        return
       case 'plugin-add': {
         const requestedName = packageNameFromSpec(mutation.spec)
         if (requestedName === undefined) throw new Error('desktop project: plugin package name is required')
+        if (DESKTOP_AGENT_TEAM_BUNDLES.some(name => name === requestedName)) {
+          throw new Error('desktop project: use the Agent Teams switch for this built-in feature')
+        }
         await this.runPnpm(projectDir, ['add', mutation.spec, '--save-exact'])
         const installed = inspectPlugin(projectDir, requestedName)
         const current = pluginRecords(projectDir).filter(plugin => plugin.name !== installed.name)

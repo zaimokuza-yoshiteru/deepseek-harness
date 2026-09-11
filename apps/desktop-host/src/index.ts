@@ -21,6 +21,7 @@ import {
 } from '@deepseek-ai/dsh-app-boot'
 import { provideCmdline } from '@deepseek-ai/dsh-cmdline'
 import { DSH_LAUNCH_ENVIRONMENT_KEY } from '@deepseek-ai/dsh-launch-environment'
+import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-api-gateway'
 import type { ConnectionFetchHandler } from '@deepseek-ai/dsh-client-connection'
 import type {} from '@deepseek-ai/dsh-client-modules'
@@ -52,14 +53,18 @@ export interface DesktopHostFetchCommand {
 
 /** Commands accepted by the desktop child process. */
 export type DesktopHostCommand = {
-  readonly type: 'shutdown'
+  readonly type: 'shutdown' | 'shutdown-if-idle'
 }
 
 /** Events emitted by the desktop child process. */
 export type DesktopHostEvent = {
   readonly type: 'ready'
+  readonly idleRestartSupported?: true
   readonly protocolVersion: typeof DESKTOP_HOST_PROTOCOL_VERSION
   readonly dshVersion: string
+} | {
+  readonly type: 'restart-check'
+  readonly allowed: boolean
 } | {
   readonly type: 'fatal'
   readonly message: string
@@ -71,6 +76,8 @@ export interface DesktopHostController {
   readonly dshVersion: string
   /** Dispatch one custom-protocol request and stream its response to the response pipe. */
   fetch(command: DesktopHostFetchCommand, body: ReadableStream<Uint8Array> | null): Promise<void>
+  /** Whether shutdown can begin synchronously without interrupting agents or API requests. */
+  canRestart(): boolean
   /** Abort one in-flight request. */
   cancel(streamId: number): void
   /** Stop accepting messages and await complete host teardown. */
@@ -83,7 +90,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isDesktopHostCommand(message: unknown): message is DesktopHostCommand {
   return typeof message === 'object' && message !== null && 'type' in message
-    && (message as Record<string, unknown>).type === 'shutdown'
+    && ['shutdown', 'shutdown-if-idle'].includes(String((message as Record<string, unknown>).type))
 }
 
 interface PackageManifest {
@@ -307,6 +314,7 @@ export async function runDesktopHost(
   const streams = remoteStreamHandler(ctx)
   const requests = new Map<number, AbortController>()
   let disposing: Promise<void> | undefined
+  let apiRequests = 0
 
   const dispose = async (): Promise<void> => {
     disposing ??= (async () => {
@@ -320,6 +328,7 @@ export async function runDesktopHost(
 
   return {
     dshVersion: dshVersion(absoluteProject),
+    canRestart: () => apiRequests === 0 && ctx.agents.list().every(agent => agent.status !== 'running'),
     cancel(streamId) {
       requests.get(streamId)?.abort()
     },
@@ -327,6 +336,8 @@ export async function runDesktopHost(
       if (disposing !== undefined) throw new Error('dsh desktop: host is disposing')
       const controller = new AbortController()
       requests.set(command.streamId, controller)
+      const isApi = new URL(command.request.url).pathname.startsWith('/api/')
+      if (isApi) apiRequests++
       try {
         const url = new URL(command.request.url)
         const init: NodeRequestInit = {
@@ -367,6 +378,7 @@ export async function runDesktopHost(
         }
       } finally {
         requests.delete(command.streamId)
+        if (isApi) apiRequests--
       }
     },
     dispose,
@@ -406,6 +418,7 @@ async function main(): Promise<void> {
   const controller = await runDesktopHost(projectDir, writeResponse, { allowLinkedPackages: option !== undefined })
   send({
     type: 'ready',
+    idleRestartSupported: true,
     protocolVersion: DESKTOP_HOST_PROTOCOL_VERSION,
     dshVersion: controller.dshVersion,
   })
@@ -570,6 +583,12 @@ async function main(): Promise<void> {
       void stop(1)
       return
     }
+    if (message.type === 'shutdown-if-idle') {
+      const allowed = controller.canRestart()
+      send({ type: 'restart-check', allowed })
+      if (!allowed) return
+    }
+    // The idle check and shutdown begin in the same turn, before more API work can enter.
     void stop()
   })
   process.once('disconnect', () => { void stop() })

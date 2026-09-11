@@ -10,13 +10,13 @@
 
 Mac 应用采用 ad-hoc 签名，未经 Apple 公证；Windows 应用未签名。首次打开可能需要操作系统或公司应用策略批准，这些包不保证免提示启动。
 
-两个应用都采用仓库 Web favicon 中的 DeepSeek 鲸鱼，显示为白色圆角底上的蓝色图案。[桌面 SVG](assets/icon.svg) 提供 macOS 和 Windows 图标；Windows 写入图标与版本信息，同时保持代码签名关闭。
+两个应用都采用仓库 Web favicon 中的 DeepSeek 鲸鱼，显示为白色圆角底上的蓝色图案。[桌面 SVG](assets/icon.svg) 用于生成已提交的 [macOS ICNS](assets/icon.icns) 和 [Windows ICO](assets/icon.ico)，转换工具为已修复的 `icons@1.2.3`。打包直接使用这些文件；Finder 小尺寸图标采用 ARGB 编码。Windows 写入图标与版本信息，同时保持代码签名关闭。[图标完整性记录](assets/icon-integrity.json) 固定源码、生成文件和工具压缩包；修改 SVG 时需要重新生成两种原生文件并更新记录。
 
 首次启动会将内置 seed 离线安装到独立的可写 profile，并验证后端可以启动。尚无桌面 store 时直接采用已解压的 store；升级时合并到已有 store，保留下载过的插件。模型请求和所配置的 ACP agent 仍可能需要网络。桌面端不运行自动更新；更新时关闭应用，再用新版本 ZIP 替换应用。
 
 ## 数据与插件
 
-Agent Teams 默认启用，使用官方[后端层](../../packages/experimental/agent-team-profile/README.zh.md)和[Web 界面层](../../packages/experimental/agent-team-web-profile/README.zh.md)，并包含它们的本地依赖。DSH `0.1.5-rc.2` 没有独立的 Teams 开关，因此此分发不另加开关。这两层属于应用组件；插件管理器列出 ACP adapter 和用户安装的插件。从 alpha.2 或 rc.1 桌面 profile 升级时会启用 Teams，同时保留其他插件。Teams 仍属实验性功能；上游 Web 层说明了与 preset 内旧子代理控制项并存的限制。
+Agent Teams 默认启用，使用官方[后端层](../../packages/experimental/agent-team-profile/README.zh.md)和[Web 界面层](../../packages/experimental/agent-team-web-profile/README.zh.md)。macOS 按 `Cmd+,`、Windows 按 `Ctrl+,` 打开**桌面插件**，然后通过**内置功能 → Agent Teams** 同时切换两层。切换会重启后端并刷新主窗口；请先等待正在运行的任务和请求结束。设置在应用重启和升级后保留。依赖始终保留，因此重新开启无需联网。会话与 Teams 数据不会删除。ACP adapter 和用户安装的插件仍显示在已安装列表中。没有保存过选择的 profile 默认启用。Teams 仍属实验性功能；上游 Web 层说明了与 preset 内旧子代理控制项并存的限制。
 
 应用升级时，内置插件采用新 seed 携带的版本，旧 ACP adapter 不会覆盖新内置版本。其他已安装插件保留精确版本并继续启用。暂存后端必须通过启动检查，替换才会生效。
 
@@ -73,15 +73,15 @@ pnpm --dir apps/desktop run package:portable:mac:arm64
 pnpm --dir apps/desktop run package:portable:win:x64
 ```
 
-输出 ZIP 位于 `apps/desktop/.desktop-build/targets/<mac-arm64|win-x64>/artifacts`。本地构建默认桌面版本为 `0.1.5-rc.2.1`，设置 `DSH_DESKTOP_DISTRIBUTION_VERSION` 可以选择其他正整数构建序号。DSH 与适配器依赖始终保留精确基线版本。seed 准备阶段校验适配器 npm 包的完整性。seed 包含依赖字节、锁文件、本地核心包、许可证和完整性清单；打包前会验证离线安装。
+输出 ZIP 位于 `apps/desktop/.desktop-build/targets/<mac-arm64|win-x64>/artifacts`。本地构建默认桌面版本为 `0.1.5-rc.2.2`，设置 `DSH_DESKTOP_DISTRIBUTION_VERSION` 可以选择其他正整数构建序号。DSH 与适配器依赖始终保留精确基线版本。seed 准备阶段校验适配器 npm 包的完整性。seed 包含依赖字节、锁文件、本地核心包、许可证和完整性清单；打包前会验证离线安装。
 
 先推送分支，再对已检查的提交打 tag：
 
 ```sh
 git switch desktop
 git push -u origin desktop
-git tag 0.1.5-rc.2.1
-git push origin 0.1.5-rc.2.1
+git tag 0.1.5-rc.2.2
+git push origin 0.1.5-rc.2.2
 ```
 
 `Desktop portable` 工作流验证 tag 提交属于 `origin/desktop`，分别构建 macOS arm64 与 Windows x64，运行打包后端的离线冒烟检查，并把两个 ZIP 和 `SHA256SUMS.txt` 附到 GitHub prerelease。后续桌面修订依次使用 `.2`、`.3`。该工作流不发布 npm 包。分支推送和手动触发工作流仅上传 Actions artifacts。工作流成功完成前，tag 本身不包含应用二进制。

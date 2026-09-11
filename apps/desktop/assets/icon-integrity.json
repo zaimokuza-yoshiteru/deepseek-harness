@@ -1,0 +1,9 @@
+{
+  "generator": "electron-builder-binaries icons@1.2.3",
+  "toolArchiveSha256": "4e5bb546c9d3ab0c2bbacc22857467bf415f742a34c2be9dd138779d2fc066f9",
+  "files": {
+    "icon.svg": "bb46da3607e799ab3b5d1382ee8eb14aa3fe668c2a7733c9645311878af1c7dc",
+    "icon.icns": "5d82b5022ca4d22e4d0d3bec9e993c2b7ef3b96df2bf90486ce3e61165f4ea9a",
+    "icon.ico": "18639140c4e735f71be6f07aa5040b5e9a1909151941ceef3d57dfb922383895"
+  }
+}

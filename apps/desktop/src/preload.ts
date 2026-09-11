@@ -12,6 +12,10 @@ const api: DshDesktopApi = {
     remove: name => ipcRenderer.invoke(DESKTOP_IPC.pluginsRemove, name) as Promise<void>,
     update: (name, version) => ipcRenderer.invoke(DESKTOP_IPC.pluginsUpdate, name, version) as Promise<void>,
   },
+  agentTeams: {
+    enabled: () => ipcRenderer.invoke(DESKTOP_IPC.agentTeamsGet) as Promise<boolean>,
+    setEnabled: enabled => ipcRenderer.invoke(DESKTOP_IPC.agentTeamsSet, enabled) as Promise<void>,
+  },
   updates: {
     check: () => ipcRenderer.invoke(DESKTOP_IPC.updatesCheck) as Promise<DesktopUpdateState>,
     install: () => ipcRenderer.invoke(DESKTOP_IPC.updatesInstall) as Promise<void>,

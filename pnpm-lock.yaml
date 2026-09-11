@@ -552,6 +552,9 @@ importers:
       '@deepseek-ai/dsh':
         specifier: workspace:^
         version: link:../cli
+      '@deepseek-ai/dsh-agent':
+        specifier: workspace:^
+        version: link:../../packages/core/agent
       '@deepseek-ai/dsh-api-gateway':
         specifier: workspace:^
         version: link:../../packages/api/gateway

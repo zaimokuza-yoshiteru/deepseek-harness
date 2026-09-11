@@ -10,13 +10,13 @@ Download the application ZIP from the fork's GitHub Release assets. GitHub's aut
 
 The Mac application uses ad-hoc signing without Apple notarization; the Windows application is unsigned. Operating-system or company application policies can require approval before first opening. These packages do not guarantee a prompt-free launch.
 
-Both applications use the DeepSeek whale from the repository's Web favicon, rendered in blue on a white rounded background. [The desktop SVG](assets/icon.svg) supplies the macOS and Windows icons; Windows embeds the icon and version metadata while keeping code signing disabled.
+Both applications use the DeepSeek whale from the repository's Web favicon, rendered in blue on a white rounded background. [The desktop SVG](assets/icon.svg) supplies the checked-in [macOS ICNS](assets/icon.icns) and [Windows ICO](assets/icon.ico), generated with the corrected `icons@1.2.3` tool. Packaging uses these files directly; small Finder icons use ARGB encoding. Windows embeds the icon and version metadata while keeping code signing disabled. The [icon integrity record](assets/icon-integrity.json) pins the source, generated files, and tool archive; regenerate both native files and update the record when changing the SVG.
 
 The first launch installs the packaged seed offline into a separate writable profile and verifies that the backend boots. It adopts the extracted store directly when no desktop store exists; upgrades merge into the existing store to preserve downloaded plugins. Model requests and configured ACP agents can still require network access. No automatic desktop update runs; replace the application with a newer release ZIP while it is closed.
 
 ## Data and plugins
 
-Agent Teams is enabled by default through the official [Host layer](../../packages/experimental/agent-team-profile/README.md) and [Web layer](../../packages/experimental/agent-team-web-profile/README.md), including their local dependencies. DSH `0.1.5-rc.2` provides no dedicated Teams switch, so this distribution adds none. These official layers are part of the application; the plugin manager lists ACP adapter and user-installed plugins. Upgrading an alpha.2 or rc.1 desktop profile enables Teams while retaining other plugins. Teams remains experimental; its upstream Web layer documents limitations with preset-scoped legacy child controls.
+Agent Teams is enabled by default through the official [Host layer](../../packages/experimental/agent-team-profile/README.md) and [Web layer](../../packages/experimental/agent-team-web-profile/README.md). Open **Desktop Plugins** with `Cmd+,` on macOS or `Ctrl+,` on Windows, then use **Built-in features → Agent Teams** to switch both layers together. Switching restarts the backend and reloads the main window; wait for running tasks and requests to finish first. The setting survives application restarts and upgrades. Dependencies remain installed, so re-enabling works offline. Sessions and Teams data are retained. ACP adapter and user-installed plugins remain in the installed list. Profiles without a saved choice default to enabled. Teams remains experimental; its upstream Web layer documents limitations with preset-scoped legacy child controls.
 
 On an application upgrade, bundled plugins take the versions shipped in the new seed; the previous ACP adapter cannot replace the new bundled version. Other installed plugins retain their exact versions and remain enabled. The staged backend must pass its startup check before the replacement becomes active.
 
@@ -73,15 +73,15 @@ pnpm --dir apps/desktop run package:portable:mac:arm64
 pnpm --dir apps/desktop run package:portable:win:x64
 ```
 
-The output ZIP is under `apps/desktop/.desktop-build/targets/<mac-arm64|win-x64>/artifacts`. Local builds default to desktop version `0.1.5-rc.2.1`; set `DSH_DESKTOP_DISTRIBUTION_VERSION` to choose another positive build counter. DSH and adapter dependencies retain their exact base versions. The adapter's npm tarball integrity is checked during seed preparation. The seed includes dependency bytes, lockfile, local core packages, licenses, and an integrity inventory; packaging proves an offline installation before shipping it.
+The output ZIP is under `apps/desktop/.desktop-build/targets/<mac-arm64|win-x64>/artifacts`. Local builds default to desktop version `0.1.5-rc.2.2`; set `DSH_DESKTOP_DISTRIBUTION_VERSION` to choose another positive build counter. DSH and adapter dependencies retain their exact base versions. The adapter's npm tarball integrity is checked during seed preparation. The seed includes dependency bytes, lockfile, local core packages, licenses, and an integrity inventory; packaging proves an offline installation before shipping it.
 
 Push the branch before tagging a reviewed commit:
 
 ```sh
 git switch desktop
 git push -u origin desktop
-git tag 0.1.5-rc.2.1
-git push origin 0.1.5-rc.2.1
+git tag 0.1.5-rc.2.2
+git push origin 0.1.5-rc.2.2
 ```
 
 The `Desktop portable` workflow verifies that the tag commit is on `origin/desktop`, builds macOS arm64 and Windows x64 independently, runs the packaged offline-host smoke, and attaches both ZIPs and `SHA256SUMS.txt` to a prerelease. Subsequent desktop revisions use `.2`, `.3`, and so on. The workflow does not publish npm packages. Branch pushes and manual workflow runs only upload Actions artifacts. A tag by itself contains no binaries until the workflow completes successfully.

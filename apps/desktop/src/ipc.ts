@@ -7,6 +7,8 @@ import type { DesktopLocale } from './locale.ts'
 export const DESKTOP_IPC = {
   localeGet: 'dsh-desktop:locale-get',
   pluginsList: 'dsh-desktop:plugins-list',
+  agentTeamsGet: 'dsh-desktop:agent-teams-get',
+  agentTeamsSet: 'dsh-desktop:agent-teams-set',
   pluginsAdd: 'dsh-desktop:plugins-add',
   pluginsRemove: 'dsh-desktop:plugins-remove',
   pluginsUpdate: 'dsh-desktop:plugins-update',
@@ -31,6 +33,10 @@ export interface DshDesktopApi {
     add(spec: string): Promise<void>
     remove(name: string): Promise<void>
     update(name: string, version: string): Promise<void>
+  }
+  readonly agentTeams: {
+    enabled(): Promise<boolean>
+    setEnabled(enabled: boolean): Promise<void>
   }
   readonly updates: {
     check(): Promise<DesktopUpdateState>
