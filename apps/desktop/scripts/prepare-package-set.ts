@@ -24,6 +24,7 @@ import {
 import { capture } from '../../../scripts/release/process.ts'
 import { tarballFiles } from '../../../scripts/release/tarball.ts'
 import { resolveDesktopTargetBuildPaths } from './desktop-build-paths.mjs'
+import { DESKTOP_AGENT_TEAM_BUNDLES } from '../src/profile-defaults.ts'
 
 const DSH_PACKAGE = '@deepseek-ai/dsh'
 const ROOT_PACKAGES = [DSH_PACKAGE, DESKTOP_HOST_PACKAGE] as const
@@ -51,10 +52,12 @@ function dependencyNames(manifest: Readonly<Record<string, unknown>>, section: s
 /**
  * Select the complete available first-party dependency closures rooted at dsh and its private Host.
  * @param available - Packed packages indexed by package name.
+ * @param extraRoots - Additional official feature bundles included in this distribution.
  * @returns Selected packages sorted by name.
  */
 export function selectDesktopPackageClosure(
   available: ReadonlyMap<string, PackedDesktopPackage>,
+  extraRoots: readonly string[] = [],
 ): PackedDesktopPackage[] {
   const selected = new Map<string, PackedDesktopPackage>()
   const visit = (name: string): void => {
@@ -74,7 +77,7 @@ export function selectDesktopPackageClosure(
       if (available.has(dependency)) visit(dependency)
     }
   }
-  for (const name of ROOT_PACKAGES) {
+  for (const name of [...ROOT_PACKAGES, ...extraRoots]) {
     if (!available.has(name)) throw new Error(`desktop package set: packed inputs omit ${name}`)
     visit(name)
   }
@@ -123,7 +126,7 @@ export function assertDesktopHostPackageFiles(files: readonly string[]): void {
 
 /** Prepare a package set from release tarball directories. */
 export function prepareDesktopPackageSet(inputs: readonly string[], output: string): void {
-  const selected = selectDesktopPackageClosure(packedPackages(inputs))
+  const selected = selectDesktopPackageClosure(packedPackages(inputs), DESKTOP_AGENT_TEAM_BUNDLES)
   const host = selected.find(packed => packed.manifest.name === DESKTOP_HOST_PACKAGE)
   if (host === undefined) throw new Error(`desktop package set: selected closure omits ${DESKTOP_HOST_PACKAGE}`)
   assertDesktopHostPackageFiles(tarballFiles(host.tarball))

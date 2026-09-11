@@ -298,6 +298,46 @@ describe('desktop project transactions', () => {
     await expect(manager.applyRelease(nextSeed, '0.1.5-rc.1.1', hooks())).resolves.toBe(false)
   })
 
+  it.each([
+    ['0.1.5-alpha.2', false], ['0.1.5-rc.1', false], ['0.1.5-rc.1', true],
+  ] as const)('enables Teams when upgrading %s (previously installed: %s) and preserves extra plugins', async (base, hadTeams) => {
+    const root = temporaryRoot()
+    const paths = resolveDesktopPaths(join(root, 'home'))
+    const manager = new DesktopProjectManager(paths, { node: process.execPath, pnpm: writeFakePnpm(root) })
+    const adapter = '@zaimokuza/dsh-acp-adapter'
+    const seed = join(root, 'old-seed')
+    createTestSeedMetadata(seed, release(base), [
+      { name: adapter, version: base },
+      ...(hadTeams ? [
+        { name: '@deepseek-ai/dsh-experimental-agent-team-profile', version: base },
+        { name: '@deepseek-ai/dsh-experimental-agent-team-web-profile', version: base },
+      ] : []),
+    ])
+    archiveStore(seed)
+    writeIntegrity(seed)
+    await manager.applyRelease(seed, base, hooks())
+    await manager.mutate({ type: 'plugin-add', spec: '@scope/plugin@2.0.0' }, hooks())
+    const nextSeed = join(root, 'teams-seed')
+    createTestSeedMetadata(nextSeed, {
+      ...release('0.1.5-rc.2'), distributionVersion: '0.1.5-rc.2.1',
+    }, [{ name: adapter, version: '0.1.5-rc.2.1' }])
+    archiveStore(nextSeed)
+    writeIntegrity(nextSeed)
+    await manager.applyRelease(nextSeed, '0.1.5-rc.2.1', hooks())
+    const installed = JSON.parse(readFileSync(join(paths.profile, 'package.json'), 'utf8')) as { dsh: { profile: { bundles: string[] } } }
+    const expected = JSON.parse(readFileSync(new URL('./expected/rc2-profile.json', import.meta.url), 'utf8')) as { bundles: string[] }
+    expect(installed.dsh.profile.bundles).toEqual([...expected.bundles, '@scope/plugin'])
+    expect(manager.listPlugins()).toEqual([
+      { name: adapter, version: '0.1.5-rc.2.1' },
+      { name: '@scope/plugin', version: '2.0.0' },
+    ])
+    expect(readFileSync(join(paths.profile, 'pnpm-workspace.yaml'), 'utf8')).toContain(`${adapter}@0.1.5-rc.2.1`)
+    await manager.mutate({ type: 'plugin-remove', name: '@scope/plugin' }, hooks())
+    const afterRemove = JSON.parse(readFileSync(join(paths.profile, 'package.json'), 'utf8')) as { dsh: { profile: { bundles: string[] } } }
+    expect(afterRemove.dsh.profile.bundles).toEqual(expected.bundles)
+    await expect(manager.applyRelease(nextSeed, '0.1.5-rc.2.1', hooks())).resolves.toBe(false)
+  })
+
   it('restores the active project when the replacement backend cannot start', async () => {
     const root = temporaryRoot()
     const seed = join(root, 'seed')
@@ -453,6 +493,8 @@ describe('desktop project transactions', () => {
     expect(profile.dsh.profile.bundles).toEqual([
       '@deepseek-ai/dsh-base',
       '@deepseek-ai/dsh-web-app',
+      '@deepseek-ai/dsh-experimental-agent-team-profile',
+      '@deepseek-ai/dsh-experimental-agent-team-web-profile',
       '@scope/plugin',
     ])
     expect(readFileSync(join(paths.pnpm.store, 'release-1'), 'utf8')).toBe('one')

@@ -2,7 +2,7 @@
 
 English | [中文](README.zh.md)
 
-This fork distributes an Electron application with DSH `0.1.5-rc.1`, `@zaimokuza/dsh-acp-adapter` `0.1.5-rc.1`, upstream Node.js `24.17.0`, pnpm `11.7.0`, and an offline installation seed. Users do not install DSH, Node.js, npm, or pnpm separately. ACP agent executables are configured separately; they are not included.
+This fork distributes an Electron application with DSH `0.1.5-rc.2`, `@zaimokuza/dsh-acp-adapter` `0.1.5-rc.2.1`, upstream Node.js `24.17.0`, pnpm `11.23.0`, and an offline installation seed. Users do not install DSH, Node.js, npm, or pnpm separately. ACP agent executables are configured separately; they are not included.
 
 ## Download and open
 
@@ -15,6 +15,8 @@ Both applications use the DeepSeek whale from the repository's Web favicon, rend
 The first launch installs the packaged seed offline into a separate writable profile and verifies that the backend boots. It adopts the extracted store directly when no desktop store exists; upgrades merge into the existing store to preserve downloaded plugins. Model requests and configured ACP agents can still require network access. No automatic desktop update runs; replace the application with a newer release ZIP while it is closed.
 
 ## Data and plugins
+
+Agent Teams is enabled by default through the official [Host layer](../../packages/experimental/agent-team-profile/README.md) and [Web layer](../../packages/experimental/agent-team-web-profile/README.md), including their local dependencies. DSH `0.1.5-rc.2` provides no dedicated Teams switch, so this distribution adds none. These official layers are part of the application; the plugin manager lists ACP adapter and user-installed plugins. Upgrading an alpha.2 or rc.1 desktop profile enables Teams while retaining other plugins. Teams remains experimental; its upstream Web layer documents limitations with preset-scoped legacy child controls.
 
 On an application upgrade, bundled plugins take the versions shipped in the new seed; the previous ACP adapter cannot replace the new bundled version. Other installed plugins retain their exact versions and remain enabled. The staged backend must pass its startup check before the replacement becomes active.
 
@@ -40,6 +42,8 @@ The backend runs in the bundled upstream Node.js process. `dsh-app://` and frame
 5. Confirm that the package name and version appear under **Installed**. **Update** asks for a target version; **Remove** uninstalls that plugin. Installation errors appear in the window, and a failed transaction preserves the previous active profile.
 
 The theme-library `0.2.1` test on the `0.1.5-alpha.2` desktop baseline confirmed registry installation, backend restart, installed-package inventory, and the theme selector under **Settings → General**. Its animated backgrounds are not compatible with this desktop host: the plugin serves images through `webServer`, which the desktop composition disables. The image request receives the frontend HTML fallback instead of image bytes. Installation success therefore does not certify this version's visual effects. The theme plugin is a manual verification example and is not part of the distributed seed.
+
+Upgrades that retain additional user-installed plugins prefer local caches and may contact the configured registry for missing dependency metadata. The bundled-only installation remains offline.
 
 ## npm registry and TLS configuration
 
@@ -69,15 +73,15 @@ pnpm --dir apps/desktop run package:portable:mac:arm64
 pnpm --dir apps/desktop run package:portable:win:x64
 ```
 
-The output ZIP is under `apps/desktop/.desktop-build/targets/<mac-arm64|win-x64>/artifacts`. Local builds default to desktop version `0.1.5-rc.1.1`; set `DSH_DESKTOP_DISTRIBUTION_VERSION` to choose another positive build counter. DSH and adapter dependencies retain their exact base versions. The adapter's npm tarball integrity is checked during seed preparation. The seed includes dependency bytes, lockfile, local core packages, licenses, and an integrity inventory; packaging proves an offline installation before shipping it.
+The output ZIP is under `apps/desktop/.desktop-build/targets/<mac-arm64|win-x64>/artifacts`. Local builds default to desktop version `0.1.5-rc.2.1`; set `DSH_DESKTOP_DISTRIBUTION_VERSION` to choose another positive build counter. DSH and adapter dependencies retain their exact base versions. The adapter's npm tarball integrity is checked during seed preparation. The seed includes dependency bytes, lockfile, local core packages, licenses, and an integrity inventory; packaging proves an offline installation before shipping it.
 
 Push the branch before tagging a reviewed commit:
 
 ```sh
 git switch desktop
 git push -u origin desktop
-git tag 0.1.5-rc.1.1
-git push origin 0.1.5-rc.1.1
+git tag 0.1.5-rc.2.1
+git push origin 0.1.5-rc.2.1
 ```
 
 The `Desktop portable` workflow verifies that the tag commit is on `origin/desktop`, builds macOS arm64 and Windows x64 independently, runs the packaged offline-host smoke, and attaches both ZIPs and `SHA256SUMS.txt` to a prerelease. Subsequent desktop revisions use `.2`, `.3`, and so on. The workflow does not publish npm packages. Branch pushes and manual workflow runs only upload Actions artifacts. A tag by itself contains no binaries until the workflow completes successfully.

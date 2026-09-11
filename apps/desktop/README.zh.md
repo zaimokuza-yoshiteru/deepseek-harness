@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-本 fork 分发 Electron 应用，内置 DSH `0.1.5-rc.1`、`@zaimokuza/dsh-acp-adapter` `0.1.5-rc.1`、原版 Node.js `24.17.0`、pnpm `11.7.0` 和离线安装 seed。使用者无需单独安装 DSH、Node.js、npm 或 pnpm。ACP agent 可执行程序需要另外配置，不包含在应用中。
+本 fork 分发 Electron 应用，内置 DSH `0.1.5-rc.2`、`@zaimokuza/dsh-acp-adapter` `0.1.5-rc.2.1`、原版 Node.js `24.17.0`、pnpm `11.23.0` 和离线安装 seed。使用者无需单独安装 DSH、Node.js、npm 或 pnpm。ACP agent 可执行程序需要另外配置，不包含在应用中。
 
 ## 下载与打开
 
@@ -15,6 +15,8 @@ Mac 应用采用 ad-hoc 签名，未经 Apple 公证；Windows 应用未签名�
 首次启动会将内置 seed 离线安装到独立的可写 profile，并验证后端可以启动。尚无桌面 store 时直接采用已解压的 store；升级时合并到已有 store，保留下载过的插件。模型请求和所配置的 ACP agent 仍可能需要网络。桌面端不运行自动更新；更新时关闭应用，再用新版本 ZIP 替换应用。
 
 ## 数据与插件
+
+Agent Teams 默认启用，使用官方[后端层](../../packages/experimental/agent-team-profile/README.zh.md)和[Web 界面层](../../packages/experimental/agent-team-web-profile/README.zh.md)，并包含它们的本地依赖。DSH `0.1.5-rc.2` 没有独立的 Teams 开关，因此此分发不另加开关。这两层属于应用组件；插件管理器列出 ACP adapter 和用户安装的插件。从 alpha.2 或 rc.1 桌面 profile 升级时会启用 Teams，同时保留其他插件。Teams 仍属实验性功能；上游 Web 层说明了与 preset 内旧子代理控制项并存的限制。
 
 应用升级时，内置插件采用新 seed 携带的版本，旧 ACP adapter 不会覆盖新内置版本。其他已安装插件保留精确版本并继续启用。暂存后端必须通过启动检查，替换才会生效。
 
@@ -40,6 +42,8 @@ macOS 的默认数据根目录为 `~/.dsh-desktop`，Windows 为 `%USERPROFILE%\
 5. 确认**已安装**列表出现对应包名和版本。点击**更新**可填写目标版本，点击**移除**可卸载该插件。安装错误会显示在窗口中，事务失败会保留原有的活动 profile。
 
 在桌面 `0.1.5-alpha.2` 基线上的主题库 `0.2.1` 实测确认了 registry 安装、后端重启、已安装包清单，以及**设置 → 通用设置**中的主题选择器。它的动态背景尚不兼容此桌面 host：插件通过 `webServer` 提供图片，但桌面组合禁用了该服务。图片请求收到的是前端 HTML 回退页面，而不是图片字节。因此安装成功不代表该版本的视觉效果可用。主题插件仅作为手动验证示例，不包含在分发 seed 中。
+
+升级时若保留了用户额外安装的插件，会优先使用本地缓存，缺少依赖元数据时可能访问已配置的 registry。仅使用内置组件的安装仍可离线完成。
 
 ## npm registry 与 TLS 配置
 
@@ -69,15 +73,15 @@ pnpm --dir apps/desktop run package:portable:mac:arm64
 pnpm --dir apps/desktop run package:portable:win:x64
 ```
 
-输出 ZIP 位于 `apps/desktop/.desktop-build/targets/<mac-arm64|win-x64>/artifacts`。本地构建默认桌面版本为 `0.1.5-rc.1.1`，设置 `DSH_DESKTOP_DISTRIBUTION_VERSION` 可以选择其他正整数构建序号。DSH 与适配器依赖始终保留精确基线版本。seed 准备阶段校验适配器 npm 包的完整性。seed 包含依赖字节、锁文件、本地核心包、许可证和完整性清单；打包前会验证离线安装。
+输出 ZIP 位于 `apps/desktop/.desktop-build/targets/<mac-arm64|win-x64>/artifacts`。本地构建默认桌面版本为 `0.1.5-rc.2.1`，设置 `DSH_DESKTOP_DISTRIBUTION_VERSION` 可以选择其他正整数构建序号。DSH 与适配器依赖始终保留精确基线版本。seed 准备阶段校验适配器 npm 包的完整性。seed 包含依赖字节、锁文件、本地核心包、许可证和完整性清单；打包前会验证离线安装。
 
 先推送分支，再对已检查的提交打 tag：
 
 ```sh
 git switch desktop
 git push -u origin desktop
-git tag 0.1.5-rc.1.1
-git push origin 0.1.5-rc.1.1
+git tag 0.1.5-rc.2.1
+git push origin 0.1.5-rc.2.1
 ```
 
 `Desktop portable` 工作流验证 tag 提交属于 `origin/desktop`，分别构建 macOS arm64 与 Windows x64，运行打包后端的离线冒烟检查，并把两个 ZIP 和 `SHA256SUMS.txt` 附到 GitHub prerelease。后续桌面修订依次使用 `.2`、`.3`。该工作流不发布 npm 包。分支推送和手动触发工作流仅上传 Actions artifacts。工作流成功完成前，tag 本身不包含应用二进制。

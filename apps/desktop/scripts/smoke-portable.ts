@@ -83,11 +83,35 @@ try {
       progress('starting the installed host')
       host = new DesktopHostProcess(runtime.node, project)
       const ready = await host.start()
-      assert.equal(ready.dshVersion, '0.1.5-rc.1')
+      assert.equal(ready.dshVersion, '0.1.5-rc.2')
       progress('fetching the frontend asset')
       const response = await host.fetch(new Request('dsh-app://app/index.html'))
       assert.equal(response.status, 200)
-      assert.match(await response.text(), /<html/u)
+      const html = await response.text()
+      assert.match(html, /<html/u)
+      progress('checking the default Teams profile and client module')
+      const installed = JSON.parse(readFileSync(join(project, 'package.json'), 'utf8')) as { dsh: { profile: { bundles: string[] } } }
+      const expected = JSON.parse(readFileSync(new URL('../tests/expected/rc2-profile.json', import.meta.url), 'utf8')) as { bundles: string[] }
+      assert.deepEqual(installed.dsh.profile.bundles, expected.bundles)
+      const bootJson = html.match(/<script>globalThis\["__DSH_BOOT__"\] = (.*?)<\/script>/u)?.[1]
+      assert.notEqual(bootJson, undefined)
+      const graph = JSON.parse(bootJson!) as { entries: { id: string; url: string }[] }
+      const teamEntry = graph.entries.find(entry => entry.id === '@deepseek-ai/dsh-experimental-client-ui-agent-team')
+      assert.notEqual(teamEntry, undefined)
+      const teamClient = await host.fetch(new Request(new URL(teamEntry!.url, 'dsh-app://app')))
+      assert.equal(teamClient.status, 200)
+      assert.match(teamClient.headers.get('content-type') ?? '', /javascript/u)
+      assert.match(await teamClient.text(), /agentTeams/u)
+      const teamRpc = await host.fetch(new Request('dsh-app://app/api/agentTeams/view', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ type: 'client-request', rpcId: 'teams-smoke', method: 'agentTeams/view', payload: { args: {} } }),
+      }))
+      assert.equal(teamRpc.status, 200)
+      const teamResult = await teamRpc.json() as { result: { ok: boolean; error?: { code: string; message: string } } }
+      assert.equal(teamResult.result.ok, false)
+      assert.equal(teamResult.result.error?.code, 'gateway/arguments-invalid')
+      assert.match(teamResult.result.error?.message ?? '', /agentId/u)
       progress('stopping the staged host')
       await host.stop()
       host = undefined
@@ -95,8 +119,8 @@ try {
     beforeActivate: async () => { progress('activating the installed profile') },
     afterActivate: async () => { progress('checking the active plugin inventory') },
   })
-  assert.deepEqual(manager.listPlugins(), [{ name: '@zaimokuza/dsh-acp-adapter', version: '0.1.5-rc.1' }])
-  console.log('Packaged offline install, host boot, frontend asset and ACP adapter: passed')
+  assert.deepEqual(manager.listPlugins(), [{ name: '@zaimokuza/dsh-acp-adapter', version: '0.1.5-rc.2.1' }])
+  console.log('Packaged offline install, host boot, frontend asset, Agent Teams and ACP adapter: passed')
 } finally {
   clearTimeout(timeout)
   unsubscribe('child_process', childDiagnostic)

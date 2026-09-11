@@ -153,16 +153,16 @@ async function main(): Promise<void> {
     copyFileSync(join(PACKAGE_SET_ROOT, DESKTOP_PACKAGE_SET_FILE), join(SEED_ROOT, DESKTOP_PACKAGE_SET_FILE))
     cpSync(join(PACKAGE_SET_ROOT, DESKTOP_PACKAGES_DIR), join(SEED_ROOT, DESKTOP_PACKAGES_DIR), { recursive: true })
     createSeedMetadata(SEED_ROOT, release, process.env.DSH_DESKTOP_PORTABLE === '1'
-      ? [{ name: '@zaimokuza/dsh-acp-adapter', version: '0.1.5-rc.1' }]
+      ? [{ name: '@zaimokuza/dsh-acp-adapter', version: '0.1.5-rc.2.1' }]
       : [])
     await runPnpm(['install', '--lockfile-only'])
     if (process.env.DSH_DESKTOP_PORTABLE === '1') {
       const lock = load(readFileSync(join(SEED_ROOT, 'pnpm-lock.yaml'), 'utf8')) as {
         packages?: Record<string, { resolution?: { integrity?: string } }>
       }
-      const adapter = lock.packages?.['@zaimokuza/dsh-acp-adapter@0.1.5-rc.1']
-      if (adapter?.resolution?.integrity !== 'sha512-R/JtXDbJKneKMNHqLukg35UryL/wKFfN7OnH5S0ffDJcFWOnIv6FWMUu3NaY/Ocj72KvJDzlFJT5SXZ0Bzha1w==') {
-        throw new Error('desktop seed: ACP adapter 0.1.5-rc.1 integrity does not match the pinned release')
+      const adapter = lock.packages?.['@zaimokuza/dsh-acp-adapter@0.1.5-rc.2.1']
+      if (adapter?.resolution?.integrity !== 'sha512-Vz7hQLA1UkE2/SMd0FxXgzZiuk9mSKhflulwhy7OSGElhzSXsLRcyoj2crZVPuR4tIicuHa8r8wQ3fNJvlgwMA==') {
+        throw new Error('desktop seed: ACP adapter 0.1.5-rc.2.1 integrity does not match the pinned release')
       }
     }
     verifyDesktopCoreLockfile(

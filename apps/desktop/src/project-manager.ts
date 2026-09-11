@@ -33,6 +33,7 @@ import {
 } from './core-package-set.ts'
 import type { DesktopPaths } from './paths.ts'
 import { parseDesktopRelease, type DesktopRelease } from './release.ts'
+import { desktopAdapterVersion, desktopProfileBundles } from './profile-defaults.ts'
 import { extractPnpmStoreArchives, mergePnpmStore } from './seed-store.ts'
 import { desktopNpmEnvironment } from './npm-environment.ts'
 
@@ -103,7 +104,6 @@ interface DesktopSeedIntegrityRecord {
 const PROJECT_NAME = '@deepseek-ai/dsh-desktop-runtime'
 const DSH_PACKAGE = '@deepseek-ai/dsh'
 const CORE_BUILD_PACKAGE = '@deepseek-ai/dsh-subprocess-local'
-const DESKTOP_PROFILE_BUNDLES = ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'] as const
 const WORKSPACE_SETTINGS = 'nodeLinker: hoisted\nautoInstallPeers: false\nstrictDepBuilds: true\n'
 const PACKAGE_NAME_PATTERN = /^(?:@[a-z0-9][a-z0-9._~-]*\/[a-z0-9][a-z0-9._~-]*|[a-z0-9][a-z0-9._~-]*)$/u
 const VERSION_PATTERN = /^[0-9A-Za-z][0-9A-Za-z.+_-]*$/u
@@ -130,7 +130,7 @@ function workspaceFile(version: string, overrides: Readonly<Record<string, strin
   const coreBuildKey = coreBuildSpec === undefined
     ? CORE_BUILD_PACKAGE
     : `${CORE_BUILD_PACKAGE}@${coreBuildSpec.replace('file:./', 'file:')}`
-  return `packages:\n  - .\n\n${overrideSection}${WORKSPACE_SETTINGS}minimumReleaseAgeExclude:\n  - '@zaimokuza/dsh-acp-adapter@${version}'\nallowBuilds:\n  node-pty: true\n  koffi: true\n  fs-ext: true\n  ${JSON.stringify(coreBuildKey)}: true\n  '@google/genai': false\n  protobufjs: false\n  node-addon-require-builtin: false\n`
+  return `packages:\n  - .\n\n${overrideSection}${WORKSPACE_SETTINGS}minimumReleaseAgeExclude:\n  - '@zaimokuza/dsh-acp-adapter@${desktopAdapterVersion(version)}'\nallowBuilds:\n  node-pty: true\n  koffi: true\n  fs-ext: true\n  ${JSON.stringify(coreBuildKey)}: true\n  '@google/genai': false\n  protobufjs: false\n  node-addon-require-builtin: false\n`
 }
 
 function releaseFile(projectDir: string): DesktopRelease {
@@ -273,10 +273,11 @@ function projectManifest(projectDir: string): DesktopProjectManifest {
 
 function profilePluginNames(projectDir: string): readonly string[] {
   const bundles = projectManifest(projectDir).dsh.profile.bundles
-  if (!DESKTOP_PROFILE_BUNDLES.every((bundle, index) => bundles[index] === bundle)) {
+  const builtInBundles = desktopProfileBundles(releaseFile(projectDir).version)
+  if (!builtInBundles.every((bundle, index) => bundles[index] === bundle)) {
     throw new Error('desktop project: profile must begin with the built-in desktop bundle list')
   }
-  const plugins = bundles.slice(DESKTOP_PROFILE_BUNDLES.length)
+  const plugins = bundles.slice(builtInBundles.length)
   if (new Set(bundles).size !== bundles.length) {
     throw new Error('desktop project: profile bundle list contains a duplicate package')
   }
@@ -296,7 +297,7 @@ function writeProfilePlugins(projectDir: string, plugins: readonly DesktopPlugin
       ...manifest.dsh,
       profile: {
         ...manifest.dsh.profile,
-        bundles: [...DESKTOP_PROFILE_BUNDLES, ...plugins.map(plugin => plugin.name)],
+        bundles: [...desktopProfileBundles(releaseFile(projectDir).version), ...plugins.map(plugin => plugin.name)],
       },
     },
   } satisfies DesktopProjectManifest)
@@ -411,7 +412,7 @@ export class DesktopProjectManager {
       const stagingProfile = this.newStagingProfile()
       try {
         if (existsSync(this.paths.profile)) {
-          const bundledNames = new Set(profilePluginNames(seedDir))
+          const bundledNames = new Set([...desktopProfileBundles(target.version), ...profilePluginNames(seedDir)])
           const plugins = pluginRecords(this.paths.profile).filter(plugin => !bundledNames.has(plugin.name))
           copyMetadata(seedDir, stagingProfile)
           await this.runPnpm(stagingProfile, ['install', '--offline', '--frozen-lockfile', '--trust-lockfile'])
@@ -421,7 +422,7 @@ export class DesktopProjectManager {
               'add',
               ...plugins.map(plugin => `${plugin.name}@${plugin.version}`),
               '--save-exact',
-              '--offline',
+              '--prefer-offline',
               '--trust-lockfile',
             ])
             writeProfilePlugins(stagingProfile, [...bundledPlugins, ...plugins])
@@ -484,9 +485,9 @@ export class DesktopProjectManager {
         if (!profilePluginNames(projectDir).includes(mutation.name)) {
           throw new Error(`desktop project: plugin ${JSON.stringify(mutation.name)} is not installed`)
         }
-        const remaining = pluginRecords(projectDir).filter(plugin => plugin.name !== mutation.name)
+        const remaining = profilePluginNames(projectDir).filter(name => name !== mutation.name)
         await this.runPnpm(projectDir, ['remove', mutation.name])
-        writeProfilePlugins(projectDir, remaining)
+        writeProfilePlugins(projectDir, remaining.map(name => inspectPlugin(projectDir, name)))
         return
       }
       case 'plugin-update':
@@ -705,7 +706,7 @@ export function createSeedMetadata(
       ...desktopCorePackageOverrides(packageSet),
       ...Object.fromEntries(plugins.map(plugin => [plugin.name, plugin.version])),
     },
-    dsh: { profile: { bundles: [...DESKTOP_PROFILE_BUNDLES, ...plugins.map(plugin => plugin.name)] } },
+    dsh: { profile: { bundles: [...desktopProfileBundles(release.version), ...plugins.map(plugin => plugin.name)] } },
   }
   writeJson(join(seedDir, 'package.json'), manifest)
   writeFileSync(
@@ -731,7 +732,7 @@ export function createDevelopmentProjectMetadata(projectDir: string, release: De
       [DSH_PACKAGE]: release.version,
       [DESKTOP_HOST_PACKAGE]: release.version,
     },
-    dsh: { profile: { bundles: [...DESKTOP_PROFILE_BUNDLES] } },
+    dsh: { profile: { bundles: [...desktopProfileBundles(release.version)] } },
   }
   writeJson(join(projectDir, 'package.json'), manifest)
   writeFileSync(join(projectDir, 'pnpm-workspace.yaml'), workspaceFile(release.version), { mode: 0o600 })

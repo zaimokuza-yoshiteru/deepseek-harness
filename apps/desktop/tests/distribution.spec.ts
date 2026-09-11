@@ -15,7 +15,7 @@ describe('desktop distribution', () => {
     expect(custom.DSH_TELEMETRY_MODE).toBe('FEEDBACK_ONLY')
   })
 
-  it.each(['0.1.5-alpha.2', '0.1.5-rc.1'])('keeps the DSH base %s separate from the desktop build counter', (base) => {
+  it.each(['0.1.5-alpha.2', '0.1.5-rc.1', '0.1.5-rc.2'])('keeps the DSH base %s separate from the desktop build counter', (base) => {
     const metadata = {
       schemaVersion: 1, version: base, distributionVersion: `${base}.1`,
       hostProtocolVersion: DESKTOP_HOST_PROTOCOL_VERSION, nodeVersion: '24.17.0', pnpmVersion: '11.7.0',

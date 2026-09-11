@@ -61,6 +61,22 @@ describe('desktop package-set selection', () => {
     ]))).toThrow(/omit @deepseek-ai\/dsh-desktop-host/u)
   })
 
+  it('includes the official Teams layers and their runtime closure, and rejects a missing layer', () => {
+    const available = new Map<string, PackedDesktopPackage>([
+      ['@deepseek-ai/dsh', packed('@deepseek-ai/dsh')],
+      ['@deepseek-ai/dsh-desktop-host', packed('@deepseek-ai/dsh-desktop-host')],
+      ['@deepseek-ai/dsh-experimental-agent-team-profile', packed('@deepseek-ai/dsh-experimental-agent-team-profile', {
+        dependencies: { '@deepseek-ai/dsh-experimental-agent-team': '1.0.0' },
+      })],
+      ['@deepseek-ai/dsh-experimental-agent-team-web-profile', packed('@deepseek-ai/dsh-experimental-agent-team-web-profile')],
+      ['@deepseek-ai/dsh-experimental-agent-team', packed('@deepseek-ai/dsh-experimental-agent-team')],
+    ])
+    const roots = ['@deepseek-ai/dsh-experimental-agent-team-profile', '@deepseek-ai/dsh-experimental-agent-team-web-profile']
+    expect(selectDesktopPackageClosure(available, roots).map(entry => entry.manifest.name)).toContain('@deepseek-ai/dsh-experimental-agent-team')
+    available.delete(roots[1]!)
+    expect(() => selectDesktopPackageClosure(available, roots)).toThrow(/omit @deepseek-ai\/dsh-experimental-agent-team-web-profile/u)
+  })
+
   it('requires the Desktop Host entry and its packaged overlay', () => {
     const files = [
       'package/lib/index.js',
