@@ -18,7 +18,7 @@ The host reports configured `enabled`, observed backend `activeEnabled`, install
 
 Each sandboxed preload is bundled independently. Its built artifact can require Electron but cannot require a shared local chunk. The desktop build executes both artifacts with a restricted loader to verify this requirement.
 
-Host pipe teardown destroys each Node stream and awaits its close event. Stream destruction closes its descriptor even with `autoClose: false`; a separate descriptor close would race that cleanup. Release smoke checks reject nonzero child exits and exercise offline disable/reactivation with the packaged backend.
+Host pipe teardown destroys each Node stream and awaits its close event. Stream destruction closes its descriptor even with `autoClose: false`; a separate descriptor close would race that cleanup. A complete request-pipe EOF also begins graceful shutdown because it can precede the shutdown message on the separate IPC channel; truncated frames remain transport failures. Release smoke checks require clean ordinary child exits, exercise offline disable/reactivation, and force both complete and truncated EOF before any IPC shutdown. Each phase has a separate bounded deadline.
 
 ## Alternatives considered
 

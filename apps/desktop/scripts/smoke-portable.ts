@@ -1,6 +1,8 @@
 /** Exercise the packaged seed and bundled Node with an empty, disposable offline profile. */
 import assert from 'node:assert/strict'
-import type { ChildProcess } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
+import { once } from 'node:events'
+import { Writable } from 'node:stream'
 import { subscribe, unsubscribe } from 'node:diagnostics_channel'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -71,9 +73,11 @@ function childDiagnostic(message: unknown): void {
 }
 function progress(next: string): void {
   stage = next
+  timeout.refresh()
   console.log(`Packaged smoke: ${stage}`)
 }
-// Windows cold-store preparation measured 154s before the roughly 53s dependency install.
+// Bound each phase separately: cold-store installation and both offline mutations
+// each do real filesystem work (Windows cold preparation previously measured 154s).
 const timeout = setTimeout(() => {
   console.error(`Packaged host smoke timed out while ${stage}`)
   for (const child of children) console.error({ pid: child.pid, exitCode: child.exitCode, signalCode: child.signalCode })
@@ -169,6 +173,7 @@ try {
     recover: async () => { if (host === undefined) await startActive() },
   })
   for (const enabled of [false, true]) {
+    progress(`switching Teams ${enabled ? 'on' : 'off'} without registry access`)
     const result = await experiments.setEnabled({ profile: paths.profile, id: 'agent-teams', expectedEnabled: !enabled, enabled })
     assert.equal(result.ok, true, JSON.stringify(result))
     if (result.ok) {
@@ -185,6 +190,40 @@ try {
   await host!.stop()
   host = undefined
   assert.deepEqual(failedChildren, [], 'All package and backend processes must exit cleanly')
+  unsubscribe('child_process', childDiagnostic)
+  for (const truncated of [false, true]) {
+    progress(`checking request-pipe EOF before IPC shutdown (truncated=${String(truncated)})`)
+    const child = spawn(runtime.node, [join(paths.profile, 'node_modules', '@deepseek-ai', 'dsh-desktop-host', 'lib', 'index.js'), paths.profile], {
+      cwd: paths.profile, stdio: ['ignore', 'pipe', 'pipe', 'pipe', 'pipe', 'ipc'],
+    })
+    children.add(child)
+    const closed = once(child, 'close')
+    const fatal: string[] = []
+    const ready = Promise.withResolvers<void>()
+    child.on('message', (message: { type: string; message?: string }) => {
+      if (message.type === 'ready') ready.resolve()
+      if (message.type === 'fatal') { fatal.push(message.message ?? 'fatal'); ready.reject(new Error(message.message)) }
+    })
+    child.once('error', ready.reject)
+    child.once('exit', () => { ready.reject(new Error('Host exited before readiness')) })
+    child.stdout!.resume()
+    child.stderr!.pipe(process.stderr, { end: false })
+    try {
+      await ready.promise
+      const pipe = child.stdio[3]
+      assert(pipe instanceof Writable)
+      // Deliberately send no IPC shutdown: EOF wins deterministically.
+      pipe.end(truncated ? Buffer.from([0x44]) : undefined)
+      const [code, signal] = await closed
+      assert.equal(code, truncated ? 1 : 0)
+      assert.equal(signal, null)
+      assert.equal(fatal.length, truncated ? 1 : 0)
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+      await closed
+      children.delete(child)
+    }
+  }
   console.log('Packaged offline install, host boot, frontend assets, Agent Teams, ACP adapter and Plugin Hub: passed')
 } finally {
   await host?.stop()

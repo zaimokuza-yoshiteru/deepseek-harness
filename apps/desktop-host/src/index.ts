@@ -569,7 +569,9 @@ async function main(): Promise<void> {
     if (stopping !== undefined) return
     try {
       decoder.finish()
-      failTransport(new Error('dsh desktop: Electron request pipe ended'))
+      // The parent closes this pipe to release pending reads during shutdown.
+      // EOF can arrive before the separate IPC shutdown message.
+      void stop()
     } catch (error) {
       failTransport(error)
     }
