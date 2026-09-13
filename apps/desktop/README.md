@@ -2,7 +2,7 @@
 
 English | [中文](README.zh.md)
 
-This fork distributes an Electron application with DSH `0.1.5-rc.2`, `@zaimokuza/dsh-acp-adapter` `0.1.5-rc.2.1`, upstream Node.js `24.17.0`, pnpm `11.23.0`, and an offline installation seed. Users do not install DSH, Node.js, npm, or pnpm separately. ACP agent executables are configured separately; they are not included.
+This fork distributes an Electron application with DSH `0.1.5-rc.2`, `@zaimokuza/dsh-acp-adapter` `0.1.5-rc.2.3`, `@zaimokuza/dsh-plugin-hub` `0.2.1`, upstream Node.js `24.17.0`, pnpm `11.23.0`, and an offline installation seed. Users do not install DSH, Node.js, npm, or pnpm separately. ACP agent executables are configured separately; they are not included.
 
 ## Download and open
 
@@ -16,7 +16,7 @@ The first launch installs the packaged seed offline into a separate writable pro
 
 ## Data and plugins
 
-Agent Teams is enabled by default through the official [Host layer](../../packages/experimental/agent-team-profile/README.md) and [Web layer](../../packages/experimental/agent-team-web-profile/README.md). Open **Desktop Plugins** with `Cmd+,` on macOS or `Ctrl+,` on Windows, then use **Built-in features → Agent Teams** to switch both layers together. Switching restarts the backend and reloads the main window; wait for running tasks and requests to finish first. The setting survives application restarts and upgrades. Dependencies remain installed, so re-enabling works offline. Sessions and Teams data are retained. ACP adapter and user-installed plugins remain in the installed list. Profiles without a saved choice default to enabled. Teams remains experimental; its upstream Web layer documents limitations with preset-scoped legacy child controls.
+Agent Teams is enabled by default through the official [Host layer](../../packages/experimental/agent-team-profile/README.md) and [Web layer](../../packages/experimental/agent-team-web-profile/README.md). Use **Plugin Hub → Experimental features → Agent Teams** to switch both layers together. Hub must support the Desktop experiments API v1; the native Desktop Plugins window manages npm packages only. Switching restarts the backend and reloads the main window; wait for running tasks and requests to finish first. The setting survives application restarts and upgrades. Dependencies remain installed, so re-enabling works offline. Sessions and Teams data are retained. ACP adapter and user-installed plugins remain in the installed list. Profiles without a saved choice default to enabled. Teams remains experimental; its upstream Web layer documents limitations with preset-scoped legacy child controls.
 
 On an application upgrade, bundled plugins take the versions shipped in the new seed; the previous ACP adapter cannot replace the new bundled version. Other installed plugins retain their exact versions and remain enabled. The staged backend must pass its startup check before the replacement becomes active.
 
@@ -25,6 +25,8 @@ The native **Edit** menu supplies standard editing shortcuts for the focused win
 By default, product data lives under `~/.dsh-desktop` on macOS or `%USERPROFILE%\.dsh-desktop` on Windows. The desktop profile is `profiles/desktop`, package state is `desktop/pnpm`, and Electron state is `electron-user-data` below that home. An explicit `DSH_HOME` overrides this root. The application does not import an existing Web profile. Telemetry defaults to `DSH_TELEMETRY_MODE=DISABLED`; explicit launch configuration can override it.
 
 Open the application menu's plugin manager (or press `Cmd+,` / `Ctrl+,`) to install by npm package name, update to a version, or remove a plugin. This is an installed-plugin manager, not a searchable marketplace. The adapter is preinstalled and appears in this list. Third-party plugins must support the desktop host.
+
+The main application exposes `window.dshDesktop.experiments` v1 for profile-bound feature reads and guarded switches. It does not expose package-management IPC. The [experiment bridge decision](../../.agents/notes/implemented/architecture/2026-09-13-desktop-experiment-bridge.md) defines authorization, state and failure handling.
 
 The backend runs in the bundled upstream Node.js process. `dsh-app://` and framed byte pipes carry frontend assets, Fetch requests, and streaming responses; desktop does not open a listening Web port. Package changes use a staging profile, backend health check, activation journal, and rollback. A desktop build counter change reconciles the packaged backend even when the DSH dependency version stays fixed.
 
@@ -45,6 +47,8 @@ The theme-library `0.2.1` test on the `0.1.5-alpha.2` desktop baseline confirmed
 
 Upgrades that retain additional user-installed plugins prefer local caches and may contact the configured registry for missing dependency metadata. The bundled-only installation remains offline.
 
+Plugin transactions compare parsed workspace policy, preserving pnpm-added `minimumReleaseAgeExclude` entries and YAML formatting. Core dependency overrides and build permissions remain protected.
+
 ## npm registry and TLS configuration
 
 Desktop passes the user configuration file to its bundled pnpm. It reads `~/.npmrc` (Windows: `%USERPROFILE%\.npmrc`) unless `NPM_CONFIG_USERCONFIG` / `npm_config_userconfig` selects another file. npm configuration environment variables override file values, with lowercase winning if both spellings are present. No system npm executable is invoked. The configuration file is read, not modified or bundled into the application.
@@ -61,6 +65,8 @@ strict-ssl=false
 
 The desktop still owns its store, project layout, and installation transactions. Project `.npmrc` files in the user's coding workspace are not imported: plugin operations run in the desktop profile. With no registry override, pnpm uses its public default. Model APIs, ACP subprocesses, and desktop Web requests do not inherit npm's `strict-ssl` setting. Build-time seed preparation reads the same npm configuration, but Electron and Node.js binary downloads use their own download mechanisms.
 
+Local credentials and runtime state stay outside Git: user `.npmrc`, `.env` variants, signing `.p12`/`.pfx` files, desktop profiles, Plugin Hub state, caches, and diagnostic logs. Build outputs and application ZIPs stay in ignored `.artifacts/` or `.desktop-build/` directories; publish ZIPs as Release attachments. The checked-in HTTPS test key is a localhost-only fixture and is excluded from desktop application resources.
+
 ## Build and release
 
 Build from the `desktop` branch on the matching native platform with the repository's Node/pnpm prerequisites installed:
@@ -73,15 +79,15 @@ pnpm --dir apps/desktop run package:portable:mac:arm64
 pnpm --dir apps/desktop run package:portable:win:x64
 ```
 
-The output ZIP is under `apps/desktop/.desktop-build/targets/<mac-arm64|win-x64>/artifacts`. Local builds default to desktop version `0.1.5-rc.2.2`; set `DSH_DESKTOP_DISTRIBUTION_VERSION` to choose another positive build counter. DSH and adapter dependencies retain their exact base versions. The adapter's npm tarball integrity is checked during seed preparation. The seed includes dependency bytes, lockfile, local core packages, licenses, and an integrity inventory; packaging proves an offline installation before shipping it.
+The output ZIP is under `apps/desktop/.desktop-build/targets/<mac-arm64|win-x64>/artifacts`. Local builds default to desktop version `0.1.5-rc.2.3`; set `DSH_DESKTOP_DISTRIBUTION_VERSION` to choose another positive build counter. DSH and adapter dependencies retain their exact base versions. The adapter's npm tarball integrity is checked during seed preparation. The seed includes dependency bytes, lockfile, local core packages, licenses, and an integrity inventory; packaging proves an offline installation before shipping it.
 
 Push the branch before tagging a reviewed commit:
 
 ```sh
 git switch desktop
 git push -u origin desktop
-git tag 0.1.5-rc.2.2
-git push origin 0.1.5-rc.2.2
+git tag 0.1.5-rc.2.3
+git push origin 0.1.5-rc.2.3
 ```
 
 The `Desktop portable` workflow verifies that the tag commit is on `origin/desktop`, builds macOS arm64 and Windows x64 independently, runs the packaged offline-host smoke, and attaches both ZIPs and `SHA256SUMS.txt` to a prerelease. Subsequent desktop revisions use `.2`, `.3`, and so on. The workflow does not publish npm packages. Branch pushes and manual workflow runs only upload Actions artifacts. A tag by itself contains no binaries until the workflow completes successfully.

@@ -31,6 +31,7 @@ import {
 } from './macos-seed-store.ts'
 import { resolveDesktopTargetBuildPaths } from './desktop-build-paths.mjs'
 import { desktopNpmEnvironment } from '../src/npm-environment.ts'
+import { DESKTOP_PORTABLE_PLUGINS } from '../src/portable-plugins.ts'
 import { load } from 'js-yaml'
 
 const APP_ROOT = resolve(import.meta.dirname, '..')
@@ -137,7 +138,10 @@ async function verifyOfflineInstallation(release: DesktopRelease): Promise<void>
     if (process.env.DSH_DESKTOP_PORTABLE === '1') {
       const notices = join(SEED_ROOT, 'notices')
       mkdirSync(notices, { recursive: true })
-      copyFileSync(join(installedModules, '@zaimokuza', 'dsh-acp-adapter', 'LICENSE'), join(notices, 'ACP-ADAPTER-LICENSE'))
+      for (const plugin of DESKTOP_PORTABLE_PLUGINS) {
+        copyFileSync(join(installedModules, ...plugin.name.split('/'), 'LICENSE'), join(notices, plugin.notice))
+      }
+      copyFileSync(join(installedModules, '@zaimokuza', 'dsh-plugin-hub', 'THIRD_PARTY_NOTICES.md'), join(notices, 'PLUGIN-HUB-THIRD-PARTY-NOTICES.md'))
     }
   } finally {
     rmSync(installedModules, { recursive: true, force: true })
@@ -153,16 +157,17 @@ async function main(): Promise<void> {
     copyFileSync(join(PACKAGE_SET_ROOT, DESKTOP_PACKAGE_SET_FILE), join(SEED_ROOT, DESKTOP_PACKAGE_SET_FILE))
     cpSync(join(PACKAGE_SET_ROOT, DESKTOP_PACKAGES_DIR), join(SEED_ROOT, DESKTOP_PACKAGES_DIR), { recursive: true })
     createSeedMetadata(SEED_ROOT, release, process.env.DSH_DESKTOP_PORTABLE === '1'
-      ? [{ name: '@zaimokuza/dsh-acp-adapter', version: '0.1.5-rc.2.1' }]
+      ? DESKTOP_PORTABLE_PLUGINS.map(({ name, version }) => ({ name, version }))
       : [])
     await runPnpm(['install', '--lockfile-only'])
     if (process.env.DSH_DESKTOP_PORTABLE === '1') {
       const lock = load(readFileSync(join(SEED_ROOT, 'pnpm-lock.yaml'), 'utf8')) as {
         packages?: Record<string, { resolution?: { integrity?: string } }>
       }
-      const adapter = lock.packages?.['@zaimokuza/dsh-acp-adapter@0.1.5-rc.2.1']
-      if (adapter?.resolution?.integrity !== 'sha512-Vz7hQLA1UkE2/SMd0FxXgzZiuk9mSKhflulwhy7OSGElhzSXsLRcyoj2crZVPuR4tIicuHa8r8wQ3fNJvlgwMA==') {
-        throw new Error('desktop seed: ACP adapter 0.1.5-rc.2.1 integrity does not match the pinned release')
+      for (const plugin of DESKTOP_PORTABLE_PLUGINS) {
+        if (lock.packages?.[`${plugin.name}@${plugin.version}`]?.resolution?.integrity !== plugin.integrity) {
+          throw new Error(`desktop seed: ${plugin.name}@${plugin.version} integrity does not match the pinned release`)
+        }
       }
     }
     verifyDesktopCoreLockfile(

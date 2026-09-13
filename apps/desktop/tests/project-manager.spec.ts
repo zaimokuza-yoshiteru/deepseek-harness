@@ -4,6 +4,7 @@ import { homedir, tmpdir } from 'node:os'
 import { dirname, join, relative, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
+import { dump, load } from 'js-yaml'
 import { resolveDesktopPaths } from '../src/paths.ts'
 import {
   createSeedMetadata,
@@ -194,6 +195,59 @@ describe('desktop package policy', () => {
 })
 
 describe('desktop project transactions', () => {
+  it('retains pnpm release-age exceptions and accepts YAML formatting during plugin transactions', async () => {
+    const root = temporaryRoot()
+    const seed = join(root, 'seed')
+    const paths = resolveDesktopPaths(join(root, 'home'))
+    const pnpm = writeFakePnpm(root)
+    // pnpm 11 adds exact newly published packages while resolving an explicit add.
+    writeFileSync(pnpm, readFileSync(pnpm, 'utf8') + `
+if (command === 'add') {
+  const workspace = join(project, 'pnpm-workspace.yaml')
+  const text = readFileSync(workspace, 'utf8')
+  writeFileSync(workspace, text.replace('minimumReleaseAgeExclude:\\n', 'minimumReleaseAgeExclude:\\n  - "@scope/plugin@2.0.0"\\n  - yaml@2.9.1\\n'))
+}
+`)
+    const manager = new DesktopProjectManager(paths, { node: process.execPath, pnpm })
+    createTestSeedMetadata(seed, release())
+    archiveStore(seed)
+    writeIntegrity(seed)
+    await manager.applyRelease(seed, '1.0.0', hooks())
+    const workspace = join(paths.profile, 'pnpm-workspace.yaml')
+    writeFileSync(workspace, dump(load(readFileSync(workspace, 'utf8')), { sortKeys: true }))
+    await manager.mutate({ type: 'plugin-add', spec: '@scope/plugin@2.0.0' }, hooks())
+    expect(manager.listPlugins()).toEqual([{ name: '@scope/plugin', version: '2.0.0' }])
+    expect(readFileSync(workspace, 'utf8')).toContain('yaml@2.9.1')
+    await manager.mutate({ type: 'plugin-remove', name: '@scope/plugin' }, hooks())
+    expect(manager.listPlugins()).toEqual([])
+    expect(readFileSync(workspace, 'utf8')).toContain('yaml@2.9.1')
+  })
+
+  it.each(['overrides', 'allowBuilds', 'strictDepBuilds', 'minimumReleaseAgeExclude', 'dependencies'])(
+    'rejects changed %s while accepting pnpm-managed exceptions', async (field) => {
+      const root = temporaryRoot()
+      const seed = join(root, 'seed')
+      const paths = resolveDesktopPaths(join(root, 'home'))
+      const manager = new DesktopProjectManager(paths, { node: process.execPath, pnpm: writeFakePnpm(root) })
+      createTestSeedMetadata(seed, release())
+      archiveStore(seed)
+      writeIntegrity(seed)
+      await manager.applyRelease(seed, '1.0.0', hooks())
+      if (field === 'dependencies') {
+        const path = join(paths.profile, 'package.json')
+        const manifest = JSON.parse(readFileSync(path, 'utf8')) as { dependencies: Record<string, string> }
+        manifest.dependencies['@deepseek-ai/dsh'] = '1.0.0'
+        writeFileSync(path, JSON.stringify(manifest))
+      } else {
+        const path = join(paths.profile, 'pnpm-workspace.yaml')
+        const policy = load(readFileSync(path, 'utf8')) as Record<string, unknown>
+        policy[field] = field === 'strictDepBuilds' ? false : field === 'minimumReleaseAgeExclude' ? [] : {}
+        writeFileSync(path, dump(policy))
+      }
+      expect(() => manager.listPlugins()).toThrow(/core package mapping/u)
+    },
+  )
+
   it('switches Teams offline, retains packages and plugins, and preserves disabled state through upgrades', async () => {
     const root = temporaryRoot()
     const seed = join(root, 'seed')

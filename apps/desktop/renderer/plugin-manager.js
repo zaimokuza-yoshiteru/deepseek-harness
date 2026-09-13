@@ -13,12 +13,6 @@ async function main() {
   document.querySelector('#install').textContent = messages.install
   document.querySelector('#installed-heading').textContent = messages.installed
   document.querySelector('#empty').textContent = messages.noPlugins
-  document.querySelector('#features-heading').textContent = messages.builtInFeatures
-  document.querySelector('#agent-teams-label').textContent = messages.agentTeams
-  document.querySelector('#agent-teams-description').textContent = messages.agentTeamsDescription
-  const teams = document.querySelector('#agent-teams')
-  let teamsEnabled = true
-
   const list = document.querySelector('#plugins')
   const empty = document.querySelector('#empty')
   const status = document.querySelector('#status')
@@ -32,9 +26,7 @@ async function main() {
   }
 
   async function render() {
-    const [plugins, enabled] = await Promise.all([api.plugins.list(), api.agentTeams.enabled()])
-    teamsEnabled = enabled
-    teams.checked = enabled
+    const plugins = await api.plugins.list()
     list.replaceChildren(...plugins.map(plugin => {
       const item = document.createElement('li')
       const identity = document.createElement('span')
@@ -75,7 +67,6 @@ async function main() {
     } catch (error) {
       status.textContent = error instanceof Error ? error.message : String(error)
     } finally {
-      teams.checked = teamsEnabled
       setBusy(false, status.textContent)
     }
   }
@@ -88,7 +79,6 @@ async function main() {
     } catch (error) {
       status.textContent = error instanceof Error ? error.message : String(error)
     } finally {
-      teams.checked = teamsEnabled
       setBusy(false, status.textContent)
     }
   }
@@ -101,10 +91,6 @@ async function main() {
       await api.plugins.add(spec)
       input.value = ''
     }, message('installing', { spec }))
-  })
-  teams.addEventListener('change', () => {
-    const enabled = teams.checked
-    void run(() => api.agentTeams.setEnabled(enabled), messages.agentTeamsChanging)
   })
   refresh.addEventListener('click', () => void load(messages.refreshing, messages.refreshed))
 

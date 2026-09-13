@@ -1,7 +1,0 @@
-{
-  "heading": "内置功能",
-  "label": "Agent Teams",
-  "description": "同时启停团队协作工具和团队面板。依赖始终保留，重新开启无需联网。切换会重启后端，并保留会话数据。",
-  "role": "switch",
-  "checked": false
-}

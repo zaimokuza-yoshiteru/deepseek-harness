@@ -1,0 +1,11 @@
+{
+  "heading": "Desktop Plugins",
+  "description": "Plugins are installed only in the Desktop node_modules and are managed by the bundled pnpm.",
+  "buttons": [
+    "Refresh",
+    "Install",
+    "Update",
+    "Remove"
+  ],
+  "experimentSwitches": 0
+}

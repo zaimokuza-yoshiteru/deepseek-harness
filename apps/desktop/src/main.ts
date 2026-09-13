@@ -1,5 +1,6 @@
 /** Electron shell: desktop project ownership, custom protocol, windows, and lifecycle. */
 
+import { realpathSync } from 'node:fs'
 import { readFile, writeFile } from 'node:fs/promises'
 import { extname, join, normalize, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -20,6 +21,9 @@ import { resolveDesktopLocale } from './locale.ts'
 import { claimDesktopSingleInstance } from './single-instance.ts'
 import { DesktopUpdateCoordinator } from './update-coordinator.ts'
 import { configureDesktopDistribution } from './distribution.ts'
+import { DesktopExperiments } from './experiments.ts'
+import { registerDesktopExperiments } from './experiments-ipc.ts'
+import { desktopProfileBundles, DESKTOP_AGENT_TEAM_BUNDLES } from './profile-defaults.ts'
 
 app.setPath('userData', configureDesktopDistribution())
 
@@ -248,34 +252,23 @@ async function main(): Promise<void> {
       changingProfile = false
     }
   }
-  ipcMain.handle(DESKTOP_IPC.agentTeamsGet, (event) => {
-    assertDesktopSender(event, ['shell'])
-    return manager.agentTeamsEnabled()
-  })
-  ipcMain.handle(DESKTOP_IPC.agentTeamsSet, async (event, enabled: unknown) => {
-    assertDesktopSender(event, ['shell'])
-    if (typeof enabled !== 'boolean') throw new Error('dsh desktop: expected a boolean Agent Teams setting')
-    if (development !== undefined) throw new Error('dsh desktop: feature switching requires a packaged application')
-    if (changingProfile) throw new Error(messages.featureSwitchBusy)
-    if (manager.agentTeamsEnabled() === enabled) return
-    changingProfile = true
-    let stopped = false
-    try {
+  const experiments = new DesktopExperiments({
+    profile: realpathSync(activeProject),
+    supported: development === undefined && desktopProfileBundles(manager.dshVersion()).includes(DESKTOP_AGENT_TEAM_BUNDLES[0]),
+    enabled: () => manager.agentTeamsEnabled(),
+    busy: () => changingProfile,
+    setBusy: (value) => { changingProfile = value },
+    stopIfIdle: async () => {
       const active = host
-      if (active === undefined) throw new Error(messages.featureSwitchBusy)
-      if (!await active.stopIfIdle()) throw new Error(messages.featureTasksRunning)
-      stopped = true
+      if (active === undefined) return true
+      if (!await active.stopIfIdle()) return false
       host = undefined
-      await manager.mutate({ type: 'agent-teams', enabled }, hooks)
-    } finally {
-      try {
-        if (stopped && host === undefined) host = await startHost()
-        if (stopped && mainWindow !== undefined && !mainWindow.isDestroyed()) mainWindow.webContents.reload()
-      } finally {
-        changingProfile = false
-      }
-    }
+      return true
+    },
+    change: enabled => manager.mutate({ type: 'agent-teams', enabled }, hooks),
+    recover: async () => { if (host === undefined) host = await startHost() },
   })
+  registerDesktopExperiments(ipcMain, () => mainWindow?.webContents, experiments)
   ipcMain.handle(DESKTOP_IPC.localeGet, (event) => {
     assertDesktopSender(event, ['shell'])
     return locale

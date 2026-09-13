@@ -1,0 +1,11 @@
+{
+  "heading": "桌面插件",
+  "description": "插件只安装到桌面端自己的 node_modules，并由内置 pnpm 管理。",
+  "buttons": [
+    "刷新",
+    "安装",
+    "更新",
+    "移除"
+  ],
+  "experimentSwitches": 0
+}

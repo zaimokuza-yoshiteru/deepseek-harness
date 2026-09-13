@@ -9,7 +9,7 @@ on:
       version:
         description: Desktop build version (manual runs upload artifacts only)
         required: true
-        default: '0.1.5-rc.2.2'
+        default: '0.1.5-rc.2.3'
 
 permissions:
   contents: read
@@ -37,7 +37,7 @@ jobs:
       run:
         shell: ${{ matrix.shell }}
     env:
-      DSH_DESKTOP_DISTRIBUTION_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || inputs.version || '0.1.5-rc.2.2' }}
+      DSH_DESKTOP_DISTRIBUTION_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || inputs.version || '0.1.5-rc.2.3' }}
       DSH_TELEMETRY_MODE: DISABLED
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
     steps:
@@ -62,6 +62,8 @@ jobs:
           apps/desktop/tests/project-manager.spec.ts apps/desktop/tests/distribution.spec.ts
           apps/desktop/tests/package-target.spec.ts apps/desktop/tests/host-process.spec.ts
           apps/desktop/tests/prepare-package-set.spec.ts apps/desktop/tests/host-idle.spec.ts
+          apps/desktop/tests/experiments.spec.ts apps/desktop/tests/experiments-ipc.spec.ts
+          apps/desktop/tests/experiments-preload.spec.ts apps/desktop/tests/host-pipe.spec.ts
           apps/desktop/tests/plugin-manager.spec.ts apps/desktop/tests/locale.spec.ts apps/desktop/tests/icons.spec.ts
       - name: Build application ZIP
         id: package
@@ -98,6 +100,6 @@ jobs:
           cd artifacts
           sha256sum ./*.zip > SHA256SUMS.txt
           if ! gh release view "$DESKTOP_TAG" >/dev/null 2>&1; then
-            gh release create "$DESKTOP_TAG" --verify-tag --prerelease --title "DSH Desktop $DESKTOP_TAG" --notes "DSH 0.1.5-rc.2 + ACP adapter 0.1.5-rc.2.1; Agent Teams enabled by default. Extract the complete ZIP before opening. macOS arm64 uses ad-hoc signing without notarization; Windows x64 is unsigned. No npm package is published."
+            gh release create "$DESKTOP_TAG" --verify-tag --prerelease --title "DSH Desktop $DESKTOP_TAG" --notes "DSH 0.1.5-rc.2 + ACP adapter 0.1.5-rc.2.3 + Plugin Hub 0.2.1; Agent Teams enabled by default and managed in Plugin Hub. Extract the complete ZIP before opening. macOS arm64 uses ad-hoc signing without notarization; Windows x64 is unsigned. No npm package is published."
           fi
           gh release upload "$DESKTOP_TAG" ./*.zip SHA256SUMS.txt --clobber

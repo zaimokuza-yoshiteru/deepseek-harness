@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-本 fork 分发 Electron 应用，内置 DSH `0.1.5-rc.2`、`@zaimokuza/dsh-acp-adapter` `0.1.5-rc.2.1`、原版 Node.js `24.17.0`、pnpm `11.23.0` 和离线安装 seed。使用者无需单独安装 DSH、Node.js、npm 或 pnpm。ACP agent 可执行程序需要另外配置，不包含在应用中。
+本 fork 分发 Electron 应用，内置 DSH `0.1.5-rc.2`、`@zaimokuza/dsh-acp-adapter` `0.1.5-rc.2.3`、`@zaimokuza/dsh-plugin-hub` `0.2.1`、原版 Node.js `24.17.0`、pnpm `11.23.0` 和离线安装 seed。使用者无需单独安装 DSH、Node.js、npm 或 pnpm。ACP agent 可执行程序需要另外配置，不包含在应用中。
 
 ## 下载与打开
 
@@ -16,7 +16,7 @@ Mac 应用采用 ad-hoc 签名，未经 Apple 公证；Windows 应用未签名�
 
 ## 数据与插件
 
-Agent Teams 默认启用，使用官方[后端层](../../packages/experimental/agent-team-profile/README.zh.md)和[Web 界面层](../../packages/experimental/agent-team-web-profile/README.zh.md)。macOS 按 `Cmd+,`、Windows 按 `Ctrl+,` 打开**桌面插件**，然后通过**内置功能 → Agent Teams** 同时切换两层。切换会重启后端并刷新主窗口；请先等待正在运行的任务和请求结束。设置在应用重启和升级后保留。依赖始终保留，因此重新开启无需联网。会话与 Teams 数据不会删除。ACP adapter 和用户安装的插件仍显示在已安装列表中。没有保存过选择的 profile 默认启用。Teams 仍属实验性功能；上游 Web 层说明了与 preset 内旧子代理控制项并存的限制。
+Agent Teams 默认启用，使用官方[后端层](../../packages/experimental/agent-team-profile/README.zh.md)和[Web 界面层](../../packages/experimental/agent-team-web-profile/README.zh.md)。通过 **Plugin Hub → 实验性功能 → Agent Teams** 同时切换两层。Hub 必须支持 Desktop 实验性功能接口 v1；原生桌面插件窗口仅管理 npm 包。切换会重启后端并刷新主窗口；请先等待正在运行的任务和请求结束。设置在应用重启和升级后保留。依赖始终保留，因此重新开启无需联网。会话与 Teams 数据不会删除。ACP adapter 和用户安装的插件仍显示在已安装列表中。没有保存过选择的 profile 默认启用。Teams 仍属实验性功能；上游 Web 层说明了与 preset 内旧子代理控制项并存的限制。
 
 应用升级时，内置插件采用新 seed 携带的版本，旧 ACP adapter 不会覆盖新内置版本。其他已安装插件保留精确版本并继续启用。暂存后端必须通过启动检查，替换才会生效。
 
@@ -25,6 +25,8 @@ Agent Teams 默认启用，使用官方[后端层](../../packages/experimental/a
 macOS 的默认数据根目录为 `~/.dsh-desktop`，Windows 为 `%USERPROFILE%\.dsh-desktop`。该目录下的 `profiles/desktop` 存放桌面 profile，`desktop/pnpm` 存放包管理状态，`electron-user-data` 存放 Electron 状态。显式设置 `DSH_HOME` 可以覆盖根目录。应用不导入已有 Web profile。遥测默认设置为 `DSH_TELEMETRY_MODE=DISABLED`，显式启动配置可以覆盖。
 
 从应用菜单打开插件管理器，或按 `Cmd+,` / `Ctrl+,`，可以按 npm 包名安装插件、更新到指定版本或卸载。它是已安装插件管理器，不提供市场搜索。适配器预装并显示在列表中。第三方插件必须兼容桌面 host。
+
+主应用通过 `window.dshDesktop.experiments` v1 提供绑定 profile 的功能读取和受控切换，不开放包管理 IPC。[实验性功能桥接决策](../../.agents/notes/implemented/architecture/2026-09-13-desktop-experiment-bridge.zh.md)规定调用权限、状态及失败处理。
 
 后端运行在内置的原版 Node.js 进程中。`dsh-app://` 与带帧字节管道承载前端资源、Fetch 请求及流式响应，桌面端不监听 Web 端口。包变更通过暂存 profile、后端健康检查、激活日志与回滚完成。即使 DSH 依赖版本不变，桌面构建序号变化也会重新应用内置后端。
 
@@ -45,6 +47,8 @@ macOS 的默认数据根目录为 `~/.dsh-desktop`，Windows 为 `%USERPROFILE%\
 
 升级时若保留了用户额外安装的插件，会优先使用本地缓存，缺少依赖元数据时可能访问已配置的 registry。仅使用内置组件的安装仍可离线完成。
 
+插件事务按解析后的配置校验工作区策略，保留 pnpm 自动添加的 `minimumReleaseAgeExclude` 条目并允许 YAML 格式变化。核心依赖 overrides 和构建权限仍受保护。
+
 ## npm registry 与 TLS 配置
 
 桌面端把用户配置文件交给内置 pnpm。默认读取 `~/.npmrc`，Windows 为 `%USERPROFILE%\.npmrc`；`NPM_CONFIG_USERCONFIG` / `npm_config_userconfig` 可以指定其他文件。npm 配置环境变量覆盖文件值，同时存在大小写形式时小写优先。整个过程不调用系统 npm。配置文件只读取，不修改，也不打包到应用中。
@@ -61,6 +65,8 @@ strict-ssl=false
 
 桌面端仍独立管理 store、项目布局与安装事务。不会导入用户代码工作区里的项目 `.npmrc`，因为插件操作在桌面 profile 中执行。未覆盖 registry 时使用 pnpm 的公网默认值。模型 API、ACP 子进程及桌面 Web 请求不继承 npm 的 `strict-ssl`。构建时准备 seed 也读取相同的 npm 配置，但 Electron 和 Node.js 二进制下载使用各自的下载机制。
 
+本地凭据和运行状态不进入 Git：用户 `.npmrc`、`.env` 变体、签名 `.p12`/`.pfx` 文件、桌面 profile、Plugin Hub 状态、缓存及诊断日志。构建产物和应用 ZIP 留在已忽略的 `.artifacts/` 或 `.desktop-build/` 目录，ZIP 通过 Release 附件分发。已提交的 HTTPS 测试私钥仅为 localhost 测试夹具，不进入桌面应用资源。
+
 ## 构建与发布
 
 在对应平台的原生系统中，从 `desktop` 分支构建，构建机需要安装仓库要求的 Node 与 pnpm：
@@ -73,15 +79,15 @@ pnpm --dir apps/desktop run package:portable:mac:arm64
 pnpm --dir apps/desktop run package:portable:win:x64
 ```
 
-输出 ZIP 位于 `apps/desktop/.desktop-build/targets/<mac-arm64|win-x64>/artifacts`。本地构建默认桌面版本为 `0.1.5-rc.2.2`，设置 `DSH_DESKTOP_DISTRIBUTION_VERSION` 可以选择其他正整数构建序号。DSH 与适配器依赖始终保留精确基线版本。seed 准备阶段校验适配器 npm 包的完整性。seed 包含依赖字节、锁文件、本地核心包、许可证和完整性清单；打包前会验证离线安装。
+输出 ZIP 位于 `apps/desktop/.desktop-build/targets/<mac-arm64|win-x64>/artifacts`。本地构建默认桌面版本为 `0.1.5-rc.2.3`，设置 `DSH_DESKTOP_DISTRIBUTION_VERSION` 可以选择其他正整数构建序号。DSH 与适配器依赖始终保留精确基线版本。seed 准备阶段校验适配器 npm 包的完整性。seed 包含依赖字节、锁文件、本地核心包、许可证和完整性清单；打包前会验证离线安装。
 
 先推送分支，再对已检查的提交打 tag：
 
 ```sh
 git switch desktop
 git push -u origin desktop
-git tag 0.1.5-rc.2.2
-git push origin 0.1.5-rc.2.2
+git tag 0.1.5-rc.2.3
+git push origin 0.1.5-rc.2.3
 ```
 
 `Desktop portable` 工作流验证 tag 提交属于 `origin/desktop`，分别构建 macOS arm64 与 Windows x64，运行打包后端的离线冒烟检查，并把两个 ZIP 和 `SHA256SUMS.txt` 附到 GitHub prerelease。后续桌面修订依次使用 `.2`、`.3`。该工作流不发布 npm 包。分支推送和手动触发工作流仅上传 Actions artifacts。工作流成功完成前，tag 本身不包含应用二进制。

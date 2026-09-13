@@ -1,5 +1,12 @@
-/** Minimal marker that selects the desktop custom-protocol API carrier. */
+/** Application bridge exposes experiments without package-management privileges. */
 
-import { contextBridge } from 'electron'
+import { contextBridge, ipcRenderer } from 'electron'
+import { DESKTOP_IPC } from './ipc.ts'
+import type { DesktopExperimentsApi, DesktopExperimentsSnapshot, DesktopExperimentResult } from './experiments.ts'
 
-contextBridge.exposeInMainWorld('dshDesktop', { protocolVersion: 1 })
+const experiments: DesktopExperimentsApi = {
+  version: 1,
+  list: () => ipcRenderer.invoke(DESKTOP_IPC.experimentsList) as Promise<DesktopExperimentsSnapshot>,
+  setEnabled: change => ipcRenderer.invoke(DESKTOP_IPC.experimentsSet, change) as Promise<DesktopExperimentResult>,
+}
+contextBridge.exposeInMainWorld('dshDesktop', { protocolVersion: 1, experiments })

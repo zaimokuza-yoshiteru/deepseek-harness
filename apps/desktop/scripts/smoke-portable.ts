@@ -8,8 +8,10 @@ import { join } from 'node:path'
 import extractZip from '@electron-internal/extract-zip'
 import { DesktopProjectManager } from '../src/project-manager.ts'
 import { DesktopHostProcess } from '../src/host-process.ts'
+import { DesktopExperiments } from '../src/experiments.ts'
 import { resolveDesktopPaths } from '../src/paths.ts'
 import { desktopTargetBuildPaths } from './desktop-build-paths.mjs'
+import { DESKTOP_PORTABLE_PLUGINS } from '../src/portable-plugins.ts'
 
 const target = process.argv[2]
 if (target !== 'mac-arm64' && target !== 'win-x64') throw new Error('Expected mac-arm64 or win-x64')
@@ -46,6 +48,7 @@ const release = JSON.parse(readFileSync(join(seed, 'desktop-release.json'), 'utf
 let host: DesktopHostProcess | undefined
 let stage = 'installing the packaged seed'
 const children = new Set<ChildProcess>()
+const failedChildren: Array<{ code: number | null; signal: NodeJS.Signals | null }> = []
 function childDiagnostic(message: unknown): void {
   const { process: child } = message as { process: ChildProcess }
   children.add(child)
@@ -58,6 +61,7 @@ function childDiagnostic(message: unknown): void {
   })
   child.once('exit', (code, signal) => {
     console.log(`Packaged smoke: child ${String(child.pid)} exited (${String(code ?? signal)})`)
+    if (code !== 0 || signal !== null) failedChildren.push({ code, signal })
   })
   child.once('close', () => {
     child.stdout?.off('data', stdout)
@@ -92,7 +96,7 @@ try {
       progress('checking the default Teams profile and client module')
       const installed = JSON.parse(readFileSync(join(project, 'package.json'), 'utf8')) as { dsh: { profile: { bundles: string[] } } }
       const expected = JSON.parse(readFileSync(new URL('../tests/expected/rc2-profile.json', import.meta.url), 'utf8')) as { bundles: string[] }
-      assert.deepEqual(installed.dsh.profile.bundles, expected.bundles)
+      assert.deepEqual(installed.dsh.profile.bundles, [...expected.bundles, '@zaimokuza/dsh-plugin-hub'])
       const bootJson = html.match(/<script>globalThis\["__DSH_BOOT__"\] = (.*?)<\/script>/u)?.[1]
       assert.notEqual(bootJson, undefined)
       const graph = JSON.parse(bootJson!) as { entries: { id: string; url: string }[] }
@@ -112,6 +116,24 @@ try {
       assert.equal(teamResult.result.ok, false)
       assert.equal(teamResult.result.error?.code, 'gateway/arguments-invalid')
       assert.match(teamResult.result.error?.message ?? '', /agentId/u)
+      progress('checking the bundled Plugin Hub client and desktop Teams state')
+      const hubEntry = graph.entries.find(entry => entry.id === '@zaimokuza/dsh-plugin-hub')
+      assert.notEqual(hubEntry, undefined)
+      const hubClient = await host.fetch(new Request(new URL(hubEntry!.url, 'dsh-app://app')))
+      assert.equal(hubClient.status, 200)
+      assert.match(hubClient.headers.get('content-type') ?? '', /javascript/u)
+      assert.match(await hubClient.text(), /Plugin Hub/u)
+      const hubRpc = await host.fetch(new Request('dsh-app://app/api/dshPluginHub_hub/experiments', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ type: 'client-request', rpcId: 'hub-smoke', method: 'dshPluginHub_hub/experiments', payload: {} }),
+      }))
+      assert.equal(hubRpc.status, 200)
+      const hubResult = await hubRpc.json() as { result: { ok: boolean; value: { id: string; enabled: boolean; installed: boolean }[] } }
+      assert.equal(hubResult.result.ok, true)
+      const teamFeature = hubResult.result.value.find(feature => feature.id === 'agent-teams')
+      assert.equal(teamFeature?.enabled, true)
+      assert.equal(teamFeature?.installed, true)
       progress('stopping the staged host')
       await host.stop()
       host = undefined
@@ -119,12 +141,55 @@ try {
     beforeActivate: async () => { progress('activating the installed profile') },
     afterActivate: async () => { progress('checking the active plugin inventory') },
   })
-  assert.deepEqual(manager.listPlugins(), [{ name: '@zaimokuza/dsh-acp-adapter', version: '0.1.5-rc.2.1' }])
-  console.log('Packaged offline install, host boot, frontend asset, Agent Teams and ACP adapter: passed')
+  assert.deepEqual(manager.listPlugins(), DESKTOP_PORTABLE_PLUGINS.map(({ name, version }) => ({ name, version })))
+  progress('switching Teams off and on through the experiment controller without registry access')
+  const startActive = async (): Promise<void> => {
+    host = new DesktopHostProcess(runtime.node, paths.profile)
+    await host.start()
+  }
+  await startActive()
+  let busy = false
+  const experiments = new DesktopExperiments({
+    profile: paths.profile, supported: true,
+    enabled: () => manager.agentTeamsEnabled(), busy: () => busy, setBusy: (value) => { busy = value },
+    stopIfIdle: async () => {
+      assert.notEqual(host, undefined)
+      if (!await host!.stopIfIdle()) return false
+      host = undefined
+      return true
+    },
+    change: enabled => manager.mutate({ type: 'agent-teams', enabled }, {
+      healthCheck: async (project) => {
+        const probe = new DesktopHostProcess(runtime.node, project)
+        try { await probe.start() } finally { await probe.stop() }
+      },
+      beforeActivate: async () => {},
+      afterActivate: startActive,
+    }),
+    recover: async () => { if (host === undefined) await startActive() },
+  })
+  for (const enabled of [false, true]) {
+    const result = await experiments.setEnabled({ profile: paths.profile, id: 'agent-teams', expectedEnabled: !enabled, enabled })
+    assert.equal(result.ok, true, JSON.stringify(result))
+    if (result.ok) {
+      assert.equal(result.reloadRequired, true)
+      assert.equal(result.value.features[0]?.enabled, enabled)
+      assert.equal(result.value.features[0]?.activeEnabled, enabled)
+    }
+    const html = await (await host!.fetch(new Request('dsh-app://app/index.html'))).text()
+    const graph = JSON.parse(html.match(/<script>globalThis\["__DSH_BOOT__"\] = (.*?)<\/script>/u)![1]!) as { entries: { id: string }[] }
+    assert.equal(graph.entries.some(entry => entry.id === '@deepseek-ai/dsh-experimental-client-ui-agent-team'), enabled)
+    assert.equal(graph.entries.some(entry => entry.id === '@zaimokuza/dsh-plugin-hub'), true)
+    assert.deepEqual(manager.listPlugins(), DESKTOP_PORTABLE_PLUGINS.map(({ name, version }) => ({ name, version })))
+  }
+  await host!.stop()
+  host = undefined
+  assert.deepEqual(failedChildren, [], 'All package and backend processes must exit cleanly')
+  console.log('Packaged offline install, host boot, frontend assets, Agent Teams, ACP adapter and Plugin Hub: passed')
 } finally {
+  await host?.stop()
   clearTimeout(timeout)
   unsubscribe('child_process', childDiagnostic)
-  await host?.stop()
   rmSync(home, { recursive: true, force: true })
   if (archive !== undefined) rmSync(artifacts, { recursive: true, force: true })
 }

@@ -22,6 +22,8 @@ import {
   writeSync,
 } from 'node:fs'
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { isDeepStrictEqual } from 'node:util'
+import { JSON_SCHEMA, load } from 'js-yaml'
 import {
   DESKTOP_PACKAGES_DIR,
   DESKTOP_PACKAGE_SET_FILE,
@@ -123,7 +125,11 @@ function readJson(path: string): unknown {
   return JSON.parse(readFileSync(path, 'utf8'))
 }
 
-function workspaceFile(version: string, overrides: Readonly<Record<string, string>> = {}): string {
+function workspaceFile(
+  version: string,
+  overrides: Readonly<Record<string, string>> = {},
+  adapterVersion = desktopAdapterVersion(version),
+): string {
   const entries = Object.entries(overrides).sort(([left], [right]) => left.localeCompare(right))
   const overrideSection = entries.length === 0
     ? ''
@@ -132,7 +138,19 @@ function workspaceFile(version: string, overrides: Readonly<Record<string, strin
   const coreBuildKey = coreBuildSpec === undefined
     ? CORE_BUILD_PACKAGE
     : `${CORE_BUILD_PACKAGE}@${coreBuildSpec.replace('file:./', 'file:')}`
-  return `packages:\n  - .\n\n${overrideSection}${WORKSPACE_SETTINGS}minimumReleaseAgeExclude:\n  - '@zaimokuza/dsh-acp-adapter@${desktopAdapterVersion(version)}'\nallowBuilds:\n  node-pty: true\n  koffi: true\n  fs-ext: true\n  ${JSON.stringify(coreBuildKey)}: true\n  '@google/genai': false\n  protobufjs: false\n  node-addon-require-builtin: false\n`
+  return `packages:\n  - .\n\n${overrideSection}${WORKSPACE_SETTINGS}minimumReleaseAgeExclude:\n  - '@zaimokuza/dsh-acp-adapter@${adapterVersion}'\nallowBuilds:\n  node-pty: true\n  koffi: true\n  fs-ext: true\n  ${JSON.stringify(coreBuildKey)}: true\n  '@google/genai': false\n  protobufjs: false\n  node-addon-require-builtin: false\n`
+}
+
+/** Compare managed policy by value while preserving pnpm's additional release-age exceptions. */
+function matchesWorkspacePolicy(projectDir: string, expectedText: string): boolean {
+  const actual: unknown = load(readFileSync(join(projectDir, 'pnpm-workspace.yaml'), 'utf8'), { schema: JSON_SCHEMA })
+  const expected: unknown = load(expectedText, { schema: JSON_SCHEMA })
+  if (!isRecord(actual) || !isRecord(expected)) return false
+  const { minimumReleaseAgeExclude: actualExceptions, ...actualPolicy } = actual
+  const { minimumReleaseAgeExclude: expectedExceptions, ...expectedPolicy } = expected
+  return Array.isArray(actualExceptions) && actualExceptions.every(value => typeof value === 'string')
+    && Array.isArray(expectedExceptions) && expectedExceptions.every((value: unknown) => typeof value === 'string' && actualExceptions.includes(value))
+    && isDeepStrictEqual(actualPolicy, expectedPolicy)
 }
 
 function releaseFile(projectDir: string): DesktopRelease {
@@ -270,7 +288,9 @@ function projectManifest(projectDir: string): DesktopProjectManifest {
   const expectedOverrides = desktopCorePackageOverrides(packageSet)
   if (manifest.dependencies[DSH_PACKAGE] !== desktopDshPackageSpec(packageSet)
     || Object.entries(expectedOverrides).some(([name, spec]) => manifest.dependencies[name] !== spec)
-    || readFileSync(join(projectDir, 'pnpm-workspace.yaml'), 'utf8') !== workspaceFile(releaseFile(projectDir).version, expectedOverrides)) {
+    || !matchesWorkspacePolicy(projectDir, workspaceFile(
+      releaseFile(projectDir).version, expectedOverrides, manifest.dependencies['@zaimokuza/dsh-acp-adapter'],
+    ))) {
     throw new Error(`desktop project: core package mapping does not match ${DESKTOP_PACKAGE_SET_FILE}`)
   }
   return manifest
@@ -745,12 +765,15 @@ export function createSeedMetadata(
       ...desktopCorePackageOverrides(packageSet),
       ...Object.fromEntries(plugins.map(plugin => [plugin.name, plugin.version])),
     },
-    dsh: { profile: { bundles: [...desktopProfileBundles(release.version), ...plugins.map(plugin => plugin.name)] } },
+    dsh: {
+      ...(desktopProfileBundles(release.version).includes(DESKTOP_AGENT_TEAM_BUNDLES[0]) ? { desktop: { agentTeams: true } } : {}),
+      profile: { bundles: [...desktopProfileBundles(release.version), ...plugins.map(plugin => plugin.name)] },
+    },
   }
   writeJson(join(seedDir, 'package.json'), manifest)
   writeFileSync(
     join(seedDir, 'pnpm-workspace.yaml'),
-    workspaceFile(release.version, desktopCorePackageOverrides(packageSet)),
+    workspaceFile(release.version, desktopCorePackageOverrides(packageSet), manifest.dependencies['@zaimokuza/dsh-acp-adapter']),
     { mode: 0o600 },
   )
   writeJson(join(seedDir, 'desktop-release.json'), release)
