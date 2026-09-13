@@ -1,6 +1,10 @@
 name: Desktop release promotion
 
 on:
+  # Register this workflow from the desktop branch without changing the default branch.
+  push:
+    branches: [desktop]
+    paths: ['.github/workflows/desktop-promote.yml']
   workflow_dispatch:
     inputs:
       source_run:
@@ -21,6 +25,7 @@ concurrency:
 
 jobs:
   promote:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     permissions:
       actions: read
