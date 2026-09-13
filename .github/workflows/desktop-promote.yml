@@ -1,0 +1,94 @@
+name: Desktop release promotion
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run:
+        description: Successful Desktop portable branch run ID
+        required: true
+        type: string
+      tag:
+        description: Existing desktop tag at the verified run commit
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-promote-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      SOURCE_RUN: ${{ inputs.source_run }}
+      DESKTOP_TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify the source run and tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_RUN" =~ ^[0-9]+$ ]]
+          [[ "$DESKTOP_TAG" =~ ^0\.1\.5-rc\.2\.[1-9][0-9]*$ ]]
+          export SOURCE_SHA="$(git rev-parse "refs/tags/$DESKTOP_TAG^{commit}")"
+          git merge-base --is-ancestor "$SOURCE_SHA" origin/desktop
+          gh api "repos/$GH_REPO/actions/runs/$SOURCE_RUN" > /tmp/source-run.json
+          python3 - <<'PY'
+          import json, os
+          run = json.load(open('/tmp/source-run.json'))
+          assert run['status'] == 'completed' and run['conclusion'] == 'success'
+          assert run['head_sha'] == os.environ['SOURCE_SHA']
+          assert run['event'] == 'push' and run['head_branch'] == 'desktop'
+          assert run['path'] == '.github/workflows/desktop-portable.yml'
+          assert run['repository']['full_name'] == os.environ['GH_REPO']
+          PY
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.source_run }}
+          pattern: dsh-desktop-*
+          path: artifacts
+          merge-multiple: true
+      - name: Verify application metadata and prepare a draft Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd artifacts
+          python3 - <<'PY'
+          import json, os, pathlib, zipfile
+          tag = os.environ['DESKTOP_TAG']
+          expected = {f'dsh-desktop-{tag}-{target}.zip' for target in ['mac-arm64', 'win-x64']}
+          assert {p.name for p in pathlib.Path('.').iterdir()} == expected
+          for name in sorted(expected):
+              with zipfile.ZipFile(name) as archive:
+                  assert archive.testzip() is None
+                  paths = archive.namelist()
+                  assert not any(pathlib.PurePosixPath(p).name in ['.npmrc', '.env', 'key.pem'] or '/.git/' in p for p in paths)
+                  metadata = [p for p in paths if p.endswith('/seed/desktop-release.json')]
+                  assert len(metadata) == 1
+                  release = json.loads(archive.read(metadata[0]))
+                  assert release['version'] == '0.1.5-rc.2' and release['distributionVersion'] == tag
+                  manifest = json.loads(archive.read(metadata[0].replace('desktop-release.json', 'package.json')))
+                  assert manifest['dependencies']['@zaimokuza/dsh-acp-adapter'] == '0.1.5-rc.2.3'
+                  assert manifest['dependencies']['@zaimokuza/dsh-plugin-hub'] == '0.2.1'
+                  assert manifest['dsh']['desktop']['agentTeams'] is True
+              print('Verified', name)
+          PY
+          sha256sum ./*.zip > SHA256SUMS.txt
+          if gh release view "$DESKTOP_TAG" --json isDraft > /tmp/release.json 2>/dev/null; then
+            python3 -c 'import json; assert json.load(open("/tmp/release.json"))["isDraft"] is True'
+          else
+            gh release create "$DESKTOP_TAG" --verify-tag --draft --prerelease --title "DSH Desktop $DESKTOP_TAG" --notes "Verified application artifacts; release review pending."
+          fi
+          gh release upload "$DESKTOP_TAG" ./*.zip SHA256SUMS.txt --clobber
