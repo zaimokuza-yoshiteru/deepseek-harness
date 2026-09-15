@@ -11,7 +11,7 @@ for (const name of ['preload-app', 'preload']) {
     ipcRenderer: { invoke: async (...args) => { calls.push(args) }, on() {}, off() {} },
   }
   const source = readFileSync(new URL(`../lib/${name}.cjs`, import.meta.url), 'utf8')
-  new Script(source, { filename: `${name}.cjs` }).runInNewContext({ require: id => {
+  new Script(source, { filename: `${name}.cjs` }).runInNewContext({ location: { protocol: 'dsh-app:', hostname: 'app' }, require: id => {
     assert.equal(id, 'electron', 'Sandboxed preload cannot require a local chunk')
     return electron
   } })
@@ -23,7 +23,7 @@ for (const name of ['preload-app', 'preload']) {
     await exposed.experiments.setEnabled(change)
     assert.deepEqual(calls, [['dsh-desktop:experiments-list'], ['dsh-desktop:experiments-set', change]])
   } else {
-    assert.deepEqual(Object.keys(exposed), ['protocolVersion', 'locale', 'plugins', 'updates'])
+    assert.deepEqual(Object.keys(exposed), ['protocolVersion', 'locale', 'plugins', 'backend', 'updates'])
   }
 }
 console.log('Built preloads are self-contained and expose only their window-specific capabilities.')

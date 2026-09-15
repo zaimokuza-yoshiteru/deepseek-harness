@@ -10,19 +10,15 @@ Status: implemented
 
 ## Decision
 
-`desktop` 分支将本地核心包、原版 Node.js、pnpm 和精确版本的 ACP adapter 打包为 macOS arm64 与 Windows x64 ZIP。桌面分发版本在固定的 DSH 版本后追加正整数构建序号。seed 记录两个版本，profile 校准会比较构建序号，使相同 DSH 基线的桌面修订也能替换后端资源。
+`desktop` 分支提供 macOS arm64 与 Windows x64 ZIP，内置预构建的生产核心、原版 Node.js、pnpm 和两个固定版本插件。后端通过 Electron 的 Node 模式从 ASAR 执行，包操作使用独立的原版 Node 可执行程序。应用启动时不安装核心依赖；准备期间先显示启动页，同一个后端负责就绪检查和应用请求。
 
-当前分发固定 DSH `0.1.5-rc.2` 的上游提交 `fb2c4b9e698e30edb738bca4cf0618587db7d203`，以及 ACP adapter `0.1.5-rc.2.3` 和 Plugin Hub `0.2.1`；seed 准备阶段校验 npm 包完整性。升级时，seed 中的插件版本优先于这些包原先安装的版本。其他插件保留精确版本和注册。工作区策略按各 profile 记录的 DSH 版本生成，使 alpha profile 仍可读取，而 rc seed 使用对应精确 adapter 版本的发布时间例外。
+核心包含 DSH `0.1.6-alpha.1` 及随后上游的启动优化。ACP adapter `0.1.6-alpha.1.2` 与 Plugin Hub `0.2.3` 预构建为独立的可写 profile 模板，通过锁文件验证 npm 完整性。指定的 GitHub tag `0.1.6.alpha.1.1` 映射为内部 SemVer `0.1.6-alpha.1.1`，依赖版本与桌面构建序号分离。
 
-仅升级时的 add 优先使用本地缓存，并信任已验证的 seed 锁文件。用户插件与新核心包重新解析时，可能从已配置的 registry 获取缺失的依赖元数据。固定 seed 的安装仍保持离线。插件事务按解析后的 YAML 策略比较，允许 `minimumReleaseAgeExclude` 中增加字符串条目，这是 pnpm 显式安装新版本时写入的配置。精确核心依赖映射、overrides 和构建权限仍须匹配托管策略；空白与键顺序不影响校验。
+首次启动复制已准备好的插件模板，不调用 pnpm。模板升级先将原 profile 移入私有迁移备份，保留用户配置及启用状态，再验证新依赖图；准备失败时恢复原文件。内置插件版本跟随应用发布，额外用户插件保留精确版本，迁移时可能需要访问 registry。
 
-内置 pnpm 固定为 `11.23.0`，修复 rc.1 到 rc.2 插件升级时复现的安装完成后 worker 不退出问题（[pnpm #12297](https://github.com/pnpm/pnpm/issues/12297)）。仓库构建工具使用同一版本，避免 Electron 收集依赖时发生包管理器版本不匹配。内置 pnpm 读取用户 npmrc，不将其复制进应用资源。npm 环境变量保留公开拼写，通用网络配置也映射为 pnpm 11 的环境变量拼写。包管理存储仍由应用独立管理。放宽 TLS 校验仅作用于包管理配置，不设置 Node 进程级 TLS 开关。
+内置 pnpm 与仓库工具统一使用 `11.23.0`。包操作读取用户 npmrc 及 npm 环境覆盖值，包括 scope registry 凭证与 TLS 配置，不将个人配置复制到发布资源中；包存储仍由应用独立管理。macOS 导入登录交互 shell 的导出变量，具体排除项及超时由[桌面 README](../../../../apps/desktop/README.zh.md#environment-and-registry)定义。Windows 继承启动环境。
 
-fork 默认采用独立的 DSH 根目录和 Electron 用户数据目录。菜单与启动流程不触发自动更新，遥测默认关闭。仍支持显式指定 DSH 根目录与遥测配置。GitHub tag 构建验证提交属于 desktop 分支，将 ZIP 和校验文件附到 prerelease，不发布 npm 包。
-
-CI 在完整构建之前准备运行时，并记录下载、解压与复制阶段。Windows Node ZIP 使用 Electron 维护的原生解压器；原先的 `extract-zip` 实现在 Windows runner 上完成校验后，以未完成的顶层 await 错误退出。
-
-官方 Teams bundle 及其依赖保留在应用包集合中。[桌面 Teams 开关](2026-09-11-desktop-agent-teams-switch.zh.md)负责可选的 profile 注册，取代固定启用的决策。升级时仍可读取 alpha.2 与 rc.1 的原有层前缀。adapter 的发布时间例外跟随其精确版本，包括额外的修订序号。插件卸载仅在 pnpm 填充暂存项目后读取已安装版本。
+本分支默认使用独立桌面数据目录，支持显式主目录与遥测设置，默认关闭遥测及自动更新。原生编辑菜单恢复标准快捷键，HTTP/HTTPS 链接由外部浏览器打开，并在右键菜单显示地址。两个 Teams bundle 始终保留在核心中，其注册由 [Hub 接口](2026-09-13-desktop-experiment-bridge.zh.md)控制。
 
 ## Alternatives considered
 
@@ -34,10 +30,6 @@ CI 在完整构建之前准备运行时，并记录下载、解压与复制阶�
 
 ## Consequences
 
-应用压缩包更大，并按平台分发。npm 凭据保留在使用者电脑上。精确版本与完整性校验固定适配器发布内容，agent 可执行程序仍由外部提供。桌面升级需要替换完整应用。插件仍须兼容桌面管道传输。
+压缩包包含各平台生产依赖，不含个人 npm 配置。用户通过替换完整应用升级；迁移备份可能含个人设置，只应在本地管理。macOS 临时签名及 Windows 未签名 ZIP 仍可能触发系统安全确认。
 
-验证包含真实自签名 HTTPS registry、配置优先级测试、相同基线的构建升级测试，以及使用全新数据目录和不可达 registry 的打包后端冒烟检查与适配器清单检查。冒烟检查不运行真实 ACP agent 或模型服务，CI 负责原生 Windows 构建执行。
-
-冒烟日志区分安装、后端启动、资源传输与激活阶段。后续冒烟失败时仍保留已完成的 ZIP，手动重跑工作流可以使用这些资源而不重新构建核心。重跑提供诊断证据，修改后的产品仍须通过完整构建后再分发。
-
-Windows 上原先的首次启动流程在 pnpm 开始安装前花了 154 秒准备 store，冒烟上限打断了仍在推进的安装。持久化 store 尚不存在时，现在通过桌面数据根目录内的重命名直接采用已验证的解压结果，省去约 21,000 个文件的再次复制和删除。已有 store 仍执行合并，保留升级时的插件文件和包索引记录。Windows 冒烟预算为五分钟，用于覆盖实测的冷 store 准备、依赖安装和后端启动；macOS 保留三分钟。
+验证覆盖真实 npm TLS 配置、迁移恢复、shell 环境解析、单后端启动、成品客户端模块及离线 Teams 切换。完整文件校验在打包时执行，常规启动检查运行时标识与插件锁状态。GitHub Actions 验证原生 Windows 打包；真实模型服务与外部 ACP 登录需要独立用户凭证。

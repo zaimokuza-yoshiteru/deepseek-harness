@@ -6,7 +6,7 @@ English | [中文](2026-09-13-desktop-experiment-bridge.zh.md)
 
 ## Problem
 
-Plugin Hub supplies a common resource-management page for Web and Desktop, but the desktop profile owner runs in Electron. A renderer that writes profile files cannot coordinate idle shutdown, staged activation or rollback. Exposing package-management IPC to the application would grant more authority than experimental feature controls require.
+Plugin Hub supplies a common resource-management page for Web and Desktop, but the desktop profile owner runs in Electron. A renderer that writes profile files cannot coordinate idle shutdown, profile changes or recovery. Exposing package-management IPC to the application would grant more authority than experimental feature controls require.
 
 ## Decision
 
@@ -14,7 +14,7 @@ The application preload exposes `window.dshDesktop.experiments` with version `1`
 
 The current feature allowlist contains only `agent-teams`. Each mutation includes the canonical profile returned by the host, desired `enabled` state and observed `expectedEnabled` state. The host treats the profile as an equality token, rejects stale state, and never accepts a renderer-selected filesystem destination. An unsupported release or source development launcher advertises no manageable experiments.
 
-The host reports configured `enabled`, observed backend `activeEnabled`, installation, toggle capability and busy state separately. `activeEnabled: null` means no confirmed running state. The [offline Teams transaction](2026-09-11-desktop-agent-teams-switch.md) owns the shared mutation lock, idle shutdown, offline staging and recovery. A successful reply arrives after backend recovery and requests a renderer reload; Hub reloads after receiving that reply. Failures return stable error codes and preserve the page so Hub can report the error and read recovery state.
+The host reports configured `enabled`, observed backend `activeEnabled`, installation, toggle capability and busy state separately. `activeEnabled: null` means no confirmed running state. The [offline Teams transaction](2026-09-11-desktop-agent-teams-switch.md) owns the shared mutation lock, idle shutdown, profile writes and recovery. A successful reply arrives after backend recovery and requests a renderer reload; Hub reloads after receiving that reply. Failures return stable error codes and preserve the page so Hub can report the error and read recovery state.
 
 Each sandboxed preload is bundled independently. Its built artifact can require Electron but cannot require a shared local chunk. The desktop build executes both artifacts with a restricted loader to verify this requirement.
 

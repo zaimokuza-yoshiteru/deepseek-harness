@@ -1,11 +1,11 @@
-/** Transactional owner of the reserved desktop profile and its private pnpm state. */
+/** In-place owner of the reserved desktop profile and its private pnpm state. */
 
+import { desktopNpmEnvironment } from './npm-environment.ts'
+import { applyPluginSeed, needsPluginSeed } from './plugin-seed.ts'
+import { desktopProfileBundles, DESKTOP_AGENT_TEAM_BUNDLES } from './profile-defaults.ts'
+import { valid } from 'semver'
 import { spawn } from 'node:child_process'
-import { createHash, randomUUID } from 'node:crypto'
 import {
-  constants,
-  copyFileSync,
-  cpSync,
   existsSync,
   fsyncSync,
   ftruncateSync,
@@ -13,45 +13,33 @@ import {
   mkdirSync,
   openSync,
   closeSync,
-  readdirSync,
   readFileSync,
-  renameSync,
-  rmSync,
+  readdirSync,
+  realpathSync,
   unlinkSync,
   writeFileSync,
   writeSync,
 } from 'node:fs'
-import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
-import { isDeepStrictEqual } from 'node:util'
-import { JSON_SCHEMA, load } from 'js-yaml'
+import { delimiter, dirname, join, resolve, sep } from 'node:path'
 import {
-  DESKTOP_PACKAGES_DIR,
-  DESKTOP_PACKAGE_SET_FILE,
   DESKTOP_HOST_PACKAGE,
   desktopCorePackageOverrides,
-  desktopDshPackageSpec,
-  readDesktopCorePackageSet,
   verifyDesktopCorePackageSet,
 } from './core-package-set.ts'
 import type { DesktopPaths } from './paths.ts'
-import { parseDesktopRelease, type DesktopRelease } from './release.ts'
-import { DESKTOP_AGENT_TEAM_BUNDLES, desktopAdapterVersion, desktopProfileBundles } from './profile-defaults.ts'
-import { extractPnpmStoreArchives, mergePnpmStore } from './seed-store.ts'
-import { desktopNpmEnvironment } from './npm-environment.ts'
-
-/** Files the package transaction copies between active and staging projects. */
-const DESKTOP_PROJECT_FILES = [
-  'package.json',
-  'pnpm-lock.yaml',
-  'pnpm-workspace.yaml',
-  'desktop-release.json',
-  DESKTOP_PACKAGE_SET_FILE,
-] as const
+import { removeOwnedDirectory } from './owned-directory.ts'
+import type { DesktopRelease } from './release.ts'
+import { desktopRuntimeId, readDesktopRuntime, type DesktopRuntimeDescriptor } from './runtime-tree.ts'
+import {
+  desktopPluginLockHash, linkDesktopHostPackages, readDesktopProfileState, recordDesktopRuntimeProfile,
+  unlinkDesktopHostPackages, validateDesktopPluginGraph, type DesktopProfileState,
+} from './profile-packages.ts'
 
 /** Desktop plugin record derived from the installed profile. */
 export interface DesktopPluginRecord {
   readonly name: string
   readonly version: string
+  readonly enabled: boolean
 }
 
 /** Installed desktop project manifest slice. */
@@ -61,53 +49,45 @@ interface DesktopProjectManifest {
   readonly version: string
   readonly dependencies: Record<string, string>
   readonly dsh: {
-    readonly desktop?: { readonly agentTeams: boolean }
+    readonly desktop?: { readonly agentTeams?: boolean }
     readonly profile: {
       readonly bundles: string[]
     }
   }
 }
 
-/** Journaled activation step used for crash recovery. */
-interface DesktopPendingTransaction {
-  readonly schemaVersion: 1
-  readonly id: string
-  readonly stagingProfile: string
-  readonly step: 'prepared' | 'active-moved' | 'staging-activated'
-}
-
 /** Exact executables the desktop shell bundles. */
 export interface DesktopRuntimeExecutables {
   readonly node: string
   readonly pnpm: string
+  readonly dsh: string
+  /** How the Host obtains release-owned packages outside the writable profile. */
+  readonly profileResolution?: 'link' | 'runtime'
+  readonly pluginSeed?: string
+  readonly packageNode?: string
 }
 
-/** Hooks that bind project replacement to backend lifecycle and health. */
+/** Hooks that stop the backend before profile writes and restart it after success. */
 export interface DesktopProjectHooks {
-  /** Prove the staged dependency graph while the active backend is stopped. */
-  healthCheck(projectDir: string): Promise<void>
-  /** Stop the active backend and await process exit before directory moves. */
-  beforeActivate(): Promise<void>
-  /** Start the selected active project after commit or rollback. */
-  afterActivate(): Promise<void>
+  /** Stop the active backend and await process exit before modifying its files. */
+  beforeChange(): Promise<void>
+  /** Start the modified profile after package preparation succeeds. */
+  afterChange(): Promise<void>
 }
 
 /** Supported dependency mutation. */
 export type DesktopProjectMutation =
-  | { readonly type: 'agent-teams'; readonly enabled: boolean }
   | { readonly type: 'plugin-add'; readonly spec: string }
   | { readonly type: 'plugin-remove'; readonly name: string }
   | { readonly type: 'plugin-update'; readonly name: string; readonly version: string }
-
-interface DesktopSeedIntegrityRecord {
-  readonly path: string
-  readonly bytes: number
-  readonly sha256: string
-}
+  | { readonly type: 'plugin-toggle'; readonly name: string; readonly enabled: boolean }
+  | { readonly type: 'plugins-disable-all' }
+  | { readonly type: 'agent-teams'; readonly enabled: boolean }
 
 const PROJECT_NAME = '@deepseek-ai/dsh-desktop-runtime'
 const DSH_PACKAGE = '@deepseek-ai/dsh'
 const CORE_BUILD_PACKAGE = '@deepseek-ai/dsh-subprocess-local'
+const DESKTOP_PROFILE_BUNDLES = ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'] as const
 const WORKSPACE_SETTINGS = 'nodeLinker: hoisted\nautoInstallPeers: false\nstrictDepBuilds: true\n'
 const PACKAGE_NAME_PATTERN = /^(?:@[a-z0-9][a-z0-9._~-]*\/[a-z0-9][a-z0-9._~-]*|[a-z0-9][a-z0-9._~-]*)$/u
 const VERSION_PATTERN = /^[0-9A-Za-z][0-9A-Za-z.+_-]*$/u
@@ -125,11 +105,7 @@ function readJson(path: string): unknown {
   return JSON.parse(readFileSync(path, 'utf8'))
 }
 
-function workspaceFile(
-  version: string,
-  overrides: Readonly<Record<string, string>> = {},
-  adapterVersion = desktopAdapterVersion(version),
-): string {
+function workspaceFile(overrides: Readonly<Record<string, string>> = {}): string {
   const entries = Object.entries(overrides).sort(([left], [right]) => left.localeCompare(right))
   const overrideSection = entries.length === 0
     ? ''
@@ -138,32 +114,11 @@ function workspaceFile(
   const coreBuildKey = coreBuildSpec === undefined
     ? CORE_BUILD_PACKAGE
     : `${CORE_BUILD_PACKAGE}@${coreBuildSpec.replace('file:./', 'file:')}`
-  return `packages:\n  - .\n\n${overrideSection}${WORKSPACE_SETTINGS}minimumReleaseAgeExclude:\n  - '@zaimokuza/dsh-acp-adapter@${adapterVersion}'\nallowBuilds:\n  node-pty: true\n  koffi: true\n  fs-ext: true\n  ${JSON.stringify(coreBuildKey)}: true\n  '@google/genai': false\n  protobufjs: false\n  node-addon-require-builtin: false\n`
-}
-
-/** Compare managed policy by value while preserving pnpm's additional release-age exceptions. */
-function matchesWorkspacePolicy(projectDir: string, expectedText: string): boolean {
-  const actual: unknown = load(readFileSync(join(projectDir, 'pnpm-workspace.yaml'), 'utf8'), { schema: JSON_SCHEMA })
-  const expected: unknown = load(expectedText, { schema: JSON_SCHEMA })
-  if (!isRecord(actual) || !isRecord(expected)) return false
-  const { minimumReleaseAgeExclude: actualExceptions, ...actualPolicy } = actual
-  const { minimumReleaseAgeExclude: expectedExceptions, ...expectedPolicy } = expected
-  return Array.isArray(actualExceptions) && actualExceptions.every(value => typeof value === 'string')
-    && Array.isArray(expectedExceptions) && expectedExceptions.every((value: unknown) => typeof value === 'string' && actualExceptions.includes(value))
-    && isDeepStrictEqual(actualPolicy, expectedPolicy)
-}
-
-function releaseFile(projectDir: string): DesktopRelease {
-  return parseDesktopRelease(readJson(join(projectDir, 'desktop-release.json')))
+  return `packages:\n  - .\n\n${overrideSection}${WORKSPACE_SETTINGS}allowBuilds:\n  node-pty: true\n  koffi: true\n  fs-ext: true\n  ${JSON.stringify(coreBuildKey)}: true\n  '@google/genai': false\n  protobufjs: false\n  node-addon-require-builtin: false\n`
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
-}
-
-function isDescendant(root: string, target: string): boolean {
-  const child = relative(root, target)
-  return child !== '' && child !== '..' && !child.startsWith(`..${sep}`) && !isAbsolute(child)
 }
 
 function assertPackageName(name: string): void {
@@ -175,11 +130,11 @@ function assertVersion(version: string): void {
 }
 
 /**
- * Validate one registry package spec and return its requested package name when explicit.
+ * Validate one registry package spec and return its package name.
  * @param spec - npm registry name with an optional version or tag.
- * @returns package name, or undefined when the spec's final name is registry-resolved.
+ * @returns Requested package name.
  */
-export function packageNameFromSpec(spec: string): string | undefined {
+export function packageNameFromSpec(spec: string): string {
   if (spec === '' || spec.startsWith('-') || /[\s\\]/u.test(spec) || spec.includes('://') || spec.startsWith('file:')) {
     throw new Error(`desktop project: unsupported npm package spec ${JSON.stringify(spec)}`)
   }
@@ -199,111 +154,30 @@ export function packageNameFromSpec(spec: string): string | undefined {
   return name
 }
 
-function removeOwnedDirectory(path: string): void {
-  if (!existsSync(path)) return
-  const stat = lstatSync(path)
-  if (stat.isSymbolicLink()) {
-    unlinkSync(path)
-    return
-  }
-  if (!stat.isDirectory()) throw new Error(`desktop project: owned directory path is not a directory: ${path}`)
-  rmSync(path, { recursive: true })
-}
-
-function copyMetadata(source: string, target: string): void {
-  mkdirSync(target, { recursive: true, mode: 0o700 })
-  for (const filename of DESKTOP_PROJECT_FILES) {
-    const from = join(source, filename)
-    if (existsSync(from)) copyFileSync(from, join(target, filename), constants.COPYFILE_EXCL)
-  }
-  cpSync(join(source, DESKTOP_PACKAGES_DIR), join(target, DESKTOP_PACKAGES_DIR), {
-    recursive: true,
-    force: false,
-    errorOnExist: true,
-  })
-}
-
-function seedFiles(root: string): readonly DesktopSeedIntegrityRecord[] {
-  const files: DesktopSeedIntegrityRecord[] = []
-  const visit = (directory: string): void => {
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      const path = join(directory, entry.name)
-      const relativePath = path.slice(root.length + 1).split(sep).join('/')
-      if (relativePath === 'integrity.json') continue
-      if (entry.isSymbolicLink()) throw new Error(`desktop seed: symbolic link is not allowed: ${relativePath}`)
-      if (entry.isDirectory()) {
-        visit(path)
-        continue
-      }
-      if (!entry.isFile()) throw new Error(`desktop seed: unsupported file type: ${relativePath}`)
-      const body = readFileSync(path)
-      files.push({
-        path: relativePath,
-        bytes: body.byteLength,
-        sha256: createHash('sha256').update(body).digest('hex'),
-      })
-    }
-  }
-  visit(root)
-  return files.sort((left, right) => left.path.localeCompare(right.path))
-}
-
-/** Verify the packaged offline seed before any content enters writable desktop state. */
-export function verifySeedIntegrity(seedDir: string): void {
-  const integrityPath = join(seedDir, 'integrity.json')
-  const integrity = readJson(integrityPath)
-  if (!isRecord(integrity) || integrity.schemaVersion !== 2 || !Array.isArray(integrity.files)) {
-    throw new Error(`desktop seed: invalid integrity inventory ${integrityPath}`)
-  }
-  const expected: DesktopSeedIntegrityRecord[] = integrity.files.map((record) => {
-    if (!isRecord(record) || typeof record.path !== 'string' || record.path === '' || record.path.startsWith('/')
-      || record.path.split('/').includes('..') || typeof record.bytes !== 'number'
-      || !Number.isSafeInteger(record.bytes) || record.bytes < 0
-      || typeof record.sha256 !== 'string' || !/^[a-f0-9]{64}$/u.test(record.sha256)) {
-      throw new Error(`desktop seed: invalid integrity record in ${integrityPath}`)
-    }
-    return { path: record.path, bytes: record.bytes, sha256: record.sha256 }
-  }).sort((left, right) => left.path.localeCompare(right.path))
-  const actual = seedFiles(seedDir)
-  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
-    throw new Error('desktop seed: integrity verification failed')
-  }
-}
-
 function projectManifest(projectDir: string): DesktopProjectManifest {
   const path = join(projectDir, 'package.json')
   const value = readJson(path)
   const dsh = isRecord(value) && isRecord(value.dsh) ? value.dsh : undefined
   const profile = isRecord(dsh?.profile) ? dsh.profile : undefined
   if (!isRecord(value) || value.name !== PROJECT_NAME || value.private !== true
-    || typeof value.version !== 'string' || !isRecord(value.dependencies)
+    || typeof value.version !== 'string' || (value.dependencies !== undefined && !isRecord(value.dependencies))
     || !Array.isArray(profile?.bundles) || !profile.bundles.every(bundle => typeof bundle === 'string')) {
     throw new Error(`desktop project: invalid desktop profile manifest ${path}`)
   }
-  if (dsh?.desktop !== undefined && (!isRecord(dsh.desktop) || typeof dsh.desktop.agentTeams !== 'boolean')) {
-    throw new Error('desktop project: invalid saved Agent Teams setting')
-  }
-  const manifest = value as unknown as DesktopProjectManifest
-  const packageSet = readDesktopCorePackageSet(projectDir, releaseFile(projectDir).version)
-  const expectedOverrides = desktopCorePackageOverrides(packageSet)
-  if (manifest.dependencies[DSH_PACKAGE] !== desktopDshPackageSpec(packageSet)
-    || Object.entries(expectedOverrides).some(([name, spec]) => manifest.dependencies[name] !== spec)
-    || !matchesWorkspacePolicy(projectDir, workspaceFile(
-      releaseFile(projectDir).version, expectedOverrides, manifest.dependencies['@zaimokuza/dsh-acp-adapter'],
-    ))) {
-    throw new Error(`desktop project: core package mapping does not match ${DESKTOP_PACKAGE_SET_FILE}`)
+  const manifest = { ...value, dependencies: value.dependencies ?? {} } as unknown as DesktopProjectManifest
+  if (Object.entries(manifest.dependencies).some(([name, version]) => !PACKAGE_NAME_PATTERN.test(name)
+    || typeof version !== 'string' || valid(version) !== version)) {
+    throw new Error('desktop project: plugin dependencies must use exact registry versions')
   }
   return manifest
 }
 
 function profilePluginNames(projectDir: string): readonly string[] {
-  const manifest = projectManifest(projectDir)
-  const bundles = manifest.dsh.profile.bundles
-  const builtInBundles = desktopProfileBundles(releaseFile(projectDir).version, manifest.dsh.desktop?.agentTeams)
-  if (!builtInBundles.every((bundle, index) => bundles[index] === bundle)) {
+  const bundles = projectManifest(projectDir).dsh.profile.bundles
+  if (!DESKTOP_PROFILE_BUNDLES.every((bundle, index) => bundles[index] === bundle)) {
     throw new Error('desktop project: profile must begin with the built-in desktop bundle list')
   }
-  const plugins = bundles.slice(builtInBundles.length)
+  const plugins = bundles.slice(DESKTOP_PROFILE_BUNDLES.length).filter(name => !DESKTOP_AGENT_TEAM_BUNDLES.some(team => team === name))
   if (new Set(bundles).size !== bundles.length) {
     throw new Error('desktop project: profile bundle list contains a duplicate package')
   }
@@ -312,7 +186,7 @@ function profilePluginNames(projectDir: string): readonly string[] {
 }
 
 function pluginRecords(projectDir: string): readonly DesktopPluginRecord[] {
-  return profilePluginNames(projectDir).map(name => inspectPlugin(projectDir, name))
+  return Object.keys(projectManifest(projectDir).dependencies).sort().map(name => inspectPlugin(projectDir, name))
 }
 
 function writeProfilePlugins(projectDir: string, plugins: readonly DesktopPluginRecord[]): void {
@@ -324,25 +198,10 @@ function writeProfilePlugins(projectDir: string, plugins: readonly DesktopPlugin
       profile: {
         ...manifest.dsh.profile,
         bundles: [
-          ...desktopProfileBundles(releaseFile(projectDir).version, manifest.dsh.desktop?.agentTeams),
-          ...plugins.map(plugin => plugin.name),
+          ...DESKTOP_PROFILE_BUNDLES, ...(manifest.dsh.desktop?.agentTeams === true ? DESKTOP_AGENT_TEAM_BUNDLES : []),
+          ...plugins.filter(plugin => plugin.enabled).map(plugin => plugin.name),
         ],
       },
-    },
-  } satisfies DesktopProjectManifest)
-}
-
-function writeAgentTeams(projectDir: string, enabled: boolean): void {
-  const plugins = profilePluginNames(projectDir)
-  const manifest = projectManifest(projectDir)
-  writeJson(join(projectDir, 'package.json'), {
-    ...manifest,
-    dsh: {
-      ...manifest.dsh,
-      desktop: { agentTeams: enabled },
-      profile: { ...manifest.dsh.profile, bundles: [
-        ...desktopProfileBundles(releaseFile(projectDir).version, enabled), ...plugins,
-      ] },
     },
   } satisfies DesktopProjectManifest)
 }
@@ -367,12 +226,13 @@ function inspectPlugin(projectDir: string, requestedName: string): DesktopPlugin
   if ((patchPath !== packageDir && !patchPath.startsWith(packageDir + sep)) || !existsSync(patchPath)) {
     throw new Error(`desktop project: ${requestedName}@${manifest.version} declares an invalid bundle patch`)
   }
-  return { name: requestedName, version: manifest.version }
+  return { name: requestedName, version: manifest.version, enabled: profilePluginNames(projectDir).includes(requestedName) }
 }
 
-/** Transactional desktop npm project manager. */
+/** Desktop npm project manager with direct writes and no rollback. */
 export class DesktopProjectManager {
   private lockDescriptor: number | undefined
+  private descriptor: DesktopRuntimeDescriptor | undefined
 
   /**
    * @param paths - Electron-owned package state and reserved desktop profile paths.
@@ -383,155 +243,192 @@ export class DesktopProjectManager {
     readonly runtime: DesktopRuntimeExecutables,
   ) {}
 
-  /** Recover an interrupted directory replacement before reading the active project. */
-  recover(): void {
-    if (!existsSync(this.paths.pending)) return
-    const value = readJson(this.paths.pending)
-    if (!isRecord(value) || value.schemaVersion !== 1
-      || typeof value.id !== 'string' || typeof value.stagingProfile !== 'string'
-      || !isDescendant(this.paths.staging, value.stagingProfile)
-      || (value.step !== 'prepared' && value.step !== 'active-moved' && value.step !== 'staging-activated')) {
-      throw new Error(`desktop project: invalid activation journal ${this.paths.pending}`)
-    }
-    const pending: DesktopPendingTransaction = {
-      schemaVersion: 1,
-      id: value.id,
-      stagingProfile: value.stagingProfile,
-      step: value.step,
-    }
-    if (!existsSync(this.paths.profile) && existsSync(this.paths.rollback)) {
-      mkdirSync(dirname(this.paths.profile), { recursive: true })
-      renameSync(this.paths.rollback, this.paths.profile)
-    }
-    removeOwnedDirectory(pending.stagingProfile)
-    unlinkSync(this.paths.pending)
-  }
-
   /** Read the active desktop plugin inventory. */
   listPlugins(): readonly DesktopPluginRecord[] {
     if (!existsSync(this.paths.profile)) return []
     return pluginRecords(this.paths.profile)
   }
 
-  /** Read the effective Teams state, including the default for existing installations. */
-  agentTeamsEnabled(): boolean {
-    return desktopProfileBundles(this.releaseVersion(), projectManifest(this.paths.profile).dsh.desktop?.agentTeams)
-      .includes(DESKTOP_AGENT_TEAM_BUNDLES[0])
-  }
-
-  /** Read the exact dsh version installed in the active desktop project. */
-  dshVersion(): string {
-    if (!existsSync(this.paths.profile)) throw new Error('desktop project: active profile is not installed')
-    return this.installedPackageVersion(DSH_PACKAGE)
-  }
-
-  private installedPackageVersion(packageName: string): string {
-    const manifestPath = join(this.paths.profile, 'node_modules', ...packageName.split('/'), 'package.json')
-    const manifest = readJson(manifestPath)
-    if (!isRecord(manifest) || typeof manifest.version !== 'string') {
-      throw new Error(`desktop project: installed ${packageName} package has no version`)
-    }
-    assertVersion(manifest.version)
-    return manifest.version
-  }
-
-  /** Read the release version applied to the active desktop project. */
-  releaseVersion(): string {
-    if (!existsSync(this.paths.profile)) throw new Error('desktop project: active profile is not installed')
-    return releaseFile(this.paths.profile).version
-  }
-
-  /** Install or reconcile the active project to the Electron package's exact release. */
-  async applyRelease(seedDir: string, electronVersion: string, hooks: DesktopProjectHooks): Promise<boolean> {
-    return this.withLock(async () => {
-      this.recover()
-      verifySeedIntegrity(seedDir)
-      const target = releaseFile(seedDir)
-      verifyDesktopCorePackageSet(seedDir, target.version)
-      if ((target.distributionVersion ?? target.version) !== electronVersion) {
-        throw new Error(`desktop project: seed ${target.version} does not match Electron ${electronVersion}`)
+  /**
+   * Reinitialize the profile, deleting configuration and third-party packages without a backup.
+   * @param hooks - Stop the Host before resetting files; restart after preparation succeeds.
+   * @returns Completion of reset; the held lock and shared product data are preserved.
+   */
+  async resetConfiguration(hooks: DesktopProjectHooks): Promise<void> {
+    await this.withLock(async () => {
+      await hooks.beforeChange()
+      this.descriptor = this.readRuntime()
+      for (const entry of readdirSync(this.paths.profile, { withFileTypes: true })) {
+        const path = join(this.paths.profile, entry.name)
+        if (path === this.paths.lock) continue
+        if (entry.isDirectory()) removeOwnedDirectory(path)
+        else unlinkSync(path)
       }
-      if (existsSync(this.paths.profile) && this.releaseVersion() === target.version
-        && releaseFile(this.paths.profile).distributionVersion === target.distributionVersion
-        && this.dshVersion() === target.version
-        && this.installedPackageVersion(DESKTOP_HOST_PACKAGE) === target.version) {
-        verifyDesktopCorePackageSet(this.paths.profile, target.version)
+      if (this.runtime.pluginSeed !== undefined) {
+        await applyPluginSeed(this.paths.profile, this.runtime.pluginSeed, join(this.paths.root, 'migration-backups'), this.currentRuntime(), () => {
+          this.prepareProfile(this.paths.profile)
+          return Promise.resolve()
+        })
+      } else {
+        createPluginProfile(this.paths.profile)
+        this.prepareProfile(this.paths.profile)
+      }
+      await hooks.afterChange()
+    })
+  }
+
+  /** Read the persisted Teams choice; all feature packages remain in the application. */
+  agentTeamsEnabled(): boolean { return projectManifest(this.paths.profile).dsh.desktop?.agentTeams === true }
+
+  /** Read the dsh version supplied by this application's verified resources. */
+  dshVersion(): string {
+    return this.currentRuntime().release.version
+  }
+
+  /** Read the release most recently applied to the active profile. */
+  releaseVersion(): string {
+    const state = readDesktopProfileState(this.paths.profile)
+    if (state === undefined) throw new Error('desktop project: active profile has no runtime state')
+    return state.version
+  }
+
+  /** Reject a profile whose dependency links were prepared for another runtime. */
+  assertProfileRuntime(projectDir: string): void {
+    if (existsSync(this.pendingPackages)) throw new Error('desktop project: package preparation is incomplete; retry startup')
+    if (readDesktopProfileState(projectDir)?.runtimeId !== desktopRuntimeId(this.currentRuntime())) {
+      throw new Error('desktop project: profile does not match this application runtime')
+    }
+  }
+
+  /** @returns Whether application resources support profile recovery. */
+  canRecoverProfile(): boolean {
+    return this.descriptor !== undefined && existsSync(this.runtime.node) && existsSync(this.runtime.dsh)
+  }
+
+  private get pendingPackages(): string { return join(this.paths.profile, 'desktop-packages-pending') }
+
+  private currentRuntime(): DesktopRuntimeDescriptor {
+    if (this.descriptor === undefined) throw new Error('desktop project: runtime metadata has not been loaded')
+    return this.descriptor
+  }
+
+  private readRuntime(): DesktopRuntimeDescriptor {
+    this.descriptor = undefined
+    return readDesktopRuntime(this.runtime.dsh)
+  }
+
+  private prepareProfile(projectDir: string): void {
+    const runtime = this.currentRuntime()
+    const resolutionMode = this.runtime.profileResolution ?? 'link'
+    if (resolutionMode === 'runtime') recordDesktopRuntimeProfile(projectDir, runtime)
+    else linkDesktopHostPackages(projectDir, this.runtime.dsh, runtime)
+    validateDesktopPluginGraph(projectDir, this.runtime.dsh, runtime, profilePluginNames(projectDir), resolutionMode)
+  }
+
+  /** Read release metadata and reconcile its external profile without installing core packages. */
+  async applyRelease(): Promise<boolean> {
+    return this.withLock(async () => {
+      const target = this.readRuntime()
+      this.descriptor = target
+      const previous = readDesktopProfileState(this.paths.profile)
+      if (this.runtime.pluginSeed !== undefined && needsPluginSeed(this.paths.profile, this.runtime.pluginSeed)) {
+        await applyPluginSeed(this.paths.profile, this.runtime.pluginSeed, join(this.paths.root, 'migration-backups'), target, async (install) => {
+          if (install) {
+            await this.runPnpm(this.paths.profile, ['install', '--no-frozen-lockfile', '--ignore-scripts'])
+            await this.finishPackageOperation(this.paths.profile)
+          } else this.prepareProfile(this.paths.profile)
+        })
+        return true
+      }
+      if (!existsSync(this.pendingPackages) && previous?.runtimeId === desktopRuntimeId(target)
+        && previous.lockHash === desktopPluginLockHash(this.paths.profile)
+        && (this.runtime.profileResolution === 'runtime' || (previous.links.length === target.sharedPackages.length
+          && previous.links.every(link => existsSync(link.target)
+          && existsSync(join(this.paths.profile, 'node_modules', link.name))
+          && realpathSync.native(link.target) === realpathSync.native(join(this.runtime.dsh, 'node_modules', link.name)))))) {
         return false
       }
-      this.mergeSeedPnpmState(seedDir)
-      const stagingProfile = this.newStagingProfile()
-      try {
-        if (existsSync(this.paths.profile)) {
-          const bundledNames = new Set([...desktopProfileBundles(target.version), ...profilePluginNames(seedDir)])
-          const plugins = pluginRecords(this.paths.profile).filter(plugin => !bundledNames.has(plugin.name))
-          copyMetadata(seedDir, stagingProfile)
-          const saved = projectManifest(this.paths.profile).dsh.desktop
-          if (saved !== undefined) writeAgentTeams(stagingProfile, saved.agentTeams)
-          await this.runPnpm(stagingProfile, ['install', '--offline', '--frozen-lockfile', '--trust-lockfile'])
-          const bundledPlugins = pluginRecords(stagingProfile)
-          if (plugins.length > 0) {
-            await this.runPnpm(stagingProfile, [
-              'add',
-              ...plugins.map(plugin => `${plugin.name}@${plugin.version}`),
-              '--save-exact',
-              '--prefer-offline',
-              '--trust-lockfile',
-            ])
-            writeProfilePlugins(stagingProfile, [...bundledPlugins, ...plugins])
-          }
-        } else {
-          copyMetadata(seedDir, stagingProfile)
-          await this.runPnpm(stagingProfile, ['install', '--offline', '--frozen-lockfile', '--trust-lockfile'])
-        }
-        await hooks.healthCheck(stagingProfile)
-        await this.activate(stagingProfile, hooks)
-        return true
-      } catch (error) {
-        removeOwnedDirectory(stagingProfile)
-        throw error
-      }
+      if (previous === undefined) createPluginProfile(this.paths.profile)
+      await this.reconcileProfile(this.paths.profile, previous)
+      return true
     })
   }
 
-  /** Apply one exact dependency mutation through a staging project. */
+  /** Modify the current profile while its backend is stopped; failures retain partial changes. */
   async mutate(mutation: DesktopProjectMutation, hooks: DesktopProjectHooks): Promise<void> {
     await this.withLock(async () => {
-      this.recover()
+      this.currentRuntime()
       if (!existsSync(this.paths.profile)) throw new Error('desktop project: active profile is not installed')
-      verifyDesktopCorePackageSet(this.paths.profile, this.releaseVersion())
-      const stagingProfile = this.newStagingProfile()
-      try {
-        copyMetadata(this.paths.profile, stagingProfile)
-        await this.applyMutation(stagingProfile, mutation)
-        await hooks.healthCheck(stagingProfile)
-        await this.activate(stagingProfile, hooks)
-      } catch (error) {
-        removeOwnedDirectory(stagingProfile)
-        throw error
+      await hooks.beforeChange()
+      if (mutation.type === 'agent-teams') {
+        const manifest = projectManifest(this.paths.profile)
+        const plugins = profilePluginNames(this.paths.profile)
+        writeJson(join(this.paths.profile, 'package.json'), { ...manifest, dsh: { ...manifest.dsh,
+          desktop: { ...manifest.dsh.desktop, agentTeams: mutation.enabled },
+          profile: { ...manifest.dsh.profile, bundles: [...desktopProfileBundles(this.dshVersion(), mutation.enabled), ...plugins] },
+        } })
+        this.prepareProfile(this.paths.profile)
+        await hooks.afterChange()
+        return
       }
+      if (mutation.type === 'plugins-disable-all') {
+        const manifest = projectManifest(this.paths.profile)
+        writeJson(join(this.paths.profile, 'package.json'), {
+          ...manifest,
+          dsh: { ...manifest.dsh, profile: { ...manifest.dsh.profile, bundles: [...DESKTOP_PROFILE_BUNDLES] } },
+        })
+        this.prepareProfile(this.paths.profile)
+        await hooks.afterChange()
+        return
+      }
+      const previous = readDesktopProfileState(this.paths.profile)
+      const packagesChanged = mutation.type !== 'plugin-toggle'
+      if (packagesChanged && this.runtime.profileResolution !== 'runtime') unlinkDesktopHostPackages(this.paths.profile)
+      try {
+        await this.applyMutation(this.paths.profile, mutation)
+      } finally {
+        if (packagesChanged) {
+          const runtime = this.currentRuntime()
+          if (this.runtime.profileResolution === 'runtime') recordDesktopRuntimeProfile(this.paths.profile, runtime)
+          else linkDesktopHostPackages(this.paths.profile, this.runtime.dsh, runtime)
+        }
+      }
+      await this.reconcileProfile(this.paths.profile, previous, packagesChanged)
+      await hooks.afterChange()
     })
   }
 
-  private newStagingProfile(): string {
-    const path = join(this.paths.staging, randomUUID(), 'profile')
-    mkdirSync(path, { recursive: true, mode: 0o700 })
-    return path
+  private async reconcileProfile(projectDir: string, previous: DesktopProfileState | undefined, packagesChanged = false): Promise<void> {
+    const target = this.currentRuntime()
+    const rebuild = (!packagesChanged && existsSync(this.pendingPackages))
+      || (previous !== undefined && pluginRecords(projectDir).length > 0
+      && (previous.nodeVersion !== target.release.nodeVersion || previous.platform !== target.platform || previous.arch !== target.arch))
+    if (rebuild) {
+      writeFileSync(this.pendingPackages, '')
+      if (this.runtime.profileResolution !== 'runtime') unlinkDesktopHostPackages(projectDir)
+      removeOwnedDirectory(join(projectDir, 'node_modules'))
+      await this.runPnpm(projectDir, ['install', '--frozen-lockfile', '--ignore-scripts'])
+    }
+    if (rebuild || packagesChanged) await this.finishPackageOperation(projectDir)
+    else this.prepareProfile(projectDir)
   }
 
-  private async applyMutation(projectDir: string, mutation: DesktopProjectMutation): Promise<void> {
+  private async finishPackageOperation(projectDir: string): Promise<void> {
+    this.prepareProfile(projectDir)
+    await this.runPnpm(projectDir, ['rebuild', '--pending'])
+    this.prepareProfile(projectDir)
+    unlinkSync(this.pendingPackages)
+  }
+
+  private async applyMutation(projectDir: string, mutation: Exclude<DesktopProjectMutation, { type: 'plugins-disable-all' | 'agent-teams' }>): Promise<void> {
     switch (mutation.type) {
-      case 'agent-teams':
-        writeAgentTeams(projectDir, mutation.enabled)
-        await this.runPnpm(projectDir, ['install', '--offline', '--frozen-lockfile', '--trust-lockfile'])
-        return
       case 'plugin-add': {
         const requestedName = packageNameFromSpec(mutation.spec)
-        if (requestedName === undefined) throw new Error('desktop project: plugin package name is required')
-        if (DESKTOP_AGENT_TEAM_BUNDLES.some(name => name === requestedName)) {
-          throw new Error('desktop project: use the Agent Teams switch for this built-in feature')
+        if (this.currentRuntime().sharedPackages.some(entry => entry.name === requestedName)) {
+          throw new Error(`desktop project: cannot install host-owned package ${requestedName}`)
         }
-        await this.runPnpm(projectDir, ['add', mutation.spec, '--save-exact'])
-        const installed = inspectPlugin(projectDir, requestedName)
+        await this.runPnpm(projectDir, ['add', mutation.spec, '--save-exact', '--ignore-scripts'])
+        const installed = { ...inspectPlugin(projectDir, requestedName), enabled: true }
         const current = pluginRecords(projectDir).filter(plugin => plugin.name !== installed.name)
         writeProfilePlugins(
           projectDir,
@@ -541,21 +438,21 @@ export class DesktopProjectManager {
       }
       case 'plugin-remove': {
         assertPackageName(mutation.name)
-        if (!profilePluginNames(projectDir).includes(mutation.name)) {
+        if (!Object.hasOwn(projectManifest(projectDir).dependencies, mutation.name)) {
           throw new Error(`desktop project: plugin ${JSON.stringify(mutation.name)} is not installed`)
         }
-        const remaining = profilePluginNames(projectDir).filter(name => name !== mutation.name)
-        await this.runPnpm(projectDir, ['remove', mutation.name])
-        writeProfilePlugins(projectDir, remaining.map(name => inspectPlugin(projectDir, name)))
+        const remaining = pluginRecords(projectDir).filter(plugin => plugin.name !== mutation.name)
+        await this.runPnpm(projectDir, ['remove', mutation.name, '--config.ignore-scripts=true'])
+        writeProfilePlugins(projectDir, remaining)
         return
       }
       case 'plugin-update':
         assertPackageName(mutation.name)
         assertVersion(mutation.version)
-        if (!profilePluginNames(projectDir).includes(mutation.name)) {
+        if (!Object.hasOwn(projectManifest(projectDir).dependencies, mutation.name)) {
           throw new Error(`desktop project: plugin ${JSON.stringify(mutation.name)} is not installed`)
         }
-        await this.runPnpm(projectDir, ['add', `${mutation.name}@${mutation.version}`, '--save-exact'])
+        await this.runPnpm(projectDir, ['add', `${mutation.name}@${mutation.version}`, '--save-exact', '--ignore-scripts'])
         {
           const installed = inspectPlugin(projectDir, mutation.name)
           writeProfilePlugins(
@@ -564,56 +461,17 @@ export class DesktopProjectManager {
           )
         }
         return
+      case 'plugin-toggle': {
+        assertPackageName(mutation.name)
+        const plugins = pluginRecords(projectDir)
+        if (!plugins.some(plugin => plugin.name === mutation.name)) throw new Error(`desktop project: plugin ${mutation.name} is not installed`)
+        writeProfilePlugins(projectDir, plugins.map(plugin => (
+          plugin.name === mutation.name ? { ...plugin, enabled: mutation.enabled } : plugin
+        )))
+        return
+      }
       default:
         mutation satisfies never
-    }
-  }
-
-  private mergeSeedPnpmState(seedDir: string): void {
-    const transactionRoot = join(this.paths.staging, randomUUID())
-    const extractedStore = join(transactionRoot, 'store')
-    try {
-      extractPnpmStoreArchives(seedDir, extractedStore)
-      if (existsSync(this.paths.pnpm.store)) {
-        mergePnpmStore(extractedStore, this.paths.pnpm.store)
-      } else {
-        mkdirSync(this.paths.pnpm.root, { recursive: true, mode: 0o700 })
-        renameSync(extractedStore, this.paths.pnpm.store)
-      }
-    } finally {
-      removeOwnedDirectory(transactionRoot)
-    }
-  }
-
-  private async activate(stagingProfile: string, hooks: DesktopProjectHooks): Promise<void> {
-    const pending: DesktopPendingTransaction = {
-      schemaVersion: 1,
-      id: basename(dirname(stagingProfile)),
-      stagingProfile,
-      step: 'prepared',
-    }
-    writeJson(this.paths.pending, pending)
-    await hooks.beforeActivate()
-    let activeMoved = false
-    try {
-      removeOwnedDirectory(this.paths.rollback)
-      mkdirSync(dirname(this.paths.rollback), { recursive: true, mode: 0o700 })
-      writeJson(this.paths.pending, { ...pending, step: 'active-moved' } satisfies DesktopPendingTransaction)
-      if (existsSync(this.paths.profile)) {
-        renameSync(this.paths.profile, this.paths.rollback)
-        activeMoved = true
-      }
-      mkdirSync(dirname(this.paths.profile), { recursive: true, mode: 0o700 })
-      writeJson(this.paths.pending, { ...pending, step: 'staging-activated' } satisfies DesktopPendingTransaction)
-      renameSync(stagingProfile, this.paths.profile)
-      await hooks.afterActivate()
-      unlinkSync(this.paths.pending)
-    } catch (error) {
-      if (existsSync(this.paths.profile)) removeOwnedDirectory(this.paths.profile)
-      if (activeMoved && existsSync(this.paths.rollback)) renameSync(this.paths.rollback, this.paths.profile)
-      if (existsSync(this.paths.pending)) unlinkSync(this.paths.pending)
-      await hooks.afterActivate().catch(() => undefined)
-      throw error
     }
   }
 
@@ -624,22 +482,28 @@ export class DesktopProjectManager {
       this.paths.pnpm.state, this.paths.pnpm.config, this.paths.pnpm.home]) {
       mkdirSync(path, { recursive: true, mode: 0o700 })
     }
-    const npm = desktopNpmEnvironment()
+    const { env: inherited, userconfig: npmrc } = desktopNpmEnvironment()
+    delete inherited.NODE_OPTIONS
+    delete inherited.NODE_PATH
+    const node = this.runtime.packageNode ?? this.runtime.node
+    writeFileSync(this.pendingPackages, '')
     await new Promise<void>((settle, reject) => {
-      const child = spawn(this.runtime.node, [
+      const child = spawn(node, [
         this.runtime.pnpm,
         `--config.store-dir=${this.paths.pnpm.store}`,
         '--config.enable-global-virtual-store=false',
-        `--config.userconfig=${npm.userconfig}`,
+        `--config.userconfig=${npmrc}`,
         command,
         ...commandArgs,
       ], {
         cwd: projectDir,
         env: {
-          ...npm.env,
+          ...inherited,
+          ELECTRON_RUN_AS_NODE: '1',
           COREPACK_HOME: this.paths.pnpm.home,
           NPM_CONFIG_STORE_DIR: this.paths.pnpm.store,
-          PATH: `${dirname(this.runtime.node)}${delimiter}${process.env.PATH ?? ''}`,
+          NPM_CONFIG_USERCONFIG: npmrc,
+          PATH: `${dirname(node)}${delimiter}${process.env.PATH ?? ''}`,
           PNPM_HOME: this.paths.pnpm.home,
           XDG_CACHE_HOME: this.paths.pnpm.cache,
           XDG_CONFIG_HOME: this.paths.pnpm.config,
@@ -647,19 +511,7 @@ export class DesktopProjectManager {
         },
         stdio: ['ignore', 'pipe', 'pipe'],
       })
-      const childPid = child.pid
-      if (childPid === undefined) {
-        child.kill('SIGKILL')
-        reject(new Error('desktop project: pnpm did not report a process id'))
-        return
-      }
-      try {
-        this.writeLockOwner(childPid)
-      } catch (error) {
-        child.kill('SIGKILL')
-        reject(errorOf(error, 'desktop project: failed to assign the package transaction lock to pnpm'))
-        return
-      }
+      let failure: Error | undefined
       let diagnostics = ''
       let completed = false
       const appendDiagnostics = (chunk: string): void => {
@@ -680,9 +532,10 @@ export class DesktopProjectManager {
         }
         settleChild()
       }
-      child.once('error', (error) => { complete(() => { reject(error) }) })
+      child.once('error', (error) => { failure = error })
       child.once('close', (code, signal) => {
         complete(() => {
+          if (failure !== undefined) { reject(failure); return }
           if (code === 0) {
             settle()
             return
@@ -692,6 +545,13 @@ export class DesktopProjectManager {
           ))
         })
       })
+      try {
+        if (child.pid === undefined) throw new Error('desktop project: pnpm did not report a process id')
+        this.writeLockOwner(child.pid)
+      } catch (error) {
+        failure = errorOf(error, 'desktop project: failed to assign the package transaction lock to pnpm')
+        child.kill('SIGKILL')
+      }
     })
   }
 
@@ -705,7 +565,8 @@ export class DesktopProjectManager {
   }
 
   private async withLock<T>(operation: () => Promise<T>): Promise<T> {
-    mkdirSync(this.paths.root, { recursive: true, mode: 0o700 })
+    mkdirSync(this.paths.profile, { recursive: true, mode: 0o700 })
+    if (lstatSync(this.paths.profile).isSymbolicLink()) throw new Error('desktop project: profile directory must not be a link')
     let descriptor: number
     try {
       descriptor = openSync(this.paths.lock, 'wx', 0o600)
@@ -744,39 +605,23 @@ export class DesktopProjectManager {
   }
 }
 
-/**
- * Create seed metadata for an exact DSH release and optional desktop build.
- * @param seedDir - Directory containing the verified core package set.
- * @param release - Pinned runtime versions and optional distribution counter.
- * @param plugins - Exact plugin versions preinstalled with the seed.
- */
-export function createSeedMetadata(
-  seedDir: string,
-  release: DesktopRelease,
-  plugins: readonly DesktopPluginRecord[] = [],
-): void {
-  mkdirSync(seedDir, { recursive: true, mode: 0o700 })
-  const packageSet = verifyDesktopCorePackageSet(seedDir, release.version)
+/** Create build-only project metadata for materializing the signed runtime. */
+export function createRuntimeProjectMetadata(projectDir: string, release: DesktopRelease): void {
+  mkdirSync(projectDir, { recursive: true, mode: 0o700 })
+  const packageSet = verifyDesktopCorePackageSet(projectDir, release.version)
   const manifest: DesktopProjectManifest = {
     name: PROJECT_NAME,
     private: true,
     version: '0.0.0',
-    dependencies: {
-      ...desktopCorePackageOverrides(packageSet),
-      ...Object.fromEntries(plugins.map(plugin => [plugin.name, plugin.version])),
-    },
-    dsh: {
-      ...(desktopProfileBundles(release.version).includes(DESKTOP_AGENT_TEAM_BUNDLES[0]) ? { desktop: { agentTeams: true } } : {}),
-      profile: { bundles: [...desktopProfileBundles(release.version), ...plugins.map(plugin => plugin.name)] },
-    },
+    dependencies: desktopCorePackageOverrides(packageSet),
+    dsh: { profile: { bundles: [...DESKTOP_PROFILE_BUNDLES] } },
   }
-  writeJson(join(seedDir, 'package.json'), manifest)
+  writeJson(join(projectDir, 'package.json'), manifest)
   writeFileSync(
-    join(seedDir, 'pnpm-workspace.yaml'),
-    workspaceFile(release.version, desktopCorePackageOverrides(packageSet), manifest.dependencies['@zaimokuza/dsh-acp-adapter']),
+    join(projectDir, 'pnpm-workspace.yaml'),
+    workspaceFile(desktopCorePackageOverrides(packageSet)),
     { mode: 0o600 },
   )
-  writeJson(join(seedDir, 'desktop-release.json'), release)
 }
 
 /**
@@ -794,9 +639,18 @@ export function createDevelopmentProjectMetadata(projectDir: string, release: De
       [DSH_PACKAGE]: release.version,
       [DESKTOP_HOST_PACKAGE]: release.version,
     },
-    dsh: { profile: { bundles: [...desktopProfileBundles(release.version)] } },
+    dsh: { profile: { bundles: [...DESKTOP_PROFILE_BUNDLES] } },
   }
   writeJson(join(projectDir, 'package.json'), manifest)
-  writeFileSync(join(projectDir, 'pnpm-workspace.yaml'), workspaceFile(release.version), { mode: 0o600 })
-  writeJson(join(projectDir, 'desktop-release.json'), release)
+  writeFileSync(join(projectDir, 'pnpm-workspace.yaml'), workspaceFile(), { mode: 0o600 })
+}
+
+/** Create the first external plugin profile without running a package manager. */
+export function createPluginProfile(projectDir: string): void {
+  mkdirSync(projectDir, { recursive: true, mode: 0o700 })
+  writeJson(join(projectDir, 'package.json'), {
+    name: PROJECT_NAME, private: true, version: '0.0.0', dependencies: {},
+    dsh: { profile: { bundles: [...DESKTOP_PROFILE_BUNDLES] } },
+  } satisfies DesktopProjectManifest)
+  writeFileSync(join(projectDir, 'pnpm-workspace.yaml'), workspaceFile(), { mode: 0o600 })
 }

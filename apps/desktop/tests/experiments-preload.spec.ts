@@ -9,7 +9,8 @@ vi.mock('electron', () => electron)
 
 describe('context-isolated experiment bridge', () => {
   it('exposes versioned experiment calls in the app without package or raw IPC access', async () => {
-    await import('../src/preload-app.ts')
+    vi.stubGlobal('location', { protocol: 'dsh-app:', hostname: 'app' })
+    try { await import('../src/preload-app.ts') } finally { vi.unstubAllGlobals() }
     const [name, api] = electron.contextBridge.exposeInMainWorld.mock.calls.at(-1)! as [
       string, { protocolVersion: number; experiments: DesktopExperimentsApi },
     ]
@@ -25,6 +26,6 @@ describe('context-isolated experiment bridge', () => {
   it('keeps management-window package privileges separate from experiments', async () => {
     await import('../src/preload.ts')
     const [, api] = electron.contextBridge.exposeInMainWorld.mock.calls.at(-1)! as [string, object]
-    expect(Object.keys(api)).toEqual(['protocolVersion', 'locale', 'plugins', 'updates'])
+    expect(Object.keys(api)).toEqual(['protocolVersion', 'locale', 'plugins', 'backend', 'updates'])
   })
 })

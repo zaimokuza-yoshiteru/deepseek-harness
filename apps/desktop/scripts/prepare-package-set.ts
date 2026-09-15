@@ -126,7 +126,7 @@ export function assertDesktopHostPackageFiles(files: readonly string[]): void {
 
 /** Prepare a package set from release tarball directories. */
 export function prepareDesktopPackageSet(inputs: readonly string[], output: string): void {
-  const selected = selectDesktopPackageClosure(packedPackages(inputs), DESKTOP_AGENT_TEAM_BUNDLES)
+  const selected = selectDesktopPackageClosure(packedPackages(inputs), [...DESKTOP_AGENT_TEAM_BUNDLES, '@deepseek-ai/dsh-client-store'])
   const host = selected.find(packed => packed.manifest.name === DESKTOP_HOST_PACKAGE)
   if (host === undefined) throw new Error(`desktop package set: selected closure omits ${DESKTOP_HOST_PACKAGE}`)
   assertDesktopHostPackageFiles(tarballFiles(host.tarball))

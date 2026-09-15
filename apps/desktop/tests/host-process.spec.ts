@@ -1,7 +1,7 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DesktopHostProcess } from '../src/host-process.ts'
 
 const roots: string[] = []
@@ -75,48 +75,87 @@ afterEach(() => {
 })
 
 describe('desktop host process', () => {
-  it.each([false, true])('only stops after the Host approves an idle restart: %s', async (allowed) => {
-    const project = projectWithHost(`
-process.send({ type: 'ready', protocolVersion: 3, dshVersion: 'idle-check', idleRestartSupported: true })
+  it.each([false, true])('does not report intentional shutdown as a backend crash (idle check: %s)', async (idleCheck) => {
+    const runtime = projectWithHost(`
+process.send({ type: 'ready', protocolVersion: 3, dshVersion: '1.0.0', idleRestartSupported: true })
+function onRequestFrame() {}
 process.on('message', message => {
-  if (message.type === 'shutdown-if-idle') process.send({ type: 'restart-check', allowed: ${String(allowed)} })
+  if (message.type === 'shutdown-if-idle') process.send({ type: 'restart-check', allowed: true })
 })
+`)
+    const failure = vi.fn()
+    const host = new DesktopHostProcess(process.execPath, runtime, runtime, undefined, process.env, failure)
+    try {
+      await host.start()
+      if (idleCheck) expect(await host.stopIfIdle()).toBe(true)
+      else await host.stop()
+      expect(failure).not.toHaveBeenCalled()
+    } finally { await host.stop() }
+  })
+
+  it('still reports a crash after the host refuses an idle shutdown', async () => {
+    const runtime = projectWithHost(`
+process.send({ type: 'ready', protocolVersion: 3, dshVersion: '1.0.0', idleRestartSupported: true })
+function onRequestFrame(frame) {
+  if (frame.type === 1) process.send({ type: 'fatal', message: 'unexpected crash' })
+}
+process.on('message', message => {
+  if (message.type === 'shutdown-if-idle') process.send({ type: 'restart-check', allowed: false })
+})
+`)
+    const failure = vi.fn()
+    const host = new DesktopHostProcess(process.execPath, runtime, runtime, undefined, process.env, failure)
+    try {
+      await host.start()
+      expect(await host.stopIfIdle()).toBe(false)
+      await expect(host.fetch(new Request('dsh-app://app/'))).rejects.toThrow('unexpected crash')
+      expect(failure).toHaveBeenCalledExactlyOnceWith(new Error('unexpected crash'))
+    } finally { await host.stop() }
+  })
+
+  it('reports a fatal event after readiness once and stops the child', async () => {
+    const runtime = projectWithHost(`
+process.send({ type: 'ready', protocolVersion: 3, dshVersion: '1.0.0' })
+function onRequestFrame(frame) {
+  if (frame.type === 1) process.send({ type: 'fatal', message: 'plugin unavailable' })
+}
+`)
+    const failure = vi.fn()
+    const host = new DesktopHostProcess(process.execPath, runtime, runtime, undefined, process.env, failure)
+    try {
+      await host.start()
+      await expect(host.fetch(new Request('dsh-app://app/'))).rejects.toThrow('plugin unavailable')
+      await host.stop()
+      expect(failure).toHaveBeenCalledTimes(1)
+      expect(failure).toHaveBeenCalledWith(new Error('plugin unavailable'))
+    } finally { await host.stop() }
+  })
+
+  it('settles teardown when the executable cannot be spawned', async () => {
+    const runtime = projectWithHost('function onRequestFrame() {}')
+    const host = new DesktopHostProcess(join(runtime, 'missing-node'), runtime, runtime)
+    try { await expect(host.start()).rejects.toThrow() } finally { await host.stop() }
+  })
+
+  it('loads the resource entry with a separate profile and scrubs Node resolution overrides', async () => {
+    const runtime = projectWithHost(`
+process.send({ type: 'ready', protocolVersion: 3, dshVersion: 'split-runtime' })
 function onRequestFrame(frame) {
   if (frame.type !== 1) return
   responseStart(frame.streamId)
-  responseData(frame.streamId, 'still running')
+  responseData(frame.streamId, JSON.stringify({runtime: process.argv[2], profile: process.argv[3], cwd: process.cwd(), nodePath: process.env.NODE_PATH, runAsNode: process.env.ELECTRON_RUN_AS_NODE}))
   responseEnd(frame.streamId)
 }
 `)
-    const host = new DesktopHostProcess(process.execPath, project)
+    const profile = mkdtempSync(join(tmpdir(), 'desktop-external-profile-'))
+    roots.push(profile)
+    const host = new DesktopHostProcess(process.execPath, runtime, profile, undefined, {
+      ...process.env, NODE_OPTIONS: '--invalid-desktop-test-option', NODE_PATH: '/unowned',
+    })
     try {
-      await host.start()
-      expect(await host.stopIfIdle()).toBe(allowed)
-      if (!allowed) {
-        const response = await host.fetch(new Request('dsh-app://app/after-refusal'))
-        expect(await response.text()).toBe('still running')
-      }
-    } finally {
-      await host.stop()
-    }
-  })
-
-  it('refuses feature switching with an older Host without shutting it down', async () => {
-    const host = new DesktopHostProcess(process.execPath, projectWithHost(`
-process.send({ type: 'ready', protocolVersion: 3, dshVersion: 'old-host' })
-function onRequestFrame(frame) {
-  if (frame.type !== 1) return
-  responseStart(frame.streamId, { hasBody: false })
-  responseEnd(frame.streamId)
-}
-`))
-    try {
-      await host.start()
-      await expect(host.stopIfIdle()).rejects.toThrow('requires an application update')
-      expect((await host.fetch(new Request('dsh-app://app/alive'))).status).toBe(200)
-    } finally {
-      await host.stop()
-    }
+      const response = await host.fetch(new Request('dsh-app://app/environment'))
+      expect(await response.json()).toEqual({ runtime, profile, cwd: realpathSync(profile), runAsNode: '1' })
+    } finally { await host.stop() }
   })
 
   it('carries raw request and response bytes and shuts the child down cleanly', async () => {
@@ -142,7 +181,7 @@ function answer(streamId) {
 `)
     const previous = process.env.NODE_OPTIONS
     process.env.NODE_OPTIONS = '--require /path/that-must-not-reach-the-child'
-    const host = new DesktopHostProcess(process.execPath, project)
+    const host = new DesktopHostProcess(process.execPath, project, project)
     try {
       await expect(host.start()).resolves.toMatchObject({ dshVersion: 'clean' })
       const response = await host.fetch(new Request('dsh-app://app/example', { method: 'POST', body: 'request' }))
@@ -168,7 +207,7 @@ function onRequestFrame(frame) {
   responseEnd(frame.streamId)
 }
 `)
-    const host = new DesktopHostProcess(process.execPath, project)
+    const host = new DesktopHostProcess(process.execPath, project, project)
     try {
       const response = await host.fetch(new Request('dsh-app://app/large'))
       const body = new Uint8Array(await response.arrayBuffer())
@@ -195,7 +234,7 @@ function onRequestFrame(frame) {
       start(controller) { controller.enqueue(Buffer.from('first')) },
       cancel() { canceled = true },
     })
-    const host = new DesktopHostProcess(process.execPath, project)
+    const host = new DesktopHostProcess(process.execPath, project, project)
     try {
       const request = new Request('dsh-app://app/early', {
         method: 'POST',
@@ -228,7 +267,7 @@ function onRequestFrame(frame) {
   }
 }
 `)
-    const host = new DesktopHostProcess(process.execPath, project)
+    const host = new DesktopHostProcess(process.execPath, project, project)
     try {
       const canceled = await host.fetch(new Request('dsh-app://app/cancel'))
       await canceled.body?.cancel()
@@ -246,7 +285,7 @@ process.send({ type: 'ready', protocolVersion: 3, dshVersion: 'invalid-frame' })
 function onRequestFrame(frame) {
   if (frame.type === 1) responsePipe.write(Buffer.alloc(13))
 }
-`))
+`), projectWithHost(''))
     await invalid.start()
     await expect(invalid.fetch(new Request('dsh-app://app/invalid'))).rejects.toThrow(/invalid Host response frame marker/u)
     await invalid.stop().catch(() => undefined)
@@ -254,7 +293,7 @@ function onRequestFrame(frame) {
     const earlyExit = new DesktopHostProcess(process.execPath, projectWithHost(`
 function onRequestFrame() {}
 process.exit(0)
-`))
+`), projectWithHost(''))
     await expect(earlyExit.start()).rejects.toThrow(/response pipe ended/u)
   })
 })

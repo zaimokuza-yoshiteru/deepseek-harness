@@ -8,6 +8,7 @@ const state = vi.hoisted(() => ({ context: {} }))
 vi.mock('@deepseek-ai/dsh-app-boot', () => ({
   boot: async () => state.context,
   composeEntries: () => [],
+  createProfileResolutionGeneration: async () => ({}),
   loadLayeredEnv: () => ({}),
   loadProfileDirectory: () => ({ layers: [], patches: [] }),
   loadOverlayPatches: () => [],
@@ -34,7 +35,7 @@ describe('desktop host idle restart guard', () => {
       writeFileSync(join(modules, 'dsh', 'package.json'), '{"version":"0.1.5-rc.2"}')
       mkdirSync(join(modules, 'dsh-web-frontend', 'dist'), { recursive: true })
       writeFileSync(join(modules, 'dsh-web-frontend', 'dist', 'index.html'), '<html></html>')
-      host = await runDesktopHost(root, async () => {})
+      host = await runDesktopHost(root, root, async () => {})
       expect(host.canRestart()).toBe(true)
       agents.push({ status: 'running' })
       expect(host.canRestart()).toBe(false)

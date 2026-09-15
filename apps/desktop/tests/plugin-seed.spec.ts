@@ -1,0 +1,71 @@
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, expect, it } from 'vitest'
+import { applyPluginSeed, needsPluginSeed } from '../src/plugin-seed.ts'
+import { runtimeFixture } from './runtime-fixture.ts'
+import { DESKTOP_PORTABLE_PLUGINS } from '../src/portable-plugins.ts'
+
+const roots: string[] = []
+afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
+function fixture() {
+  const root = mkdtempSync(join(tmpdir(), 'desktop-migration-')); roots.push(root)
+  const profile = join(root, 'profile'); const seed = join(root, 'seed'); const backup = join(root, 'backups')
+  mkdirSync(profile); mkdirSync(seed)
+  writeFileSync(join(profile, 'lock'), 'owned')
+  writeFileSync(join(seed, 'desktop-plugin-seed.json'), '{"id":"new"}')
+  writeFileSync(join(seed, 'package.json'), JSON.stringify({ dependencies: Object.fromEntries(DESKTOP_PORTABLE_PLUGINS.map(p => [p.name, p.version])) }))
+  const runtime = runtimeFixture(join(root, 'runtime'), '0.1.6-alpha.1')
+  return { root, profile, seed, backup, runtime }
+}
+it('initializes offline with Teams and both bundled plugins, retaining the held lock', async () => {
+  const f = fixture()
+  await applyPluginSeed(f.profile, f.seed, f.backup, f.runtime, async (install) => { expect(install).toBe(false) })
+  const manifest = JSON.parse(readFileSync(join(f.profile, 'package.json'), 'utf8')) as {
+    dependencies: Record<string, string>
+    dsh: { desktop: { agentTeams: boolean }; profile: { bundles: string[] } }
+  }
+  expect(manifest.dsh.desktop.agentTeams).toBe(true)
+  expect(manifest.dsh.profile.bundles).toContain('@zaimokuza/dsh-plugin-hub')
+  expect(readFileSync(join(f.profile, 'lock'), 'utf8')).toBe('owned')
+  expect(needsPluginSeed(f.profile, f.seed)).toBe(false)
+})
+it('migrates an old profile without losing disabled Teams, plugin activation or user configuration', async () => {
+  const f = fixture()
+  const old = { dependencies: { '@deepseek-ai/dsh': 'file:./old.tgz', '@zaimokuza/dsh-plugin-hub': '0.2.1', 'user-plugin': '1.2.3' }, dsh: { desktop: { agentTeams: false }, profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', 'user-plugin'] } } }
+  writeFileSync(join(f.profile, 'package.json'), JSON.stringify(old))
+  writeFileSync(join(f.profile, 'cordis.yml'), 'user-settings')
+  await applyPluginSeed(f.profile, f.seed, f.backup, f.runtime, async (install) => { expect(install).toBe(true) })
+  const manifest = JSON.parse(readFileSync(join(f.profile, 'package.json'), 'utf8')) as {
+    dependencies: Record<string, string>
+    dsh: { desktop: { agentTeams: boolean }; profile: { bundles: string[] } }
+  }
+  expect(manifest.dependencies['@deepseek-ai/dsh']).toBeUndefined()
+  expect(manifest.dependencies['user-plugin']).toBe('1.2.3')
+  expect(manifest.dsh.desktop.agentTeams).toBe(false)
+  expect(manifest.dsh.profile.bundles).not.toContain('@zaimokuza/dsh-plugin-hub')
+  expect(manifest.dsh.profile.bundles).toContain('user-plugin')
+  expect(readFileSync(join(f.profile, 'cordis.yml'), 'utf8')).toBe('user-settings')
+  expect(JSON.parse(readFileSync(join(f.backup, readdirSync(f.backup)[0]!, 'package.json'), 'utf8'))).toEqual(old)
+})
+it('restores the exact original files if preparation fails', async () => {
+  const f = fixture(); const original = '{"dependencies":{}}'
+  writeFileSync(join(f.profile, 'package.json'), original)
+  await expect(applyPluginSeed(f.profile, f.seed, f.backup, f.runtime, async () => { throw new Error('incompatible plugin') })).rejects.toThrow('incompatible plugin')
+  expect(readFileSync(join(f.profile, 'package.json'), 'utf8')).toBe(original)
+  expect(existsSync(join(f.profile, 'desktop-plugin-seed.json'))).toBe(false)
+  expect(readFileSync(join(f.profile, 'lock'), 'utf8')).toBe('owned')
+})
+
+it('discards build-machine pnpm state while keeping prebuilt dependency files', async () => {
+  const f = fixture()
+  const modules = join(f.seed, 'node_modules')
+  mkdirSync(join(modules, 'example'), { recursive: true })
+  mkdirSync(join(modules, '.pnpm'))
+  writeFileSync(join(modules, '.modules.yaml'), 'storeDir: /build-machine/store')
+  writeFileSync(join(modules, '.pnpm-workspace-state-v1.json'), '{}')
+  writeFileSync(join(modules, 'example', 'index.js'), 'export default 1')
+  await applyPluginSeed(f.profile, f.seed, f.backup, f.runtime, async () => {})
+  expect(readdirSync(join(f.profile, 'node_modules'))).toEqual(['example'])
+  expect(readFileSync(join(f.profile, 'node_modules', 'example', 'index.js'), 'utf8')).toBe('export default 1')
+})

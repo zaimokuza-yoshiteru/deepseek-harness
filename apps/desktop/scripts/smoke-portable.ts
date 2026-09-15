@@ -4,7 +4,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
 import { Writable } from 'node:stream'
 import { subscribe, unsubscribe } from 'node:diagnostics_channel'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import extractZip from '@electron-internal/extract-zip'
@@ -34,19 +34,35 @@ if (archive !== undefined) {
 const resources = target === 'mac-arm64'
   ? join(artifacts, 'mac-arm64', 'DSH Desktop.app', 'Contents', 'Resources')
   : join(artifacts, 'win-unpacked', 'resources')
+// Re-execute under packaged Electron so filesystem reads exercise the actual ASAR layout.
+const executable = target === 'mac-arm64'
+  ? join(resources, '..', 'MacOS', 'DSH Desktop') : join(resources, '..', 'DSH Desktop.exe')
+if (process.versions.electron === undefined) {
+  const child = spawn(executable, ['--import', 'tsx/esm', import.meta.filename, target], {
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', DSH_DESKTOP_SMOKE_RESOURCES: resources }, stdio: 'inherit',
+  })
+  const [code, signal] = await once(child, 'exit')
+  if (archive !== undefined) rmSync(artifacts, { recursive: true, force: true })
+  assert.equal(signal, null)
+  assert.equal(code, 0)
+  process.exit(0)
+}
+const packagedResources = process.env.DSH_DESKTOP_SMOKE_RESOURCES ?? resources
 const home = mkdtempSync(join(tmpdir(), 'dsh-portable-smoke-'))
 process.env.DSH_HOME = home
 process.env.DSH_TELEMETRY_MODE = 'DISABLED'
 process.env.npm_config_registry = 'http://127.0.0.1:1/unreachable/'
 process.env.npm_config_userconfig = join(home, 'absent.npmrc')
 const runtime = {
-  node: join(resources, 'runtime', 'node', target === 'win-x64' ? 'node.exe' : 'node'),
-  pnpm: join(resources, 'runtime', 'pnpm', 'bin', 'pnpm.mjs'),
+  node: process.execPath,
+  packageNode: join(packagedResources, 'runtime', 'node', target === 'win-x64' ? 'node.exe' : 'node'),
+  pnpm: join(packagedResources, 'runtime', 'pnpm', 'bin', 'pnpm.mjs'),
+  dsh: join(packagedResources, 'app.asar', 'dsh'),
+  pluginSeed: join(packagedResources, 'plugin-seed'),
+  profileResolution: 'runtime' as const,
 }
 const paths = resolveDesktopPaths(home)
 const manager = new DesktopProjectManager(paths, runtime)
-const seed = join(resources, 'seed')
-const release = JSON.parse(readFileSync(join(seed, 'desktop-release.json'), 'utf8')) as { distributionVersion: string }
 let host: DesktopHostProcess | undefined
 let stage = 'installing the packaged seed'
 const children = new Set<ChildProcess>()
@@ -86,72 +102,65 @@ const timeout = setTimeout(() => {
 subscribe('child_process', childDiagnostic)
 try {
   progress(stage)
-  await manager.applyRelease(seed, release.distributionVersion, {
-    healthCheck: async (project) => {
-      progress('starting the installed host')
-      host = new DesktopHostProcess(runtime.node, project)
-      const ready = await host.start()
-      assert.equal(ready.dshVersion, '0.1.5-rc.2')
-      progress('fetching the frontend asset')
-      const response = await host.fetch(new Request('dsh-app://app/index.html'))
-      assert.equal(response.status, 200)
-      const html = await response.text()
-      assert.match(html, /<html/u)
-      progress('checking the default Teams profile and client module')
-      const installed = JSON.parse(readFileSync(join(project, 'package.json'), 'utf8')) as { dsh: { profile: { bundles: string[] } } }
-      const expected = JSON.parse(readFileSync(new URL('../tests/expected/rc2-profile.json', import.meta.url), 'utf8')) as { bundles: string[] }
-      assert.deepEqual(installed.dsh.profile.bundles, [...expected.bundles, '@zaimokuza/dsh-plugin-hub'])
-      const bootJson = html.match(/<script>globalThis\["__DSH_BOOT__"\] = (.*?)<\/script>/u)?.[1]
-      assert.notEqual(bootJson, undefined)
-      const graph = JSON.parse(bootJson!) as { entries: { id: string; url: string }[] }
-      const teamEntry = graph.entries.find(entry => entry.id === '@deepseek-ai/dsh-experimental-client-ui-agent-team')
-      assert.notEqual(teamEntry, undefined)
-      const teamClient = await host.fetch(new Request(new URL(teamEntry!.url, 'dsh-app://app')))
-      assert.equal(teamClient.status, 200)
-      assert.match(teamClient.headers.get('content-type') ?? '', /javascript/u)
-      assert.match(await teamClient.text(), /agentTeams/u)
-      const teamRpc = await host.fetch(new Request('dsh-app://app/api/agentTeams/view', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ type: 'client-request', rpcId: 'teams-smoke', method: 'agentTeams/view', payload: { args: {} } }),
-      }))
-      assert.equal(teamRpc.status, 200)
-      const teamResult = await teamRpc.json() as { result: { ok: boolean; error?: { code: string; message: string } } }
-      assert.equal(teamResult.result.ok, false)
-      assert.equal(teamResult.result.error?.code, 'gateway/arguments-invalid')
-      assert.match(teamResult.result.error?.message ?? '', /agentId/u)
-      progress('checking the bundled Plugin Hub client and desktop Teams state')
-      const hubEntry = graph.entries.find(entry => entry.id === '@zaimokuza/dsh-plugin-hub')
-      assert.notEqual(hubEntry, undefined)
-      const hubClient = await host.fetch(new Request(new URL(hubEntry!.url, 'dsh-app://app')))
-      assert.equal(hubClient.status, 200)
-      assert.match(hubClient.headers.get('content-type') ?? '', /javascript/u)
-      assert.match(await hubClient.text(), /Plugin Hub/u)
-      const hubRpc = await host.fetch(new Request('dsh-app://app/api/dshPluginHub_hub/experiments', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ type: 'client-request', rpcId: 'hub-smoke', method: 'dshPluginHub_hub/experiments', payload: {} }),
-      }))
-      assert.equal(hubRpc.status, 200)
-      const hubResult = await hubRpc.json() as { result: { ok: boolean; value: { id: string; enabled: boolean; installed: boolean }[] } }
-      assert.equal(hubResult.result.ok, true)
-      const teamFeature = hubResult.result.value.find(feature => feature.id === 'agent-teams')
-      assert.equal(teamFeature?.enabled, true)
-      assert.equal(teamFeature?.installed, true)
-      progress('stopping the staged host')
-      await host.stop()
-      host = undefined
-    },
-    beforeActivate: async () => { progress('activating the installed profile') },
-    afterActivate: async () => { progress('checking the active plugin inventory') },
+  for (const plugin of DESKTOP_PORTABLE_PLUGINS) {
+    assert.ok(existsSync(join(runtime.pluginSeed, 'node_modules', plugin.name, 'package.json')),
+      `Packaged seed is missing ${plugin.name}; include plugin-seed/node_modules explicitly`)
+  }
+  const firstStart = performance.now()
+  await manager.applyRelease()
+  const prepared = performance.now()
+  const metadata = spawn(runtime.node, [join(import.meta.dirname, '../tests/fixtures/plugin-metadata-smoke.mjs'), runtime.dsh, paths.profile], {
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: 'inherit',
   })
-  assert.deepEqual(manager.listPlugins(), DESKTOP_PORTABLE_PLUGINS.map(({ name, version }) => ({ name, version })))
+  const [metadataCode, metadataSignal] = await once(metadata, 'exit')
+  assert.equal(metadataSignal, null)
+  assert.equal(metadataCode, 0, 'Final plugin metadata must register on the packaged host and client registry')
+  const hostStart = performance.now()
+  host = new DesktopHostProcess(runtime.node, runtime.dsh, paths.profile)
+  const ready = await host.start()
+  assert.equal(ready.dshVersion, '0.1.6-alpha.1')
+  const response = await host.fetch(new Request('dsh-app://app/index.html'))
+  assert.equal(response.status, 200)
+  const html = await response.text()
+  assert.match(html, /<html/u)
+  console.log(JSON.stringify({ firstPreparationMs: prepared - firstStart,
+    firstReadyMs: prepared - firstStart + performance.now() - hostStart, metadataProbeMs: hostStart - prepared }))
+  const graph = JSON.parse(html.match(/globalThis\["__DSH_BOOT__"\] = (.*?)<\/script>/u)![1]!) as { entries: { id: string; url: string }[] }
+  for (const name of [...DESKTOP_PORTABLE_PLUGINS.map(plugin => plugin.name), '@deepseek-ai/dsh-experimental-client-ui-agent-team']) {
+    const entry = graph.entries.find(item => item.id === name)
+    assert.ok(entry, `Missing client module ${name}`)
+    const client = await host.fetch(new Request(new URL(entry.url, 'dsh-app://app')))
+    assert.equal(client.status, 200)
+    assert.ok((await client.text()).length > 0)
+  }
+  const hubRpc = await host.fetch(new Request('dsh-app://app/api/dshPluginHub_hub/resources', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ type: 'client-request', rpcId: 'hub-smoke', method: 'dshPluginHub_hub/resources', payload: {} }),
+  }))
+  assert.equal(hubRpc.status, 200)
+  const hubResult = await hubRpc.json() as { result: { ok: boolean } }
+  assert.equal(hubResult.result.ok, true, JSON.stringify(hubResult))
+  const acpRpc = await host.fetch(new Request('dsh-app://app/api/dshAcp/health', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ type: 'client-request', rpcId: 'acp-smoke', method: 'dshAcp/health', payload: { args: {} } }),
+  }))
+  assert.equal(acpRpc.status, 200)
+  const acpResult = await acpRpc.json() as { result: { ok: boolean; value?: { providers: unknown[] } } }
+  assert.equal(acpResult.result.ok, true, JSON.stringify(acpResult))
+  assert.ok(Array.isArray(acpResult.result.value?.providers), 'ACP health must execute successfully')
+  assert.deepEqual(manager.listPlugins(), DESKTOP_PORTABLE_PLUGINS.map(({ name, version }) => ({ name, version, enabled: true })))
+  await host.stop()
+  host = undefined
+  const warmStart = performance.now()
+  assert.equal(await manager.applyRelease(), false)
   progress('switching Teams off and on through the experiment controller without registry access')
   const startActive = async (): Promise<void> => {
-    host = new DesktopHostProcess(runtime.node, paths.profile)
+    host = new DesktopHostProcess(runtime.node, runtime.dsh, paths.profile)
     await host.start()
   }
   await startActive()
+  await (await host!.fetch(new Request('dsh-app://app/index.html'))).text()
+  console.log(JSON.stringify({ warmReadyMs: performance.now() - warmStart }))
   let busy = false
   const experiments = new DesktopExperiments({
     profile: paths.profile, supported: true,
@@ -163,12 +172,8 @@ try {
       return true
     },
     change: enabled => manager.mutate({ type: 'agent-teams', enabled }, {
-      healthCheck: async (project) => {
-        const probe = new DesktopHostProcess(runtime.node, project)
-        try { await probe.start() } finally { await probe.stop() }
-      },
-      beforeActivate: async () => {},
-      afterActivate: startActive,
+      beforeChange: async () => { await host?.stop(); host = undefined },
+      afterChange: startActive,
     }),
     recover: async () => { if (host === undefined) await startActive() },
   })
@@ -185,7 +190,7 @@ try {
     const graph = JSON.parse(html.match(/<script>globalThis\["__DSH_BOOT__"\] = (.*?)<\/script>/u)![1]!) as { entries: { id: string }[] }
     assert.equal(graph.entries.some(entry => entry.id === '@deepseek-ai/dsh-experimental-client-ui-agent-team'), enabled)
     assert.equal(graph.entries.some(entry => entry.id === '@zaimokuza/dsh-plugin-hub'), true)
-    assert.deepEqual(manager.listPlugins(), DESKTOP_PORTABLE_PLUGINS.map(({ name, version }) => ({ name, version })))
+    assert.deepEqual(manager.listPlugins(), DESKTOP_PORTABLE_PLUGINS.map(({ name, version }) => ({ name, version, enabled: true })))
   }
   await host!.stop()
   host = undefined
@@ -193,7 +198,7 @@ try {
   unsubscribe('child_process', childDiagnostic)
   for (const truncated of [false, true]) {
     progress(`checking request-pipe EOF before IPC shutdown (truncated=${String(truncated)})`)
-    const child = spawn(runtime.node, [join(paths.profile, 'node_modules', '@deepseek-ai', 'dsh-desktop-host', 'lib', 'index.js'), paths.profile], {
+    const child = spawn(runtime.node, [join(runtime.dsh, 'node_modules', '@deepseek-ai', 'dsh-desktop-host', 'lib', 'index.js'), runtime.dsh, paths.profile], {
       cwd: paths.profile, stdio: ['ignore', 'pipe', 'pipe', 'pipe', 'pipe', 'ipc'],
     })
     children.add(child)

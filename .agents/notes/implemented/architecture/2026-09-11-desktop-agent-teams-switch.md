@@ -12,7 +12,7 @@ Internal desktop users need to disable experimental Teams and restore it without
 
 Plugin Hub exposes one localized Teams switch through the [Desktop experiment bridge](2026-09-13-desktop-experiment-bridge.md). Both official bundle registrations change together; package dependencies and cached bytes remain present. The profile manifest records the choice as `dsh.desktop.agentTeams`. An absent choice retains the release default, while an explicit choice survives restarts and seed upgrades. This partially supersedes the fixed-enable decision in the [portable distribution note](2026-09-10-desktop-portable-distribution.md); its runtime, registry, packaging, and data-location decisions remain active.
 
-Switching uses the existing staged profile transaction, an offline frozen install, backend health check, activation journal, and rollback. Electron serializes feature and plugin mutations. The Host advertises idle-restart support and checks both live agents and in-flight API responses before accepting shutdown in the same event-loop turn. Busy work refuses the change; older Hosts without this capability require an application update. The main window reloads after a successful switch. Session and Teams storage is not deleted.
+Switching updates both profile layers under the desktop lock and restarts one backend without invoking pnpm. A failed restart retains the configured choice and exposes startup recovery. Electron serializes feature and plugin mutations. The Host advertises idle-restart support and checks both live agents and in-flight API responses before accepting shutdown in the same event-loop turn. Busy work refuses the change; older Hosts without this capability require an application update. The main window reloads after a successful switch. Session and Teams storage is not deleted.
 
 ## Alternatives considered
 
@@ -22,6 +22,6 @@ Switching uses the existing staged profile transaction, an offline frozen instal
 
 ## Consequences
 
-The application size does not shrink when Teams is disabled. Re-enabling needs local installation and a backend restart, but no package download. A new desktop build counter is required to deliver the Host's idle-restart capability to existing profiles.
+The application size does not shrink when Teams is disabled. Re-enabling needs one backend restart, but no package installation or download. A new desktop build counter is required to deliver the Host's idle-restart capability to existing profiles.
 
-Focused tests cover the experiment bridge, package-manager output, refusal recovery, idle checks during agent and API work, offline transactions, rollback, plugin preservation, and upgrade persistence. Packaged-runtime verification covers actual Host startup and Teams client registration in both states. Native Windows execution remains owned by the release workflow; no live model call is required by these checks.
+Focused tests cover the experiment bridge, package-manager output, refusal recovery, idle checks during agent and API work, offline switching, migration restoration, plugin preservation, and upgrade persistence. Packaged-runtime verification covers actual Host startup and Teams client registration in both states. Native Windows execution remains owned by the release workflow; no live model call is required by these checks.

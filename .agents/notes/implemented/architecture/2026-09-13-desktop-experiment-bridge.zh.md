@@ -6,7 +6,7 @@ Status: implemented
 
 ## Problem
 
-Plugin Hub 为 Web 和 Desktop 提供统一的资源管理页，但桌面 profile 的管理者运行在 Electron 中。渲染进程直接写入 profile 文件无法协调空闲关闭、暂存激活或回滚。向主应用开放包管理 IPC 会授予实验性功能开关并不需要的权限。
+Plugin Hub 为 Web 和 Desktop 提供统一的资源管理页，但桌面 profile 的管理者运行在 Electron 中。渲染进程直接写入 profile 文件无法协调空闲关闭、profile 变更或恢复。向主应用开放包管理 IPC 会授予实验性功能开关并不需要的权限。
 
 ## Decision
 
@@ -14,7 +14,7 @@ Plugin Hub 为 Web 和 Desktop 提供统一的资源管理页，但桌面 profil
 
 当前功能白名单仅包含 `agent-teams`。每次变更携带宿主返回的规范化 profile、目标 `enabled` 状态和已观察的 `expectedEnabled` 状态。宿主仅用 profile 做相等性校验，拒绝过期状态，不接受渲染进程指定文件写入位置。不支持的版本或源码开发启动器不声明可管理的实验性功能。
 
-宿主分别报告配置状态 `enabled`、后端观察状态 `activeEnabled`、安装情况、切换能力和忙碌状态。`activeEnabled: null` 表示没有已确认的运行状态。[Teams 离线事务](2026-09-11-desktop-agent-teams-switch.zh.md)负责共享变更锁、空闲关闭、离线暂存和恢复。成功响应在后端恢复后返回，并要求渲染进程刷新；Hub 收到响应后刷新。失败返回稳定错误码并保留页面，供 Hub 提示错误和读取恢复后的状态。
+宿主分别报告配置状态 `enabled`、后端观察状态 `activeEnabled`、安装情况、切换能力和忙碌状态。`activeEnabled: null` 表示没有已确认的运行状态。[Teams 离线事务](2026-09-11-desktop-agent-teams-switch.zh.md)负责共享变更锁、空闲关闭、profile 写入和恢复。成功响应在后端恢复后返回，并要求渲染进程刷新；Hub 收到响应后刷新。失败返回稳定错误码并保留页面，供 Hub 提示错误和读取恢复后的状态。
 
 每个沙箱 preload 独立打包。构建产物可以 require Electron，但不能 require 共享的本地分块。桌面构建使用受限加载器执行两个产物来验证该要求。
 
@@ -22,7 +22,7 @@ Plugin Hub 为 Web 和 Desktop 提供统一的资源管理页，但桌面 profil
 
 ## Alternatives considered
 
-**由 Hub 写入 Desktop profile。** 这会绕过 Electron 的事务管理，无法安全同步后端关闭和回滚。
+**由 Hub 写入 Desktop profile。** 这会绕过 Electron 的事务管理，无法安全同步后端关闭和恢复。
 
 **开放完整的管理 preload。** 安装和删除包不是 Teams 开关所需的权限。独立 preload API 保留按窗口划分的权限。
 

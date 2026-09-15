@@ -45,7 +45,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$SOURCE_RUN" =~ ^[0-9]+$ ]]
-          [[ "$DESKTOP_TAG" =~ ^0\.1\.5-rc\.2\.[1-9][0-9]*$ ]]
+          [[ "$DESKTOP_TAG" =~ ^0\.1\.6\.alpha\.1\.[1-9][0-9]*$ ]]
           export SOURCE_SHA="$(git rev-parse "refs/tags/$DESKTOP_TAG^{commit}")"
           git merge-base --is-ancestor "$SOURCE_SHA" origin/desktop
           gh api "repos/$GH_REPO/actions/runs/$SOURCE_RUN" > /tmp/source-run.json
@@ -80,13 +80,11 @@ jobs:
                   assert archive.testzip() is None
                   paths = archive.namelist()
                   assert not any(pathlib.PurePosixPath(p).name in ['.npmrc', '.env', 'key.pem'] or '/.git/' in p for p in paths)
-                  metadata = [p for p in paths if p.endswith('/seed/desktop-release.json')]
+                  metadata = [p for p in paths if p.endswith('/plugin-seed/package.json')]
                   assert len(metadata) == 1
-                  release = json.loads(archive.read(metadata[0]))
-                  assert release['version'] == '0.1.5-rc.2' and release['distributionVersion'] == tag
-                  manifest = json.loads(archive.read(metadata[0].replace('desktop-release.json', 'package.json')))
-                  assert manifest['dependencies']['@zaimokuza/dsh-acp-adapter'] == '0.1.5-rc.2.5'
-                  assert manifest['dependencies']['@zaimokuza/dsh-plugin-hub'] == '0.2.1'
+                  manifest = json.loads(archive.read(metadata[0]))
+                  assert manifest['dependencies']['@zaimokuza/dsh-acp-adapter'] == '0.1.6-alpha.1.2'
+                  assert manifest['dependencies']['@zaimokuza/dsh-plugin-hub'] == '0.2.3'
                   assert manifest['dsh']['desktop']['agentTeams'] is True
               print('Verified', name)
           PY

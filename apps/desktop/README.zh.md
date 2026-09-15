@@ -1,101 +1,65 @@
-# DSH Desktop
+# DSH Desktop 便携分发
 
 [English](README.md) | 中文
 
-本 fork 分发 Electron 应用，内置 DSH `0.1.5-rc.2`、`@zaimokuza/dsh-acp-adapter` `0.1.5-rc.2.5`、`@zaimokuza/dsh-plugin-hub` `0.2.1`、原版 Node.js `24.17.0`、pnpm `11.23.0` 和离线安装 seed。使用者无需单独安装 DSH、Node.js、npm 或 pnpm。ACP agent 可执行程序需要另外配置，不包含在应用中。
+## Summary
 
-## 下载与打开
+本分支提供 macOS Apple Silicon 和 Windows x64 压缩包，内置 DSH `0.1.6-alpha.1`、ACP adapter `0.1.6-alpha.1.2` 和 Plugin Hub `0.2.3`。核心包含该版本发布后的上游启动优化。使用者无需另装 DSH、Node.js、npm 或 pnpm；Devin、Kimi 等 Agent 命令仍需自行安装。
 
-从 fork 的 GitHub Release 附件下载应用 ZIP。GitHub 自动生成的源码压缩包包含源码，不是应用。完整解压 ZIP 后，在 macOS Apple Silicon 上打开 `DSH Desktop.app`，或在 Windows x64 上打开 `DSH Desktop.exe`。Windows 可执行文件必须和附带文件保留在一起。不分发 Intel Mac 版本。
+## Table of Contents
 
-Mac 应用采用 ad-hoc 签名，未经 Apple 公证；Windows 应用未签名。首次打开可能需要操作系统或公司应用策略批准，这些包不保证免提示启动。
+- [打开应用](#open-the-application)
 
-两个应用都采用仓库 Web favicon 中的 DeepSeek 鲸鱼，显示为白色圆角底上的蓝色图案。[桌面 SVG](assets/icon.svg) 用于生成已提交的 [macOS ICNS](assets/icon.icns) 和 [Windows ICO](assets/icon.ico)，转换工具为已修复的 `icons@1.2.3`。打包直接使用这些文件；Finder 小尺寸图标采用 ARGB 编码。Windows 写入图标与版本信息，同时保持代码签名关闭。[图标完整性记录](assets/icon-integrity.json) 固定源码、生成文件和工具压缩包；修改 SVG 时需要重新生成两种原生文件并更新记录。
+- [插件与 Teams](#plugins-and-teams)
 
-首次启动会将内置 seed 离线安装到独立的可写 profile，并验证后端可以启动。尚无桌面 store 时直接采用已解压的 store；升级时合并到已有 store，保留下载过的插件。模型请求和所配置的 ACP agent 仍可能需要网络。桌面端不运行自动更新；更新时关闭应用，再用新版本 ZIP 替换应用。
+- [环境与-registry](#environment-and-registry)
 
-## 数据与插件
+- [数据与升级](#data-and-upgrades)
 
-Agent Teams 默认启用，使用官方[后端层](../../packages/experimental/agent-team-profile/README.zh.md)和[Web 界面层](../../packages/experimental/agent-team-web-profile/README.zh.md)。通过 **Plugin Hub → 实验性功能 → Agent Teams** 同时切换两层。Hub 必须支持 Desktop 实验性功能接口 v1；原生桌面插件窗口仅管理 npm 包。切换会重启后端并刷新主窗口；请先等待正在运行的任务和请求结束。设置在应用重启和升级后保留。依赖始终保留，因此重新开启无需联网。会话与 Teams 数据不会删除。ACP adapter 和用户安装的插件仍显示在已安装列表中。没有保存过选择的 profile 默认启用。Teams 仍属实验性功能；上游 Web 层说明了与 preset 内旧子代理控制项并存的限制。
+- [构建与发布](#build-and-release)
 
-应用升级时，内置插件采用新 seed 携带的版本，旧 ACP adapter 不会覆盖新内置版本。其他已安装插件保留精确版本并继续启用。暂存后端必须通过启动检查，替换才会生效。
+## Open the application
 
-原生**编辑**菜单为当前窗口提供标准编辑快捷键，适用于聊天输入区和插件管理器输入框。macOS 使用 `Cmd+A/C/V/X` 全选、复制、粘贴或剪切，使用 `Cmd+Z` 撤销、`Cmd+Shift+Z` 重做。
+完整解压 ZIP。macOS 打开 `DSH Desktop.app`，Windows 打开 `DSH Desktop.exe`；Windows 可执行文件必须与相邻文件放在一起。Mac 应用使用临时签名，未公证，系统可能要求安全确认；Windows 程序未签名。
 
-macOS 的默认数据根目录为 `~/.dsh-desktop`，Windows 为 `%USERPROFILE%\.dsh-desktop`。该目录下的 `profiles/desktop` 存放桌面 profile，`desktop/pnpm` 存放包管理状态，`electron-user-data` 存放 Electron 状态。显式设置 `DSH_HOME` 可以覆盖根目录。应用不导入已有 Web profile。遥测默认设置为 `DSH_TELEMETRY_MODE=DISABLED`，显式启动配置可以覆盖。
+窗口先显示启动页，再启动一个后端。核心生产依赖从应用 ASAR 中运行，启动时不安装核心依赖；首次仅将已准备好的插件依赖复制到可写 profile。完整运行时校验在打包期间执行，后续启动比较运行时与插件锁文件标识。
 
-从应用菜单打开插件管理器，或按 `Cmd+,` / `Ctrl+,`，可以按 npm 包名安装插件、更新到指定版本或卸载。它是已安装插件管理器，不提供市场搜索。适配器预装并显示在列表中。第三方插件必须兼容桌面 host。
+原生编辑菜单支持全选、复制、粘贴、剪切、撤销和重做。HTTP/HTTPS 链接由系统浏览器打开，链接右键菜单可显示并复制原始地址。
 
-主应用通过 `window.dshDesktop.experiments` v1 提供绑定 profile 的功能读取和受控切换，不开放包管理 IPC。[实验性功能桥接决策](../../.agents/notes/implemented/architecture/2026-09-13-desktop-experiment-bridge.zh.md)规定调用权限、状态及失败处理。
+## Plugins and Teams
 
-后端运行在内置的原版 Node.js 进程中。`dsh-app://` 与带帧字节管道承载前端资源、Fetch 请求及流式响应，桌面端不监听 Web 端口。包变更通过暂存 profile、后端健康检查、激活日志与回滚完成。即使 DSH 依赖版本不变，桌面构建序号变化也会重新应用内置后端。
+从应用菜单打开 **桌面插件…**，或使用 macOS 的 `Cmd+,`、Windows 的 `Ctrl+,`。按 `@scope/plugin-name@version` 格式输入 registry 包信息，再点击 **安装**。插件需要符合当前 DSH 桌面端的依赖约定；例如 theme-library `0.2.1` 需要先在插件包中修正 peer dependency 声明，才能安装。列表支持启用、禁用、更新与移除；包变更会重启后端，请先结束运行中的任务。安装失败时可继续在该窗口修复。
 
-### 在桌面窗口安装插件
+新 profile 默认启用 Agent Teams。在 Plugin Hub 的实验性功能页关闭或开启即可。两个官方 Teams 配置层同步切换，依赖始终内置，因此开关不需要下载或安装。Agent 或 API 请求仍在运行时，桌面端拒绝切换；允许切换后，后端完成重启才会确认成功。
 
-1. 打开打包后的应用，等待主窗口出现。源码开发启动方式会禁用包变更。
-2. macOS 按 `Cmd+,`，Windows 按 `Ctrl+,`，打开独立的**桌面插件**窗口。它与主窗口设置中的插件配置页不同。
-3. 在 **npm 包**输入框填写完整的 npm 包名和版本。验证主题库时，准确输入：
+## Environment and registry
 
-```text
-@zaimokuza/dsh-theme-library@0.2.1
-```
+macOS 每次启动使用 `-ilc` 运行用户的 `$SHELL`（默认 `/bin/zsh`），由 shell 自行加载登录和交互配置；zsh 包括 `.zprofile`、`.zshrc`。仅导入已导出的环境变量；别名与 shell 函数不是可执行程序。读取超时为八秒，失败会显示启动错误。Windows 直接继承启动环境。
 
-4. 点击**安装**，等待操作完成。桌面端使用内置 pnpm、读取你的 npm 配置、检查暂存后端，激活成功后重新加载主窗口。输入框中不要填写 GitHub Release 链接、`npm install` 或其他命令。
-5. 确认**已安装**列表出现对应包名和版本。点击**更新**可填写目标版本，点击**移除**可卸载该插件。安装错误会显示在窗口中，事务失败会保留原有的活动 profile。
+Shell 导入排除 `ELECTRON_*`、`DSH_DESKTOP_*`、`NODE_OPTIONS`、`NODE_PATH`、`PWD`、`OLDPWD`、`SHLVL` 和 `_`，其他导出变量（包括凭证、代理与 `npm_config_*`）保留。桌面数据主目录保持应用已选择的值。内置 Node 加在 PATH 末尾，优先使用用户已安装的 Node。应用不会收录个人 shell 文件或环境快照。
 
-在桌面 `0.1.5-alpha.2` 基线上的主题库 `0.2.1` 实测确认了 registry 安装、后端重启、已安装包清单，以及**设置 → 通用设置**中的主题选择器。它的动态背景尚不兼容此桌面 host：插件通过 `webServer` 提供图片，但桌面组合禁用了该服务。图片请求收到的是前端 HTML 回退页面，而不是图片字节。因此安装成功不代表该版本的视觉效果可用。主题插件仅作为手动验证示例，不包含在分发 seed 中。
+内置 pnpm `11.23.0` 读取 `~/.npmrc` 或 `npm_config_userconfig` 指定的文件，支持 scope registry、认证、CA 证书以及 `strict-ssl=false`。`npm_config_registry` 和 `npm_config_strict_ssl` 可覆盖文件设置，不需要系统 npm。包管理器存储位于桌面数据目录中，TLS 放宽仅用于包操作。
 
-升级时若保留了用户额外安装的插件，会优先使用本地缓存，缺少依赖元数据时可能访问已配置的 registry。仅使用内置组件的安装仍可离线完成。
+## Data and upgrades
 
-插件事务按解析后的配置校验工作区策略，保留 pnpm 自动添加的 `minimumReleaseAgeExclude` 条目并允许 YAML 格式变化。核心依赖 overrides 和构建权限仍受保护。
+默认数据目录为 `~/.dsh-desktop`，支持显式 `DSH_HOME`。Electron 数据位于 `electron-user-data`，插件文件位于 `profiles/desktop`，包管理器状态位于 `desktop/pnpm`。遥测默认关闭。升级时替换完整应用；本分发不自动更新，也不发布 npm 包。
 
-## npm registry 与 TLS 配置
+插件模板升级会在 `desktop/migration-backups` 保留备份，保留 Teams 与插件启用状态，并将两个内置插件更新到本次固定版本。额外安装的插件保留版本，迁移时可能需要访问配置的 registry。准备失败会恢复原 profile。备份可能含个人配置，应仅在本地管理；迁移不会删除会话与工作区。
 
-桌面端把用户配置文件交给内置 pnpm。默认读取 `~/.npmrc`，Windows 为 `%USERPROFILE%\.npmrc`；`NPM_CONFIG_USERCONFIG` / `npm_config_userconfig` 可以指定其他文件。npm 配置环境变量覆盖文件值，同时存在大小写形式时小写优先。整个过程不调用系统 npm。配置文件只读取，不修改，也不打包到应用中。
+## Build and release
 
-用户 `.npmrc` 示例：
-
-```ini
-registry=https://nexus.example/repository/npm-group/
-strict-ssl=false
-@company:registry=https://nexus.example/repository/npm-private/
-```
-
-`strict-ssl=false` 仅关闭包管理请求的证书校验。有公司 CA 时优先使用 `cafile=/absolute/path/company-ca.pem` 并保持校验开启。认证与 scoped registry 使用 pnpm 的 npmrc 处理逻辑，凭据保存在使用者本地配置。Finder 双击启动建议使用文件配置，因为应用不一定继承终端 export 的变量。
-
-桌面端仍独立管理 store、项目布局与安装事务。不会导入用户代码工作区里的项目 `.npmrc`，因为插件操作在桌面 profile 中执行。未覆盖 registry 时使用 pnpm 的公网默认值。模型 API、ACP 子进程及桌面 Web 请求不继承 npm 的 `strict-ssl`。构建时准备 seed 也读取相同的 npm 配置，但 Electron 和 Node.js 二进制下载使用各自的下载机制。
-
-本地凭据和运行状态不进入 Git：用户 `.npmrc`、`.env` 变体、签名 `.p12`/`.pfx` 文件、桌面 profile、Plugin Hub 状态、缓存及诊断日志。构建产物和应用 ZIP 留在已忽略的 `.artifacts/` 或 `.desktop-build/` 目录，ZIP 通过 Release 附件分发。已提交的 HTTPS 测试私钥仅为 localhost 测试夹具，不进入桌面应用资源。
-
-## 构建与发布
-
-在对应平台的原生系统中，从 `desktop` 分支构建，构建机需要安装仓库要求的 Node 与 pnpm：
+在对应操作系统上使用仓库锁定依赖构建：
 
 ```sh
+
 pnpm install --frozen-lockfile
-# macOS Apple Silicon
+
 pnpm --dir apps/desktop run package:portable:mac:arm64
-# Windows x64
-pnpm --dir apps/desktop run package:portable:win:x64
+
 ```
 
-输出 ZIP 位于 `apps/desktop/.desktop-build/targets/<mac-arm64|win-x64>/artifacts`。本地构建默认桌面版本为 `0.1.5-rc.2.4`，设置 `DSH_DESKTOP_DISTRIBUTION_VERSION` 可以选择其他正整数构建序号。DSH 与适配器依赖始终保留精确基线版本。seed 准备阶段校验适配器 npm 包的完整性。seed 包含依赖字节、锁文件、本地核心包、许可证和完整性清单；打包前会验证离线安装。
+Windows 命令为 `pnpm --dir apps/desktop run package:portable:win:x64`。GitHub Actions 执行两平台构建及成品离线启动测试。测试除核心启动外，还检查成品中的插件依赖、Host 和 Remote RPC 元数据注册，以及实际 ACP 和 Plugin Hub 请求。构建产物、诊断、个人 profile、签名材料和 npm 凭证不进入 Git 历史。Tag `0.1.6.alpha.1.1` 对应应用内部合法 SemVer `0.1.6-alpha.1.1`；核心包版本保持 `0.1.6-alpha.1`。
 
-先推送分支，再对已检查的提交打 tag：
+## Dev Note
 
-```sh
-git switch desktop
-git push -u origin desktop
-git tag 0.1.5-rc.2.4
-git push origin 0.1.5-rc.2.4
-```
-
-`Desktop portable` 工作流验证 tag 提交属于 `origin/desktop`，分别构建 macOS arm64 与 Windows x64，运行打包后端的离线冒烟检查，并把两个 ZIP 和 `SHA256SUMS.txt` 附到 GitHub prerelease。后续桌面修订依次使用 `.2`、`.3`。该工作流不发布 npm 包。分支推送和手动触发工作流仅上传 Actions artifacts。工作流成功完成前，tag 本身不包含应用二进制。
-
-portable 命令不使用 Developer ID、Apple 公证、Windows EV Token 或上游 COS 更新服务。原有签名打包命令仍供另行配置的部署使用，要求见[上游打包决策](../../.agents/notes/implemented/architecture/2026-08-25-electron-desktop-packaging-and-updates.zh.md)。
-
-## 验证
-
-定向测试覆盖真实 npmrc registry/TLS 请求、环境变量优先级、独立数据目录、构建序号、插件事务和目标选择。`pnpm exec tsx apps/desktop/scripts/smoke-portable.ts mac-arm64`（或 `win-x64`）使用全新的临时数据目录与不可达 registry 启动打包后端，检查前端资源并验证已安装适配器的精确版本。它不测试真实模型或 ACP agent。[fork 分发决策](../../.agents/notes/implemented/architecture/2026-09-10-desktop-portable-distribution.zh.md)记录了取舍。
-
-诊断时可以在该冒烟命令后追加应用 ZIP 路径，或在 Actions 中运行 **Desktop portable smoke replay**，填写原构建的 run ID 与平台。ZIP 会解压到临时目录。失败构建会保留已完成的 ZIP 用于诊断，分发前仍须确认完整构建与冒烟检查通过。重跑使用所选源码版本的测试驱动和下载应用中的资源，因此产品改动仍需重新完整构建后才能交付。
+参阅[便携分发决策](../../.agents/notes/implemented/architecture/2026-09-10-desktop-portable-distribution.zh.md)和[实验功能接口](../../.agents/notes/implemented/architecture/2026-09-13-desktop-experiment-bridge.zh.md)。运行时与用户插件依赖图保持分离，渲染器不启用 Node 集成。

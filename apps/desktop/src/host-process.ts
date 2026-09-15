@@ -1,4 +1,4 @@
-/** Upstream-Node child lifecycle and streaming custom-protocol carrier. */
+/** Node-compatible child lifecycle and streaming custom-protocol carrier. */
 
 import { spawn, type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
@@ -68,7 +68,7 @@ export interface DesktopHostReady {
   readonly dshVersion: string
 }
 
-/** One dsh backend running under the bundled upstream Node.js executable. */
+/** One dsh backend running under an owned Node-compatible executable. */
 export class DesktopHostProcess {
   private child: ChildProcess | undefined
   private requestPipe: Writable | undefined
@@ -88,32 +88,45 @@ export class DesktopHostProcess {
   private stderr = ''
   private idleRestartSupported = false
   private restartCheck: { resolve: (allowed: boolean) => void; reject: (error: Error) => void } | undefined
+  private failureReported = false
+  private stopping = false
 
   /**
-   * @param node - absolute bundled upstream Node.js executable.
-   * @param projectDir - active or staged desktop npm project.
+   * @param executable - absolute upstream Node.js or Electron executable.
+   * @param runtimeDir - immutable packages carried by the current application.
+   * @param projectDir - active or staged desktop plugin profile.
    * @param inspectPort - optional loopback inspector port for workspace development.
+   * @param environment - Child environment; runtime and package-manager overrides are removed.
+   * @param onFailure - Receives the first unexpected child or transport failure, including after readiness.
+   * Intentional shutdown does not notify it.
    */
   constructor(
-    private readonly node: string,
+    private readonly executable: string,
+    private readonly runtimeDir: string,
     private readonly projectDir: string,
     private readonly inspectPort?: number,
+    private readonly environment: NodeJS.ProcessEnv = process.env,
+    private readonly onFailure?: (error: Error) => void,
   ) {}
 
   /** Start the child once and resolve only after its complete composition is active. */
   async start(): Promise<DesktopHostReady> {
     if (this.child !== undefined) return this.readyPromise
-    const entry = join(this.projectDir, 'node_modules', '@deepseek-ai', 'dsh-desktop-host', 'lib', 'index.js')
-    const child = spawn(this.node, [
+    const entry = join(this.runtimeDir, 'node_modules', '@deepseek-ai', 'dsh-desktop-host', 'lib', 'index.js')
+    const child = spawn(this.executable, [
       ...(this.inspectPort === undefined ? [] : [`--inspect=127.0.0.1:${String(this.inspectPort)}`]),
       entry,
+      this.runtimeDir,
       this.projectDir,
       ...(this.inspectPort === undefined ? [] : ['--allow-linked-profile']),
     ], {
       cwd: this.projectDir,
-      env: Object.fromEntries(Object.entries(process.env).filter(([name]) => (
-        name !== 'NODE_OPTIONS' && !/^DSH_DESKTOP_/u.test(name) && !/^(?:npm|pnpm|corepack)_/iu.test(name)
-      ))),
+      env: {
+        ...Object.fromEntries(Object.entries(this.environment).filter(([name]) => (
+          name !== 'NODE_OPTIONS' && name !== 'NODE_PATH' && !/^DSH_DESKTOP_/u.test(name)
+        ))),
+        ELECTRON_RUN_AS_NODE: '1',
+      },
       stdio: ['ignore', 'pipe', 'pipe', 'pipe', 'pipe', 'ipc'],
     })
     const requestPipe = child.stdio[DESKTOP_REQUEST_PIPE_FD]
@@ -149,7 +162,7 @@ export class DesktopHostProcess {
     })
     child.once('error', (error) => { this.fail(error) })
     this.exitPromise = new Promise<void>((resolve) => {
-      child.once('exit', (code) => {
+      child.once('close', (code) => {
         const suffix = this.stderr.trim() === '' ? '' : `: ${this.stderr.trim()}`
         if (code !== 0 && code !== null) this.fail(new Error(`dsh desktop host exited with ${String(code)}${suffix}`))
         else this.fail(new Error(`dsh desktop host stopped${suffix}`))
@@ -222,6 +235,7 @@ export class DesktopHostProcess {
   async stop(): Promise<void> {
     const child = this.child
     if (child === undefined) return
+    this.stopping = true
     this.blockedResponses.clear()
     this.responsePipe?.resume()
     if (child.connected) this.send({ type: 'shutdown' })
@@ -294,7 +308,7 @@ export class DesktopHostProcess {
   private send(message: DesktopHostCommand): void {
     const child = this.child
     if (child === undefined || !child.connected) throw new Error('dsh desktop host IPC is unavailable')
-    child.send(message)
+    child.send(message, (error) => { if (error !== null) this.fail(error) })
   }
 
   private acceptResponseBytes(chunk: Buffer): void {
@@ -413,6 +427,7 @@ export class DesktopHostProcess {
         this.readyResolve(message)
         return
       case 'restart-check':
+        if (message.allowed && this.restartCheck !== undefined) this.stopping = true
         this.restartCheck?.resolve(message.allowed)
         return
       case 'fatal':
@@ -424,8 +439,14 @@ export class DesktopHostProcess {
   }
 
   private fail(error: Error): void {
-    this.readyReject(error)
     this.restartCheck?.reject(error)
+    this.readyReject(error)
+    if (!this.failureReported && !this.stopping) {
+      this.failureReported = true
+      try { this.onFailure?.(error) } catch (listenerError) {
+        console.error('desktop host failure listener failed', listenerError)
+      }
+    }
     for (const pending of this.pending.values()) {
       void pending.requestReader?.cancel(error).catch(() => undefined)
       if (pending.controller === undefined) pending.reject(error)
