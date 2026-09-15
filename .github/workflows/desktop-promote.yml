@@ -85,7 +85,7 @@ jobs:
                   release = json.loads(archive.read(metadata[0]))
                   assert release['version'] == '0.1.5-rc.2' and release['distributionVersion'] == tag
                   manifest = json.loads(archive.read(metadata[0].replace('desktop-release.json', 'package.json')))
-                  assert manifest['dependencies']['@zaimokuza/dsh-acp-adapter'] == '0.1.5-rc.2.3'
+                  assert manifest['dependencies']['@zaimokuza/dsh-acp-adapter'] == '0.1.5-rc.2.5'
                   assert manifest['dependencies']['@zaimokuza/dsh-plugin-hub'] == '0.2.1'
                   assert manifest['dsh']['desktop']['agentTeams'] is True
               print('Verified', name)

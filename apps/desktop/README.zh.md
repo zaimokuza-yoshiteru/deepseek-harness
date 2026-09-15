@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-本 fork 分发 Electron 应用，内置 DSH `0.1.5-rc.2`、`@zaimokuza/dsh-acp-adapter` `0.1.5-rc.2.3`、`@zaimokuza/dsh-plugin-hub` `0.2.1`、原版 Node.js `24.17.0`、pnpm `11.23.0` 和离线安装 seed。使用者无需单独安装 DSH、Node.js、npm 或 pnpm。ACP agent 可执行程序需要另外配置，不包含在应用中。
+本 fork 分发 Electron 应用，内置 DSH `0.1.5-rc.2`、`@zaimokuza/dsh-acp-adapter` `0.1.5-rc.2.5`、`@zaimokuza/dsh-plugin-hub` `0.2.1`、原版 Node.js `24.17.0`、pnpm `11.23.0` 和离线安装 seed。使用者无需单独安装 DSH、Node.js、npm 或 pnpm。ACP agent 可执行程序需要另外配置，不包含在应用中。
 
 ## 下载与打开
 
@@ -79,15 +79,15 @@ pnpm --dir apps/desktop run package:portable:mac:arm64
 pnpm --dir apps/desktop run package:portable:win:x64
 ```
 
-输出 ZIP 位于 `apps/desktop/.desktop-build/targets/<mac-arm64|win-x64>/artifacts`。本地构建默认桌面版本为 `0.1.5-rc.2.3`，设置 `DSH_DESKTOP_DISTRIBUTION_VERSION` 可以选择其他正整数构建序号。DSH 与适配器依赖始终保留精确基线版本。seed 准备阶段校验适配器 npm 包的完整性。seed 包含依赖字节、锁文件、本地核心包、许可证和完整性清单；打包前会验证离线安装。
+输出 ZIP 位于 `apps/desktop/.desktop-build/targets/<mac-arm64|win-x64>/artifacts`。本地构建默认桌面版本为 `0.1.5-rc.2.4`，设置 `DSH_DESKTOP_DISTRIBUTION_VERSION` 可以选择其他正整数构建序号。DSH 与适配器依赖始终保留精确基线版本。seed 准备阶段校验适配器 npm 包的完整性。seed 包含依赖字节、锁文件、本地核心包、许可证和完整性清单；打包前会验证离线安装。
 
 先推送分支，再对已检查的提交打 tag：
 
 ```sh
 git switch desktop
 git push -u origin desktop
-git tag 0.1.5-rc.2.3
-git push origin 0.1.5-rc.2.3
+git tag 0.1.5-rc.2.4
+git push origin 0.1.5-rc.2.4
 ```
 
 `Desktop portable` 工作流验证 tag 提交属于 `origin/desktop`，分别构建 macOS arm64 与 Windows x64，运行打包后端的离线冒烟检查，并把两个 ZIP 和 `SHA256SUMS.txt` 附到 GitHub prerelease。后续桌面修订依次使用 `.2`、`.3`。该工作流不发布 npm 包。分支推送和手动触发工作流仅上传 Actions artifacts。工作流成功完成前，tag 本身不包含应用二进制。

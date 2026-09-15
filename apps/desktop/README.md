@@ -2,7 +2,7 @@
 
 English | [中文](README.zh.md)
 
-This fork distributes an Electron application with DSH `0.1.5-rc.2`, `@zaimokuza/dsh-acp-adapter` `0.1.5-rc.2.3`, `@zaimokuza/dsh-plugin-hub` `0.2.1`, upstream Node.js `24.17.0`, pnpm `11.23.0`, and an offline installation seed. Users do not install DSH, Node.js, npm, or pnpm separately. ACP agent executables are configured separately; they are not included.
+This fork distributes an Electron application with DSH `0.1.5-rc.2`, `@zaimokuza/dsh-acp-adapter` `0.1.5-rc.2.5`, `@zaimokuza/dsh-plugin-hub` `0.2.1`, upstream Node.js `24.17.0`, pnpm `11.23.0`, and an offline installation seed. Users do not install DSH, Node.js, npm, or pnpm separately. ACP agent executables are configured separately; they are not included.
 
 ## Download and open
 
@@ -79,15 +79,15 @@ pnpm --dir apps/desktop run package:portable:mac:arm64
 pnpm --dir apps/desktop run package:portable:win:x64
 ```
 
-The output ZIP is under `apps/desktop/.desktop-build/targets/<mac-arm64|win-x64>/artifacts`. Local builds default to desktop version `0.1.5-rc.2.3`; set `DSH_DESKTOP_DISTRIBUTION_VERSION` to choose another positive build counter. DSH and adapter dependencies retain their exact base versions. The adapter's npm tarball integrity is checked during seed preparation. The seed includes dependency bytes, lockfile, local core packages, licenses, and an integrity inventory; packaging proves an offline installation before shipping it.
+The output ZIP is under `apps/desktop/.desktop-build/targets/<mac-arm64|win-x64>/artifacts`. Local builds default to desktop version `0.1.5-rc.2.4`; set `DSH_DESKTOP_DISTRIBUTION_VERSION` to choose another positive build counter. DSH and adapter dependencies retain their exact base versions. The adapter's npm tarball integrity is checked during seed preparation. The seed includes dependency bytes, lockfile, local core packages, licenses, and an integrity inventory; packaging proves an offline installation before shipping it.
 
 Push the branch before tagging a reviewed commit:
 
 ```sh
 git switch desktop
 git push -u origin desktop
-git tag 0.1.5-rc.2.3
-git push origin 0.1.5-rc.2.3
+git tag 0.1.5-rc.2.4
+git push origin 0.1.5-rc.2.4
 ```
 
 The `Desktop portable` workflow verifies that the tag commit is on `origin/desktop`, builds macOS arm64 and Windows x64 independently, runs the packaged offline-host smoke, and attaches both ZIPs and `SHA256SUMS.txt` to a prerelease. Subsequent desktop revisions use `.2`, `.3`, and so on. The workflow does not publish npm packages. Branch pushes and manual workflow runs only upload Actions artifacts. A tag by itself contains no binaries until the workflow completes successfully.
