@@ -4,7 +4,7 @@
 
 ## Summary
 
-本分支提供 macOS Apple Silicon 和 Windows x64 压缩包，内置 DSH `0.1.6-alpha.1`、ACP adapter `0.1.6-alpha.1.2` 和 Plugin Hub `0.2.3`。核心包含该版本发布后的上游启动优化。使用者无需另装 DSH、Node.js、npm 或 pnpm；Devin、Kimi 等 Agent 命令仍需自行安装。
+本分支提供 macOS Apple Silicon 和 Windows x64 压缩包，内置 DSH `0.1.6-alpha.1`、ACP adapter `0.1.6-alpha.1.3` 和 Plugin Hub `0.2.3`。核心包含该版本发布后的上游启动优化。使用者无需另装 DSH、Node.js、npm 或 pnpm；Devin、Kimi 等 Agent 命令仍需自行安装。
 
 ## Table of Contents
 
@@ -44,7 +44,7 @@ Shell 导入排除 `ELECTRON_*`、`DSH_DESKTOP_*`、`NODE_OPTIONS`、`NODE_PATH`
 
 默认数据目录为 `~/.dsh-desktop`，支持显式 `DSH_HOME`。Electron 数据位于 `electron-user-data`，插件文件位于 `profiles/desktop`，包管理器状态位于 `desktop/pnpm`。遥测默认关闭。升级时替换完整应用；本分发不自动更新，也不发布 npm 包。
 
-插件模板升级会在 `desktop/migration-backups` 保留备份，保留 Teams 与插件启用状态，并将两个内置插件更新到本次固定版本。额外安装的插件保留版本，迁移时可能需要访问配置的 registry。准备失败会恢复原 profile。备份可能含个人配置，应仅在本地管理；迁移不会删除会话与工作区。
+插件模板升级会在 `desktop/migration-backups` 保留备份，保留 Teams 与插件启用状态，并将两个内置插件更新到本次固定版本。额外安装的插件保留版本，迁移时可能需要访问配置的 registry。准备失败会恢复原 profile。旧核心包通过上一版清单及精确本地依赖路径识别和移除，包括新版不再包含的包。备份可能含个人配置，应仅在本地管理；迁移不会删除会话与工作区。
 
 ## Build and release
 
@@ -58,7 +58,7 @@ pnpm --dir apps/desktop run package:portable:mac:arm64
 
 ```
 
-Windows 命令为 `pnpm --dir apps/desktop run package:portable:win:x64`。GitHub Actions 执行两平台构建及成品离线启动测试。测试除核心启动外，还检查成品中的插件依赖、Host 和 Remote RPC 元数据注册，以及实际 ACP 和 Plugin Hub 请求。构建产物、诊断、个人 profile、签名材料和 npm 凭证不进入 Git 历史。Tag `0.1.6.alpha.1.1` 对应应用内部合法 SemVer `0.1.6-alpha.1.1`；核心包版本保持 `0.1.6-alpha.1`。
+Windows 命令为 `pnpm --dir apps/desktop run package:portable:win:x64`。GitHub Actions 执行两平台构建及成品离线启动测试。测试除核心启动外，还检查成品中的插件依赖、Host 和 Remote RPC 元数据注册，以及实际 ACP 和 Plugin Hub 请求。构建产物、诊断、个人 profile、签名材料和 npm 凭证不进入 Git 历史。Tag `0.1.6.alpha.1.2` 对应应用内部合法 SemVer `0.1.6-alpha.1.2`；核心包版本保持 `0.1.6-alpha.1`。
 
 ## Dev Note
 

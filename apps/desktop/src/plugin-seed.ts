@@ -2,6 +2,7 @@
 import { randomUUID } from 'node:crypto'
 import { cpSync, existsSync, lstatSync, unlinkSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { DESKTOP_PACKAGE_SET_FILE, desktopCorePackageSpec, readDesktopCorePackageSet } from './core-package-set.ts'
 import { DESKTOP_PORTABLE_PLUGINS } from './portable-plugins.ts'
 import { desktopProfileBundles, DESKTOP_AGENT_TEAM_BUNDLES } from './profile-defaults.ts'
 import type { DesktopRuntimeDescriptor } from './runtime-tree.ts'
@@ -37,6 +38,12 @@ export async function applyPluginSeed(
   const old = existsSync(manifestPath) ? JSON.parse(readFileSync(manifestPath, 'utf8')) as ProfileManifest : undefined
   const bundled = new Set<string>(DESKTOP_PORTABLE_PLUGINS.map(plugin => plugin.name))
   const core = new Set(runtime.sharedPackages.map(entry => entry.name))
+  if (existsSync(join(profile, DESKTOP_PACKAGE_SET_FILE))) {
+    for (const entry of readDesktopCorePackageSet(profile).packages) {
+      // Retired core packages remain desktop-owned only at their recorded local spec.
+      if (old?.dependencies?.[entry.name] === desktopCorePackageSpec(entry)) core.add(entry.name)
+    }
+  }
   const extras = Object.fromEntries(Object.entries(old?.dependencies ?? {}).filter(([name]) => !core.has(name) && !bundled.has(name)))
   const previousBundles = old?.dsh?.profile?.bundles ?? []
   const teams = old === undefined ? true : old.dsh?.desktop?.agentTeams ?? previousBundles.includes(DESKTOP_AGENT_TEAM_BUNDLES[0])

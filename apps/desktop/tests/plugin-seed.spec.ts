@@ -69,3 +69,22 @@ it('discards build-machine pnpm state while keeping prebuilt dependency files', 
   expect(readdirSync(join(f.profile, 'node_modules'))).toEqual(['example'])
   expect(readFileSync(join(f.profile, 'node_modules', 'example', 'index.js'), 'utf8')).toBe('export default 1')
 })
+
+it('removes retired release-owned tarballs without an offline install, preserving explicitly installed plugins', async () => {
+  const f = fixture()
+  const names = ['@deepseek-ai/dsh', '@deepseek-ai/dsh-desktop-host', '@deepseek-ai/dsh-code-runtime', '@deepseek-ai/dsh-workflow-worker-thread'].sort((a, b) => a.localeCompare(b))
+  const packages = names.map(name => ({ name, version: '0.1.5-rc.2', file: `${name.replace('@deepseek-ai/', '')}.tgz`, bytes: 1, integrity: 'sha512-AA==' }))
+  writeFileSync(join(f.profile, 'desktop-packages.json'), JSON.stringify({ schemaVersion: 1, packages }))
+  const dependencies = Object.fromEntries(packages.map(p => [p.name, `file:./desktop-packages/${p.file}`]))
+  writeFileSync(join(f.profile, 'package.json'), JSON.stringify({ dependencies }))
+  await applyPluginSeed(f.profile, f.seed, f.backup, f.runtime, async (install) => { expect(install).toBe(false) })
+  const migrated = JSON.parse(readFileSync(join(f.profile, 'package.json'), 'utf8')) as { dependencies: Record<string, string> }
+  expect(Object.keys(migrated.dependencies)).toEqual(DESKTOP_PORTABLE_PLUGINS.map(p => p.name))
+
+  // A registry version explicitly selected by the user is not the old local core tarball.
+  writeFileSync(join(f.profile, 'desktop-packages.json'), JSON.stringify({ schemaVersion: 1, packages }))
+  writeFileSync(join(f.profile, 'package.json'), JSON.stringify({ dependencies: { '@deepseek-ai/dsh-code-runtime': '0.1.5-rc.2' } }))
+  await applyPluginSeed(f.profile, f.seed, f.backup, f.runtime, async (install) => { expect(install).toBe(true) })
+  const preserved = JSON.parse(readFileSync(join(f.profile, 'package.json'), 'utf8')) as { dependencies: Record<string, string> }
+  expect(preserved.dependencies['@deepseek-ai/dsh-code-runtime']).toBe('0.1.5-rc.2')
+})

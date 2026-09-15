@@ -4,7 +4,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
 import { Writable } from 'node:stream'
 import { subscribe, unsubscribe } from 'node:diagnostics_channel'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import extractZip from '@electron-internal/extract-zip'
@@ -195,6 +195,30 @@ try {
   await host!.stop()
   host = undefined
   assert.deepEqual(failedChildren, [], 'All package and backend processes must exit cleanly')
+  progress('migrating retired core tarball references offline')
+  const legacyHome = join(home, 'legacy-upgrade')
+  const legacyPaths = resolveDesktopPaths(legacyHome)
+  mkdirSync(legacyPaths.profile, { recursive: true })
+  const retiredNames = ['@deepseek-ai/dsh-code-runtime', '@deepseek-ai/dsh-code-runtime-worker-thread', '@deepseek-ai/dsh-workflow-worker-thread']
+  const legacyNames = ['@deepseek-ai/dsh', '@deepseek-ai/dsh-desktop-host', ...retiredNames].sort((a, b) => a.localeCompare(b))
+  const packages = legacyNames.map(name => ({ name, version: '0.1.5-rc.2',
+    file: `${name.replace('@deepseek-ai/', '')}-0.1.5-rc.2.tgz`, bytes: 0, integrity: 'sha512-AA==' }))
+  writeFileSync(join(legacyPaths.profile, 'desktop-packages.json'), JSON.stringify({ schemaVersion: 1, packages }))
+  writeFileSync(join(legacyPaths.profile, 'package.json'), JSON.stringify({
+    name: '@deepseek-ai/dsh-desktop-runtime', private: true, version: '0.0.0',
+    dependencies: { ...Object.fromEntries(packages.map(entry => [entry.name, `file:./desktop-packages/${entry.file}`])),
+      '@zaimokuza/dsh-acp-adapter': '0.1.5-rc.2.5', '@zaimokuza/dsh-plugin-hub': '0.2.1' },
+    dsh: { desktop: { agentTeams: false }, profile: { bundles: [
+      '@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', ...DESKTOP_PORTABLE_PLUGINS.map(plugin => plugin.name),
+    ] } },
+  }))
+  const upgrade = new DesktopProjectManager(legacyPaths, runtime)
+  assert.equal(await upgrade.applyRelease(), true)
+  assert.equal(upgrade.agentTeamsEnabled(), false)
+  const migrated = JSON.parse(readFileSync(join(legacyPaths.profile, 'package.json'), 'utf8')) as { dependencies: Record<string, string> }
+  assert.deepEqual(migrated.dependencies, Object.fromEntries(DESKTOP_PORTABLE_PLUGINS.map(plugin => [plugin.name, plugin.version])))
+  assert.equal(await upgrade.applyRelease(), false)
+  console.log('Packaged legacy profile migration: retired tarballs removed offline; disabled Teams preserved')
   unsubscribe('child_process', childDiagnostic)
   for (const truncated of [false, true]) {
     progress(`checking request-pipe EOF before IPC shutdown (truncated=${String(truncated)})`)
