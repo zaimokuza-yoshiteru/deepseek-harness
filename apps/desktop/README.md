@@ -4,7 +4,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-This fork ships macOS Apple Silicon and Windows x64 ZIPs with DSH `0.1.6-alpha.1`, ACP adapter `0.1.6-alpha.1.3`, and Plugin Hub `0.2.3`. The core includes upstream startup optimizations after that release. Recipients do not install DSH, Node.js, npm, or pnpm separately. Agent executables such as Devin and Kimi remain external.
+This fork ships macOS Apple Silicon and Windows x64 ZIPs with DSH `0.1.6-alpha.1`, ACP adapter `0.1.6-alpha.1.4`, Plugin Hub `0.2.3`, and Agent Teams Office `0.1.0-beta.1`. The core includes upstream startup optimizations after that release. Recipients do not install DSH, Node.js, npm, or pnpm separately. Agent executables such as Devin and Kimi remain external.
 
 ## Table of Contents
 
@@ -32,6 +32,8 @@ Open **Desktop Plugins…** from the application menu, or press `Cmd+,` on macOS
 
 Agent Teams is enabled for a new profile. Use Plugin Hub’s experimental features page to turn it off or on. Both official Teams layers change together; their dependencies remain bundled, so switching requires no download or installation. The desktop refuses switching while agents or API requests are active, then restarts the backend before acknowledging a successful change.
 
+Bundled Office appears in the right sidebar of a team conversation and offers 3D and pixel views. It requires WebGL, displays up to 16 teammates and one lead, and hides its entry while Teams is disabled. Rendering libraries and license notices ship with the plugin; reopening Teams requires no Office download. Office can also be disabled independently in the plugin manager.
+
 ## Environment and registry
 
 On macOS, each launch runs the user’s `$SHELL` (default `/bin/zsh`) with `-ilc`. The shell itself loads login and interactive startup files, including `.zprofile` and `.zshrc` for zsh. Only exported variables are imported; aliases and shell functions are not executables. The operation has an eight-second deadline and reports a startup error on failure. Windows inherits its launch environment directly.
@@ -44,7 +46,7 @@ The bundled pnpm `11.23.0` reads `~/.npmrc`, or the file selected by `npm_config
 
 The default data home is `~/.dsh-desktop`; explicit `DSH_HOME` is respected. Electron data is under `electron-user-data`, plugin files under `profiles/desktop`, and package-manager state under `desktop/pnpm`. Telemetry defaults to disabled. Replace the complete application to upgrade; this distribution does not automatically update or publish npm packages.
 
-Plugin-template upgrades retain a backup under `desktop/migration-backups`, preserve Teams and plugin activation choices, and pin the two bundled plugins to this release. Additional user plugins keep their versions and may require the configured registry during migration. Preparation failure restores the previous profile. Retired core tarballs are removed using the previous release inventory and exact local dependency specifications, even when the new runtime no longer includes those packages. Keep migration backups locally; they can contain personal configuration. Sessions and workspaces are not deleted by this migration.
+Plugin-template upgrades retain a backup under `desktop/migration-backups`, preserve Teams and plugin activation choices, and pin the three bundled plugins to this release. Additional user plugins keep their versions and may require the configured registry during migration. Preparation failure restores the previous profile. Retired core tarballs are removed using the previous release inventory and exact local dependency specifications, even when the new runtime no longer includes those packages. Keep migration backups locally; they can contain personal configuration. Sessions and workspaces are not deleted by this migration.
 
 ## Build and release
 
@@ -58,7 +60,7 @@ pnpm --dir apps/desktop run package:portable:mac:arm64
 
 ```
 
-The Windows command is `pnpm --dir apps/desktop run package:portable:win:x64`. GitHub Actions owns both platform builds and packaged offline smoke tests. These tests verify the packaged plugin dependencies, Host and Remote RPC metadata registration, and actual ACP and Plugin Hub requests in addition to core startup. Build outputs, diagnostics, local profiles, signing materials, and npm credentials stay outside Git history. The tag `0.1.6.alpha.1.2` maps to the application’s valid SemVer `0.1.6-alpha.1.2`; core packages keep version `0.1.6-alpha.1`.
+The Windows command is `pnpm --dir apps/desktop run package:portable:win:x64`. GitHub Actions owns both platform builds and packaged offline smoke tests. These tests verify the packaged plugin dependencies, Host and Remote RPC metadata registration, and actual ACP and Plugin Hub requests in addition to core startup. Build outputs, diagnostics, local profiles, signing materials, and npm credentials stay outside Git history. The tag `0.1.6.alpha.1.3` maps to the application’s valid SemVer `0.1.6-alpha.1.3`; core packages keep version `0.1.6-alpha.1`.
 
 ## Dev Note
 

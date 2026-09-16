@@ -18,7 +18,7 @@ function fixture() {
   const runtime = runtimeFixture(join(root, 'runtime'), '0.1.6-alpha.1')
   return { root, profile, seed, backup, runtime }
 }
-it('initializes offline with Teams and both bundled plugins, retaining the held lock', async () => {
+it('initializes offline with Teams and all bundled plugins, retaining the held lock', async () => {
   const f = fixture()
   await applyPluginSeed(f.profile, f.seed, f.backup, f.runtime, async (install) => { expect(install).toBe(false) })
   const manifest = JSON.parse(readFileSync(join(f.profile, 'package.json'), 'utf8')) as {
@@ -27,6 +27,7 @@ it('initializes offline with Teams and both bundled plugins, retaining the held 
   }
   expect(manifest.dsh.desktop.agentTeams).toBe(true)
   expect(manifest.dsh.profile.bundles).toContain('@zaimokuza/dsh-plugin-hub')
+  expect(manifest.dsh.profile.bundles).toContain('@zaimokuza/dsh-agent-teams-office')
   expect(readFileSync(join(f.profile, 'lock'), 'utf8')).toBe('owned')
   expect(needsPluginSeed(f.profile, f.seed)).toBe(false)
 })
@@ -45,6 +46,7 @@ it('migrates an old profile without losing disabled Teams, plugin activation or 
   expect(manifest.dsh.desktop.agentTeams).toBe(false)
   expect(manifest.dsh.profile.bundles).not.toContain('@zaimokuza/dsh-plugin-hub')
   expect(manifest.dsh.profile.bundles).toContain('user-plugin')
+  expect(manifest.dsh.profile.bundles).toContain('@zaimokuza/dsh-agent-teams-office')
   expect(readFileSync(join(f.profile, 'cordis.yml'), 'utf8')).toBe('user-settings')
   expect(JSON.parse(readFileSync(join(f.backup, readdirSync(f.backup)[0]!, 'package.json'), 'utf8'))).toEqual(old)
 })

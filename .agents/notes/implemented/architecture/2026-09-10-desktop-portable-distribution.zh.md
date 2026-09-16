@@ -10,15 +10,17 @@ Status: implemented
 
 ## Decision
 
-`desktop` 分支提供 macOS arm64 与 Windows x64 ZIP，内置预构建的生产核心、原版 Node.js、pnpm 和两个固定版本插件。后端通过 Electron 的 Node 模式从 ASAR 执行，包操作使用独立的原版 Node 可执行程序。迁移通过上一版清单识别已移除的核心包，仅当依赖仍指向清单记录的本地压缩包时才按旧核心处理。应用启动时不安装核心依赖；准备期间先显示启动页，同一个后端负责就绪检查和应用请求。
+`desktop` 分支提供 macOS arm64 与 Windows x64 ZIP，内置预构建的生产核心、原版 Node.js、pnpm 和三个固定版本插件。后端通过 Electron 的 Node 模式从 ASAR 执行，包操作使用独立的原版 Node 可执行程序。迁移通过上一版清单识别已移除的核心包，仅当依赖仍指向清单记录的本地压缩包时才按旧核心处理。应用启动时不安装核心依赖；准备期间先显示启动页，同一个后端负责就绪检查和应用请求。
 
-核心包含 DSH `0.1.6-alpha.1` 及随后上游的启动优化。ACP adapter `0.1.6-alpha.1.3` 与 Plugin Hub `0.2.3` 预构建为独立的可写 profile 模板，通过锁文件验证 npm 完整性。指定的 GitHub tag `0.1.6.alpha.1.2` 映射为内部 SemVer `0.1.6-alpha.1.2`，依赖版本与桌面构建序号分离。
+核心包含 DSH `0.1.6-alpha.1` 及随后上游的启动优化。ACP adapter `0.1.6-alpha.1.4`、Plugin Hub `0.2.3` 与 Agent Teams Office `0.1.0-beta.1` 预构建为独立的可写 profile 模板，通过锁文件验证 npm 完整性。指定的 GitHub tag `0.1.6.alpha.1.3` 映射为内部 SemVer `0.1.6-alpha.1.3`，依赖版本与桌面构建序号分离。
 
 首次启动复制已准备好的插件模板，不调用 pnpm。模板升级先将原 profile 移入私有迁移备份，保留用户配置及启用状态，再验证新依赖图；准备失败时恢复原文件。内置插件版本跟随应用发布，额外用户插件保留精确版本，迁移时可能需要访问 registry。
 
 内置 pnpm 与仓库工具统一使用 `11.23.0`。包操作读取用户 npmrc 及 npm 环境覆盖值，包括 scope registry 凭证与 TLS 配置，不将个人配置复制到发布资源中；包存储仍由应用独立管理。macOS 导入登录交互 shell 的导出变量，具体排除项及超时由[桌面 README](../../../../apps/desktop/README.zh.md#environment-and-registry)定义。Windows 继承启动环境。
 
 本分支默认使用独立桌面数据目录，支持显式主目录与遥测设置，默认关闭遥测及自动更新。原生编辑菜单恢复标准快捷键，HTTP/HTTPS 链接由外部浏览器打开，并在右键菜单显示地址。两个 Teams bundle 始终保留在核心中，其注册由 [Hub 接口](2026-09-13-desktop-experiment-bridge.zh.md)控制。
+
+Office 使用现有 Team 服务和 Connection 通信，不新增独立服务器。预构建渲染器及第三方许可声明保留在插件模板中。关闭 Teams 时 Office 仍可保持安装；成品检查覆盖其启用与禁用状态的响应。
 
 ## Alternatives considered
 

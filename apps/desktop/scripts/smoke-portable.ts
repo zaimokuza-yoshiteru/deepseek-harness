@@ -92,6 +92,16 @@ function progress(next: string): void {
   timeout.refresh()
   console.log(`Packaged smoke: ${stage}`)
 }
+async function assertOfficeState(expected: 'unselected' | 'disabled'): Promise<void> {
+  const response = await host!.fetch(new Request('dsh-app://app/api/dshOffice/snapshot', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ type: 'client-request', rpcId: 'office-smoke', method: 'dshOffice/snapshot', payload: { sessionId: null } }),
+  }))
+  assert.equal(response.status, 200)
+  const result = await response.json() as { result: { ok: boolean; value?: { state: string } } }
+  assert.equal(result.result.ok, true, JSON.stringify(result))
+  assert.equal(result.result.value?.state, expected)
+}
 // Bound each phase separately: cold-store installation and both offline mutations
 // each do real filesystem work (Windows cold preparation previously measured 154s).
 const timeout = setTimeout(() => {
@@ -105,6 +115,9 @@ try {
   for (const plugin of DESKTOP_PORTABLE_PLUGINS) {
     assert.ok(existsSync(join(runtime.pluginSeed, 'node_modules', plugin.name, 'package.json')),
       `Packaged seed is missing ${plugin.name}; include plugin-seed/node_modules explicitly`)
+  }
+  for (const file of ['LICENSE', 'THIRD_PARTY_NOTICES.md', 'vendor/munder/LICENSE', 'vendor/the-office/LICENSE', 'vendor/three/LICENSE', 'lib/THIRD_PARTY_LICENSES.txt']) {
+    assert.ok(existsSync(join(runtime.pluginSeed, 'node_modules', '@zaimokuza/dsh-agent-teams-office', file)), `Missing Office notice ${file}`)
   }
   const firstStart = performance.now()
   await manager.applyRelease()
@@ -148,7 +161,10 @@ try {
   const acpResult = await acpRpc.json() as { result: { ok: boolean; value?: { providers: unknown[] } } }
   assert.equal(acpResult.result.ok, true, JSON.stringify(acpResult))
   assert.ok(Array.isArray(acpResult.result.value?.providers), 'ACP health must execute successfully')
-  assert.deepEqual(manager.listPlugins(), DESKTOP_PORTABLE_PLUGINS.map(({ name, version }) => ({ name, version, enabled: true })))
+  await assertOfficeState('unselected')
+  assert.deepEqual(manager.listPlugins(),
+    DESKTOP_PORTABLE_PLUGINS.map(({ name, version }) => ({ name, version, enabled: true })).sort((a, b) => a.name.localeCompare(b.name)),
+  )
   await host.stop()
   host = undefined
   const warmStart = performance.now()
@@ -190,7 +206,10 @@ try {
     const graph = JSON.parse(html.match(/<script>globalThis\["__DSH_BOOT__"\] = (.*?)<\/script>/u)![1]!) as { entries: { id: string }[] }
     assert.equal(graph.entries.some(entry => entry.id === '@deepseek-ai/dsh-experimental-client-ui-agent-team'), enabled)
     assert.equal(graph.entries.some(entry => entry.id === '@zaimokuza/dsh-plugin-hub'), true)
-    assert.deepEqual(manager.listPlugins(), DESKTOP_PORTABLE_PLUGINS.map(({ name, version }) => ({ name, version, enabled: true })))
+    await assertOfficeState(enabled ? 'unselected' : 'disabled')
+    assert.deepEqual(manager.listPlugins(),
+      DESKTOP_PORTABLE_PLUGINS.map(({ name, version }) => ({ name, version, enabled: true })).sort((a, b) => a.name.localeCompare(b.name)),
+    )
   }
   await host!.stop()
   host = undefined
@@ -253,7 +272,7 @@ try {
       children.delete(child)
     }
   }
-  console.log('Packaged offline install, host boot, frontend assets, Agent Teams, ACP adapter and Plugin Hub: passed')
+  console.log('Packaged offline install, host boot, frontend assets, Agent Teams, ACP adapter, Plugin Hub and Office: passed')
 } finally {
   await host?.stop()
   clearTimeout(timeout)

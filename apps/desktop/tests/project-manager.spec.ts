@@ -140,7 +140,9 @@ describe('desktop external plugin profile', () => {
     writeFileSync(join(portable.paths.profile, 'cordis.patch.yml'), 'broken user configuration')
     await portable.resetConfiguration(hooks())
     expect(portable.agentTeamsEnabled()).toBe(true)
-    expect(portable.listPlugins()).toEqual(DESKTOP_PORTABLE_PLUGINS.map(({ name, version }) => ({ name, version, enabled: true })))
+    expect(portable.listPlugins()).toEqual(
+      DESKTOP_PORTABLE_PLUGINS.map(({ name, version }) => ({ name, version, enabled: true })).sort((a, b) => a.name.localeCompare(b.name)),
+    )
     expect(existsSync(join(portable.paths.profile, 'cordis.patch.yml'))).toBe(false)
     expect(calls(root)).toEqual([])
     await expect(portable.applyRelease()).resolves.toBe(false)
