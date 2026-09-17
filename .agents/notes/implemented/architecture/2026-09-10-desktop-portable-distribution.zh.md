@@ -12,7 +12,7 @@ Status: implemented
 
 `desktop` 分支提供 macOS arm64 与 Windows x64 ZIP，内置预构建的生产核心、原版 Node.js、pnpm 和三个固定版本插件。后端通过 Electron 的 Node 模式从 ASAR 执行，包操作使用独立的原版 Node 可执行程序。迁移通过上一版清单识别已移除的核心包，仅当依赖仍指向清单记录的本地压缩包时才按旧核心处理。应用启动时不安装核心依赖；准备期间先显示启动页，同一个后端负责就绪检查和应用请求。
 
-核心包含 DSH `0.1.6-alpha.1` 及随后上游的启动优化。ACP adapter `0.1.6-alpha.1.5`、Plugin Hub `0.2.3` 与 Agent Teams Office `0.1.0-beta.1` 预构建为独立的可写 profile 模板，通过锁文件验证 npm 完整性。指定的 GitHub tag `0.1.6.alpha.1.4` 映射为内部 SemVer `0.1.6-alpha.1.4`，依赖版本与桌面构建序号分离。
+核心包含 DSH `0.1.6-alpha.1` 及随后上游的启动优化。ACP adapter `0.1.6-alpha.1.6`、Plugin Hub `0.2.3` 与 Agent Teams Office `0.1.0-beta.1` 预构建为独立的可写 profile 模板，通过锁文件验证 npm 完整性。指定的 GitHub tag `0.1.6.alpha.1.5` 映射为内部 SemVer `0.1.6-alpha.1.5`，依赖版本与桌面构建序号分离。
 
 首次启动复制已准备好的插件模板，不调用 pnpm。模板升级先将原 profile 移入私有迁移备份，保留用户配置及启用状态，再验证新依赖图；准备失败时恢复原文件。内置插件版本跟随应用发布，额外用户插件保留精确版本，迁移时可能需要访问 registry。
 

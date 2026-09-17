@@ -3,7 +3,7 @@ import { resolveDesktopTargetBuildPaths } from './scripts/desktop-build-paths.mj
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const tag = process.env.DSH_DESKTOP_DISTRIBUTION_VERSION ?? '0.1.6.alpha.1.4'
+const tag = process.env.DSH_DESKTOP_DISTRIBUTION_VERSION ?? '0.1.6.alpha.1.5'
 const version = tag.replace('0.1.6.alpha.', '0.1.6-alpha.')
 if (!/^0\.1\.6-alpha\.1\.[1-9][0-9]*$/u.test(version)) {
   throw new Error('desktop portable: expected distribution version 0.1.6.alpha.1.<positive integer>')

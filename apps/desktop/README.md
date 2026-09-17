@@ -4,7 +4,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-This fork ships macOS Apple Silicon and Windows x64 ZIPs with DSH `0.1.6-alpha.1`, ACP adapter `0.1.6-alpha.1.5`, Plugin Hub `0.2.3`, and Agent Teams Office `0.1.0-beta.1`. The core includes upstream startup optimizations after that release. Recipients do not install DSH, Node.js, npm, or pnpm separately. Agent executables such as Devin and Kimi remain external.
+This fork ships macOS Apple Silicon and Windows x64 ZIPs with DSH `0.1.6-alpha.1`, ACP adapter `0.1.6-alpha.1.6`, Plugin Hub `0.2.3`, and Agent Teams Office `0.1.0-beta.1`. The core includes upstream startup optimizations after that release. Recipients do not install DSH, Node.js, npm, or pnpm separately. Agent executables such as Devin and Kimi remain external.
 
 ## Table of Contents
 
@@ -60,7 +60,7 @@ pnpm --dir apps/desktop run package:portable:mac:arm64
 
 ```
 
-The Windows command is `pnpm --dir apps/desktop run package:portable:win:x64`. GitHub Actions owns both platform builds and packaged offline smoke tests. These tests verify the packaged plugin dependencies, Host and Remote RPC metadata registration, and actual ACP and Plugin Hub requests in addition to core startup. Build outputs, diagnostics, local profiles, signing materials, and npm credentials stay outside Git history. The tag `0.1.6.alpha.1.4` maps to the application’s valid SemVer `0.1.6-alpha.1.4`; core packages keep version `0.1.6-alpha.1`.
+The Windows command is `pnpm --dir apps/desktop run package:portable:win:x64`. GitHub Actions owns both platform builds and packaged offline smoke tests. These tests verify the packaged plugin dependencies, Host and Remote RPC metadata registration, and actual ACP and Plugin Hub requests in addition to core startup. Build outputs, diagnostics, local profiles, signing materials, and npm credentials stay outside Git history. The tag `0.1.6.alpha.1.5` maps to the application’s valid SemVer `0.1.6-alpha.1.5`; core packages keep version `0.1.6-alpha.1`.
 
 ## Dev Note
 
