@@ -4,7 +4,7 @@
 
 ## Summary
 
-本分支提供 macOS Apple Silicon 和 Windows x64 压缩包，内置 DSH `0.1.6-alpha.1`、ACP adapter `0.1.6-alpha.1.4`、Plugin Hub `0.2.3` 和 Agent Teams Office `0.1.0-beta.1`。核心包含该版本发布后的上游启动优化。使用者无需另装 DSH、Node.js、npm 或 pnpm；Devin、Kimi 等 Agent 命令仍需自行安装。
+本分支提供 macOS Apple Silicon 和 Windows x64 压缩包，内置 DSH `0.1.6-alpha.1`、ACP adapter `0.1.6-alpha.1.5`、Plugin Hub `0.2.3` 和 Agent Teams Office `0.1.0-beta.1`。核心包含该版本发布后的上游启动优化。使用者无需另装 DSH、Node.js、npm 或 pnpm；Devin、Kimi 等 Agent 命令仍需自行安装。
 
 ## Table of Contents
 
@@ -60,7 +60,7 @@ pnpm --dir apps/desktop run package:portable:mac:arm64
 
 ```
 
-Windows 命令为 `pnpm --dir apps/desktop run package:portable:win:x64`。GitHub Actions 执行两平台构建及成品离线启动测试。测试除核心启动外，还检查成品中的插件依赖、Host 和 Remote RPC 元数据注册，以及实际 ACP 和 Plugin Hub 请求。构建产物、诊断、个人 profile、签名材料和 npm 凭证不进入 Git 历史。Tag `0.1.6.alpha.1.3` 对应应用内部合法 SemVer `0.1.6-alpha.1.3`；核心包版本保持 `0.1.6-alpha.1`。
+Windows 命令为 `pnpm --dir apps/desktop run package:portable:win:x64`。GitHub Actions 执行两平台构建及成品离线启动测试。测试除核心启动外，还检查成品中的插件依赖、Host 和 Remote RPC 元数据注册，以及实际 ACP 和 Plugin Hub 请求。构建产物、诊断、个人 profile、签名材料和 npm 凭证不进入 Git 历史。Tag `0.1.6.alpha.1.4` 对应应用内部合法 SemVer `0.1.6-alpha.1.4`；核心包版本保持 `0.1.6-alpha.1`。
 
 ## Dev Note
 

@@ -128,6 +128,12 @@ try {
   const [metadataCode, metadataSignal] = await once(metadata, 'exit')
   assert.equal(metadataSignal, null)
   assert.equal(metadataCode, 0, 'Final plugin metadata must register on the packaged host and client registry')
+  const devinConfig = spawn(runtime.node, [join(import.meta.dirname, '../tests/fixtures/devin-config-smoke.mjs'), paths.profile], {
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: 'inherit',
+  })
+  const [devinCode, devinSignal] = await once(devinConfig, 'exit')
+  assert.equal(devinSignal, null)
+  assert.equal(devinCode, 0, 'Packaged Devin config must support ordinary Windows users and preserve original files')
   const hostStart = performance.now()
   host = new DesktopHostProcess(runtime.node, runtime.dsh, paths.profile)
   const ready = await host.start()

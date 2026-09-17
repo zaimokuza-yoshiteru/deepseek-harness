@@ -12,7 +12,7 @@ Internal recipients need a double-click desktop application without separately i
 
 The `desktop` branch produces macOS arm64 and Windows x64 ZIPs with a prebuilt production core, bundled upstream Node.js, pnpm, and three pinned plugins. The backend executes under Electron’s Node mode from ASAR; package operations use the separate upstream Node executable. Core dependencies are never installed at application startup. Migration recognizes retired core packages from the previous release inventory only when their dependency specifications still match the recorded local tarballs. The startup page appears before preparation, and one backend serves both readiness and application requests.
 
-The core includes DSH `0.1.6-alpha.1` and subsequent upstream startup optimizations. ACP adapter `0.1.6-alpha.1.4`, Plugin Hub `0.2.3`, and Agent Teams Office `0.1.0-beta.1` are built into a separate writable-profile template whose lockfile verifies their npm integrity. The requested GitHub tag `0.1.6.alpha.1.3` maps to internal SemVer `0.1.6-alpha.1.3`; dependency versions remain independent of the desktop build counter.
+The core includes DSH `0.1.6-alpha.1` and subsequent upstream startup optimizations. ACP adapter `0.1.6-alpha.1.5`, Plugin Hub `0.2.3`, and Agent Teams Office `0.1.0-beta.1` are built into a separate writable-profile template whose lockfile verifies their npm integrity. The requested GitHub tag `0.1.6.alpha.1.4` maps to internal SemVer `0.1.6-alpha.1.4`; dependency versions remain independent of the desktop build counter.
 
 First launch copies the prepared plugin template without invoking pnpm. Template upgrades move the previous profile into a private migration backup, preserve user configuration and activation choices, then validate the new graph. Preparation failures restore the previous files. Bundled plugin versions follow the application release; additional user plugins retain exact versions and may require registry access during migration.
 
@@ -21,6 +21,8 @@ Bundled pnpm and repository tooling use `11.23.0`. Package operations read the u
 The fork uses a separate desktop data home by default, respects explicit home and telemetry choices, and disables telemetry and automatic updates by default. Native Edit roles restore standard shortcuts; HTTP/HTTPS links open externally and expose their address in a context menu. Both Teams bundles remain in the core while the [Hub bridge](2026-09-13-desktop-experiment-bridge.md) controls their registration.
 
 Office uses the existing Team service and Connection transport without adding a separate server. Its prebuilt renderer and third-party notices remain in the plugin seed. Teams may be disabled while Office stays installed; packaged checks cover its enabled and disabled responses.
+
+Packaged adapter checks simulate Windows file-symlink denial and verify its hard-link fallback, isolated MCP configuration, shared file writes, and cleanup without deleting source files. This regression uses synthetic configuration and does not exercise an authenticated Devin process.
 
 ## Alternatives considered
 

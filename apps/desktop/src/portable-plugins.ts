@@ -2,8 +2,8 @@
 export const DESKTOP_PORTABLE_PLUGINS = [
   {
     name: '@zaimokuza/dsh-acp-adapter',
-    version: '0.1.6-alpha.1.4',
-    integrity: 'sha512-S39arzJCW9xTrWGY32KiQwccS0il0EBbwqtF/HpDQOV59/6B1CqxkWppAei8eV7+cR4ENek8EGUryCmgaZ5bgQ==',
+    version: '0.1.6-alpha.1.5',
+    integrity: 'sha512-ekLqTN+zxatkhrhk3sCWYwCvEvZeTtIzqIfp0svhMqZfBHtfUJb6yMQNGqniLfkKvtocq3xnjRqX+0ZbCuvNrg==',
     notice: 'ACP-ADAPTER-LICENSE',
   },
   {
