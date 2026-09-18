@@ -37,6 +37,7 @@ export async function applyPluginSeed(
   const manifestPath = join(profile, 'package.json')
   const old = existsSync(manifestPath) ? JSON.parse(readFileSync(manifestPath, 'utf8')) as ProfileManifest : undefined
   const bundled = new Set<string>(DESKTOP_PORTABLE_PLUGINS.map(plugin => plugin.name))
+  bundled.add('@zaimokuza/dsh-plugin-hub')
   const core = new Set(runtime.sharedPackages.map(entry => entry.name))
   if (existsSync(join(profile, DESKTOP_PACKAGE_SET_FILE))) {
     for (const entry of readDesktopCorePackageSet(profile).packages) {
@@ -46,7 +47,9 @@ export async function applyPluginSeed(
   }
   const extras = Object.fromEntries(Object.entries(old?.dependencies ?? {}).filter(([name]) => !core.has(name) && !bundled.has(name)))
   const previousBundles = old?.dsh?.profile?.bundles ?? []
-  const teams = old === undefined ? true : old.dsh?.desktop?.agentTeams ?? previousBundles.includes(DESKTOP_AGENT_TEAM_BUNDLES[0])
+  const teams = old === undefined ? [...DESKTOP_AGENT_TEAM_BUNDLES]
+    : old.dsh?.desktop?.agentTeams === false ? []
+      : previousBundles.filter(name => DESKTOP_AGENT_TEAM_BUNDLES.some(team => team === name))
   const backup = join(backupRoot, randomUUID())
   mkdirSync(backup, { recursive: true, mode: 0o700 })
   const entries = readdirSync(profile).filter(name => name !== 'lock')
@@ -65,14 +68,15 @@ export async function applyPluginSeed(
     manifest.dependencies = { ...manifest.dependencies, ...extras }
     manifest.dsh = {
       ...old?.dsh,
-      desktop: { ...old?.dsh?.desktop, agentTeams: teams },
+      desktop: { ...old?.dsh?.desktop },
       profile: { ...old?.dsh?.profile, bundles: [
-        ...desktopProfileBundles(runtime.release.version, teams),
+        ...desktopProfileBundles(runtime.release.version, false), ...teams,
         ...DESKTOP_PORTABLE_PLUGINS.filter(plugin => old === undefined
           || !Object.hasOwn(old.dependencies ?? {}, plugin.name) || previousBundles.includes(plugin.name)).map(plugin => plugin.name),
         ...previousBundles.filter(name => Object.hasOwn(extras, name)),
       ] },
     }
+    delete manifest.dsh.desktop?.agentTeams
     writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 })
     // Preserve user configuration; dependency state belongs to the new runtime.
     for (const name of entries) {

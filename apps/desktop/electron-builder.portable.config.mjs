@@ -3,10 +3,10 @@ import { resolveDesktopTargetBuildPaths } from './scripts/desktop-build-paths.mj
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const tag = process.env.DSH_DESKTOP_DISTRIBUTION_VERSION ?? '0.1.6.alpha.1.5'
+const tag = process.env.DSH_DESKTOP_DISTRIBUTION_VERSION ?? '0.1.6.alpha.2.1'
 const version = tag.replace('0.1.6.alpha.', '0.1.6-alpha.')
-if (!/^0\.1\.6-alpha\.1\.[1-9][0-9]*$/u.test(version)) {
-  throw new Error('desktop portable: expected distribution version 0.1.6.alpha.1.<positive integer>')
+if (!/^0\.1\.6-alpha\.2\.[1-9][0-9]*$/u.test(version)) {
+  throw new Error('desktop portable: expected distribution version 0.1.6.alpha.2.<positive integer>')
 }
 const paths = resolveDesktopTargetBuildPaths()
 
@@ -17,6 +17,8 @@ export default {
   extraMetadata: { version },
   directories: { output: paths.artifacts },
   asar: true,
+  electronDist: paths.electron,
+  electronFuses: { runAsNode: true },
   npmRebuild: false,
   files: ['lib/*.js', 'lib/*.cjs', 'renderer/**/*', 'package.json',
     { from: paths.dsh, to: 'dsh', filter: ['**/*'] },
@@ -25,6 +27,7 @@ export default {
   asarUnpack: ['**/*.{node,dylib,dll,so,exe}', '**/*.so.*', '**/spawn-helper', '**/@vscode/ripgrep/bin/rg'],
   extraResources: [
     { from: paths.runtime, to: 'runtime' },
+    { from: 'resources/icon.png', to: 'icon.png' },
     { from: join(paths.root, 'plugin-seed'), to: 'plugin-seed' },
     // Electron Builder excludes nested node_modules from a parent FileSet.
     { from: join(paths.root, 'plugin-seed', 'node_modules'), to: 'plugin-seed/node_modules', filter: ['**/*'] },
@@ -35,6 +38,8 @@ export default {
     icon: fileURLToPath(new URL('./assets/icon.icns', import.meta.url)),
     category: 'public.app-category.developer-tools',
     identity: '-',
+    // Preserve bundled runtime signatures; ASAR contains the rest of nested application bundles.
+    signIgnore: ['/Contents/Resources/app\\.asar\\.unpacked/dsh(?:/|$)', '/Contents/Resources/runtime/primary-runtime(?:/|$)', '\\.pak$'],
     hardenedRuntime: false,
     notarize: false,
     target: [{ target: 'zip', arch: ['arm64'] }],

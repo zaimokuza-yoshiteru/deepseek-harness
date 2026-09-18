@@ -21,15 +21,16 @@ export async function preparePluginSeed(root: string, node: string, pnpm: string
   writeFileSync(join(root, 'package.json'), `${JSON.stringify({
     name: '@deepseek-ai/dsh-desktop-runtime', private: true, version: '0.0.0',
     dependencies: Object.fromEntries(DESKTOP_PORTABLE_PLUGINS.map(plugin => [plugin.name, plugin.version])),
-    dsh: { desktop: { agentTeams: true }, profile: {
+    dsh: { profile: {
       bundles: [...desktopProfileBundles(version), ...DESKTOP_PORTABLE_PLUGINS.map(plugin => plugin.name)],
     } },
   }, null, 2)}\n`)
   writeFileSync(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - .\nnodeLinker: hoisted\nautoInstallPeers: false\nstrictDepBuilds: true\n')
   await new Promise<void>((accept, reject) => {
-    const child = spawn(node, [pnpm, '--config.registry=https://registry.npmjs.org/', `--config.userconfig=${config}`, 'install', '--prod', '--ignore-scripts'], {
+    const child = spawn(node, ['--expose-internals', pnpm, '--config.registry=https://registry.npmjs.org/', `--config.userconfig=${config}`, 'install', '--prod', '--ignore-scripts'], {
       cwd: root, stdio: 'inherit', env: {
         ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(?:npm|pnpm|corepack|DSH_DESKTOP)_/iu.test(name) && !['NODE_OPTIONS', 'NODE_PATH'].includes(name))),
+        ELECTRON_RUN_AS_NODE: '1',
         PATH: `${dirname(node)}${delimiter}${process.env.PATH ?? ''}`,
       },
     })

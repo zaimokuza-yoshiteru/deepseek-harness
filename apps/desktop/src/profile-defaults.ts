@@ -19,12 +19,3 @@ export function desktopProfileBundles(version: string, agentTeams = true): reado
     ? BASE_BUNDLES
     : [...BASE_BUNDLES, ...DESKTOP_AGENT_TEAM_BUNDLES]
 }
-
-/**
- * Preserve each released profile's exact adapter exception in the pnpm policy.
- * @param version - DSH version recorded in the profile's release metadata.
- * @returns Adapter version pinned by that desktop release line.
- */
-export function desktopAdapterVersion(version: string): string {
-  return version === '0.1.5-rc.2' ? '0.1.5-rc.2.1' : version
-}

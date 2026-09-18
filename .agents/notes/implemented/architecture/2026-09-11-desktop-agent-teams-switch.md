@@ -1,4 +1,4 @@
-# Agent Note: Offline desktop Agent Teams switch
+# Agent Note: Offline desktop Agent Teams selection
 
 Status: implemented
 
@@ -6,22 +6,18 @@ English | [中文](2026-09-11-desktop-agent-teams-switch.zh.md)
 
 ## Problem
 
-Internal desktop users need to disable experimental Teams and restore it without registry access. Removing npm packages would make restoration depend on downloads and could leave the Host and Web layers inconsistent.
+Desktop users need to disable Teams and restore it without downloading dependencies. Profile upgrades must preserve their choice even after the Hub control is retired.
 
 ## Decision
 
-Plugin Hub exposes one localized Teams switch through the [Desktop experiment bridge](2026-09-13-desktop-experiment-bridge.md). Both official bundle registrations change together; package dependencies and cached bytes remain present. The profile manifest records the choice as `dsh.desktop.agentTeams`. An absent choice retains the release default, while an explicit choice survives restarts and seed upgrades. This partially supersedes the fixed-enable decision in the [portable distribution note](2026-09-10-desktop-portable-distribution.md); its runtime, registry, packaging, and data-location decisions remain active.
+Both official Teams bundles remain inside the production runtime. New portable profiles select both. DSH’s native plugin manager lists the Host and Web bundles separately; disabling both removes Teams execution and presentation, while retaining their installed bytes.
 
-Switching updates both profile layers under the desktop lock and restarts one backend without invoking pnpm. A failed restart retains the configured choice and exposes startup recovery. Electron serializes feature and plugin mutations. The Host advertises idle-restart support and checks both live agents and in-flight API responses before accepting shutdown in the same event-loop turn. Busy work refuses the change; older Hosts without this capability require an application update. The main window reloads after a successful switch. Session and Teams storage is not deleted.
+Migration converts the old `dsh.desktop.agentTeams` selection to native `dsh.profile.bundles`, then removes that legacy field. An explicit old false disables both; otherwise existing bundle selections survive independently. Later seed upgrades read only native selections, so a retired flag cannot re-enable a user-disabled bundle.
 
 ## Alternatives considered
 
-**Expose two removable plugins.** Independent removal can hide the panel while retaining team tools, and reinstalling can require a registry. The single switch preserves both layers and their dependencies.
-
-**Change only the visible panel.** This would leave model-facing team tools active, contradicting the meaning of disabling Teams.
+A fork-specific combined toggle would duplicate the official interface and require another lifecycle bridge. The distribution follows native behavior and documents that complete Teams shutdown requires disabling both bundles.
 
 ## Consequences
 
-The application size does not shrink when Teams is disabled. Re-enabling needs one backend restart, but no package installation or download. A new desktop build counter is required to deliver the Host's idle-restart capability to existing profiles.
-
-Focused tests cover the experiment bridge, package-manager output, refusal recovery, idle checks during agent and API work, offline switching, migration restoration, plugin preservation, and upgrade persistence. Packaged-runtime verification covers actual Host startup and Teams client registration in both states. Native Windows execution remains owned by the release workflow; no live model call is required by these checks.
+Toggling does not reduce application size or invoke a package download. Office remains installed and reports disabled Teams through its native service lookup. Migration and actual packaged RPC checks cover retained activation choices, offline reactivation and removal of the obsolete Hub dependency.

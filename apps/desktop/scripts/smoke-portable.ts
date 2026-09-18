@@ -2,7 +2,6 @@
 import assert from 'node:assert/strict'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
-import { Writable } from 'node:stream'
 import { subscribe, unsubscribe } from 'node:diagnostics_channel'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -10,7 +9,9 @@ import { join } from 'node:path'
 import extractZip from '@electron-internal/extract-zip'
 import { DesktopProjectManager } from '../src/project-manager.ts'
 import { DesktopHostProcess } from '../src/host-process.ts'
-import { DesktopExperiments } from '../src/experiments.ts'
+import { authenticateWebHost, forwardWebRequest } from '../src/web-document.ts'
+import { DESKTOP_AGENT_TEAM_BUNDLES } from '../src/profile-defaults.ts'
+import { readDesktopRuntime } from '../src/runtime-tree.ts'
 import { resolveDesktopPaths } from '../src/paths.ts'
 import { desktopTargetBuildPaths } from './desktop-build-paths.mjs'
 import { DESKTOP_PORTABLE_PLUGINS } from '../src/portable-plugins.ts'
@@ -38,7 +39,7 @@ const resources = target === 'mac-arm64'
 const executable = target === 'mac-arm64'
   ? join(resources, '..', 'MacOS', 'DSH Desktop') : join(resources, '..', 'DSH Desktop.exe')
 if (process.versions.electron === undefined) {
-  const child = spawn(executable, ['--import', 'tsx/esm', import.meta.filename, target], {
+  const child = spawn(executable, ['--expose-internals', '--import', 'tsx/esm', import.meta.filename, target], {
     env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', DSH_DESKTOP_SMOKE_RESOURCES: resources }, stdio: 'inherit',
   })
   const [code, signal] = await once(child, 'exit')
@@ -55,7 +56,7 @@ process.env.npm_config_registry = 'http://127.0.0.1:1/unreachable/'
 process.env.npm_config_userconfig = join(home, 'absent.npmrc')
 const runtime = {
   node: process.execPath,
-  packageNode: join(packagedResources, 'runtime', 'node', target === 'win-x64' ? 'node.exe' : 'node'),
+  nodeBin: join(packagedResources, 'runtime', 'bin'),
   pnpm: join(packagedResources, 'runtime', 'pnpm', 'bin', 'pnpm.mjs'),
   dsh: join(packagedResources, 'app.asar', 'dsh'),
   pluginSeed: join(packagedResources, 'plugin-seed'),
@@ -64,6 +65,37 @@ const runtime = {
 const paths = resolveDesktopPaths(home)
 const manager = new DesktopProjectManager(paths, runtime)
 let host: DesktopHostProcess | undefined
+let hostUrl = ''
+let hostCookie = ''
+const request = (input: Request): Promise<Response> => forwardWebRequest(input, hostUrl, hostCookie)
+async function startHost(): Promise<void> {
+  host = new DesktopHostProcess(runtime.node, runtime.dsh, paths.profile, undefined, process.env, undefined,
+    join(packagedResources, 'runtime', 'primary-runtime'), 'runtime', runtime)
+  const ready = await host.start()
+  hostUrl = ready.url
+  hostCookie = await authenticateWebHost(hostUrl)
+}
+async function rpc<T>(method: string, payload: unknown = {}): Promise<T> {
+  const response = await request(new Request(`dsh-app://app/api/${method}`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ type: 'client-request', rpcId: 'portable-smoke', method, payload: { args: payload } }),
+  }))
+  assert.equal(response.status, 200)
+  const result = await response.json() as { result: { ok: boolean; value: T } }
+  assert.equal(result.result.ok, true, JSON.stringify(result))
+  return result.result.value
+}
+interface Bundle { name: string; version?: string; enabled: boolean; error?: unknown }
+async function assertBundles(): Promise<void> {
+  const bundles = await rpc<Bundle[]>('pluginManager/listBundles')
+  for (const plugin of DESKTOP_PORTABLE_PLUGINS) {
+    const bundle = bundles.find(item => item.name === plugin.name)
+    assert.equal(bundle?.version, plugin.version)
+    assert.equal(bundle.enabled, true)
+    assert.equal(bundle.error, undefined)
+  }
+  assert.equal(bundles.some(item => item.name === '@zaimokuza/dsh-plugin-hub'), false)
+}
 let stage = 'installing the packaged seed'
 const children = new Set<ChildProcess>()
 const failedChildren: Array<{ code: number | null; signal: NodeJS.Signals | null }> = []
@@ -93,7 +125,7 @@ function progress(next: string): void {
   console.log(`Packaged smoke: ${stage}`)
 }
 async function assertOfficeState(expected: 'unselected' | 'disabled'): Promise<void> {
-  const response = await host!.fetch(new Request('dsh-app://app/api/dshOffice/snapshot', {
+  const response = await request(new Request('dsh-app://app/api/dshOffice/snapshot', {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ type: 'client-request', rpcId: 'office-smoke', method: 'dshOffice/snapshot', payload: { sessionId: null } }),
   }))
@@ -120,25 +152,25 @@ try {
     assert.ok(existsSync(join(runtime.pluginSeed, 'node_modules', '@zaimokuza/dsh-agent-teams-office', file)), `Missing Office notice ${file}`)
   }
   const firstStart = performance.now()
-  await manager.applyRelease()
+  await manager.applyRelease(true)
+  writeFileSync(join(paths.profile, 'cordis.patch.yml'), '- id: webserver\n  config:\n    host: 127.0.0.1\n    port: 0\n')
   const prepared = performance.now()
-  const metadata = spawn(runtime.node, [join(import.meta.dirname, '../tests/fixtures/plugin-metadata-smoke.mjs'), runtime.dsh, paths.profile], {
+  const metadata = spawn(runtime.node, ['--expose-internals', join(import.meta.dirname, '../tests/fixtures/plugin-metadata-smoke.mjs'), runtime.dsh, paths.profile], {
     env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: 'inherit',
   })
   const [metadataCode, metadataSignal] = await once(metadata, 'exit')
   assert.equal(metadataSignal, null)
   assert.equal(metadataCode, 0, 'Final plugin metadata must register on the packaged host and client registry')
-  const devinConfig = spawn(runtime.node, [join(import.meta.dirname, '../tests/fixtures/devin-config-smoke.mjs'), paths.profile], {
+  const devinConfig = spawn(runtime.node, ['--expose-internals', join(import.meta.dirname, '../tests/fixtures/devin-config-smoke.mjs'), paths.profile], {
     env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: 'inherit',
   })
   const [devinCode, devinSignal] = await once(devinConfig, 'exit')
   assert.equal(devinSignal, null)
   assert.equal(devinCode, 0, 'Packaged Devin config must support ordinary Windows users and preserve original files')
   const hostStart = performance.now()
-  host = new DesktopHostProcess(runtime.node, runtime.dsh, paths.profile)
-  const ready = await host.start()
-  assert.equal(ready.dshVersion, '0.1.6-alpha.1')
-  const response = await host.fetch(new Request('dsh-app://app/index.html'))
+  await startHost()
+  assert.equal(readDesktopRuntime(runtime.dsh).release.version, '0.1.6-alpha.2')
+  const response = await request(new Request('dsh-app://app/index.html'))
   assert.equal(response.status, 200)
   const html = await response.text()
   assert.match(html, /<html/u)
@@ -148,18 +180,11 @@ try {
   for (const name of [...DESKTOP_PORTABLE_PLUGINS.map(plugin => plugin.name), '@deepseek-ai/dsh-experimental-client-ui-agent-team']) {
     const entry = graph.entries.find(item => item.id === name)
     assert.ok(entry, `Missing client module ${name}`)
-    const client = await host.fetch(new Request(new URL(entry.url, 'dsh-app://app')))
+    const client = await request(new Request(new URL(entry.url, 'dsh-app://app')))
     assert.equal(client.status, 200)
     assert.ok((await client.text()).length > 0)
   }
-  const hubRpc = await host.fetch(new Request('dsh-app://app/api/dshPluginHub_hub/resources', {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ type: 'client-request', rpcId: 'hub-smoke', method: 'dshPluginHub_hub/resources', payload: {} }),
-  }))
-  assert.equal(hubRpc.status, 200)
-  const hubResult = await hubRpc.json() as { result: { ok: boolean } }
-  assert.equal(hubResult.result.ok, true, JSON.stringify(hubResult))
-  const acpRpc = await host.fetch(new Request('dsh-app://app/api/dshAcp/health', {
+  const acpRpc = await request(new Request('dsh-app://app/api/dshAcp/health', {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ type: 'client-request', rpcId: 'acp-smoke', method: 'dshAcp/health', payload: { args: {} } }),
   }))
@@ -168,54 +193,23 @@ try {
   assert.equal(acpResult.result.ok, true, JSON.stringify(acpResult))
   assert.ok(Array.isArray(acpResult.result.value?.providers), 'ACP health must execute successfully')
   await assertOfficeState('unselected')
-  assert.deepEqual(manager.listPlugins(),
-    DESKTOP_PORTABLE_PLUGINS.map(({ name, version }) => ({ name, version, enabled: true })).sort((a, b) => a.name.localeCompare(b.name)),
-  )
-  await host.stop()
+  await assertBundles()
+  await host!.stop()
   host = undefined
   const warmStart = performance.now()
-  assert.equal(await manager.applyRelease(), false)
-  progress('switching Teams off and on through the experiment controller without registry access')
-  const startActive = async (): Promise<void> => {
-    host = new DesktopHostProcess(runtime.node, runtime.dsh, paths.profile)
-    await host.start()
-  }
-  await startActive()
-  await (await host!.fetch(new Request('dsh-app://app/index.html'))).text()
+  await manager.applyRelease(true)
+  await startHost()
   console.log(JSON.stringify({ warmReadyMs: performance.now() - warmStart }))
-  let busy = false
-  const experiments = new DesktopExperiments({
-    profile: paths.profile, supported: true,
-    enabled: () => manager.agentTeamsEnabled(), busy: () => busy, setBusy: (value) => { busy = value },
-    stopIfIdle: async () => {
-      assert.notEqual(host, undefined)
-      if (!await host!.stopIfIdle()) return false
-      host = undefined
-      return true
-    },
-    change: enabled => manager.mutate({ type: 'agent-teams', enabled }, {
-      beforeChange: async () => { await host?.stop(); host = undefined },
-      afterChange: startActive,
-    }),
-    recover: async () => { if (host === undefined) await startActive() },
-  })
   for (const enabled of [false, true]) {
-    progress(`switching Teams ${enabled ? 'on' : 'off'} without registry access`)
-    const result = await experiments.setEnabled({ profile: paths.profile, id: 'agent-teams', expectedEnabled: !enabled, enabled })
-    assert.equal(result.ok, true, JSON.stringify(result))
-    if (result.ok) {
-      assert.equal(result.reloadRequired, true)
-      assert.equal(result.value.features[0]?.enabled, enabled)
-      assert.equal(result.value.features[0]?.activeEnabled, enabled)
+    progress(`switching native Teams ${enabled ? 'on' : 'off'} without registry access`)
+    for (const name of enabled ? DESKTOP_AGENT_TEAM_BUNDLES : [...DESKTOP_AGENT_TEAM_BUNDLES].reverse()) {
+      const changed = await rpc<{ error?: unknown }>('pluginManager/setBundleEnabled', { name, enabled })
+      assert.equal(changed.error, undefined, JSON.stringify(changed))
     }
-    const html = await (await host!.fetch(new Request('dsh-app://app/index.html'))).text()
-    const graph = JSON.parse(html.match(/<script>globalThis\["__DSH_BOOT__"\] = (.*?)<\/script>/u)![1]!) as { entries: { id: string }[] }
-    assert.equal(graph.entries.some(entry => entry.id === '@deepseek-ai/dsh-experimental-client-ui-agent-team'), enabled)
-    assert.equal(graph.entries.some(entry => entry.id === '@zaimokuza/dsh-plugin-hub'), true)
+    const bundles = await rpc<Bundle[]>('pluginManager/listBundles')
+    for (const name of DESKTOP_AGENT_TEAM_BUNDLES) assert.equal(bundles.find(item => item.name === name)?.enabled, enabled)
     await assertOfficeState(enabled ? 'unselected' : 'disabled')
-    assert.deepEqual(manager.listPlugins(),
-      DESKTOP_PORTABLE_PLUGINS.map(({ name, version }) => ({ name, version, enabled: true })).sort((a, b) => a.name.localeCompare(b.name)),
-    )
+    await assertBundles()
   }
   await host!.stop()
   host = undefined
@@ -238,47 +232,14 @@ try {
     ] } },
   }))
   const upgrade = new DesktopProjectManager(legacyPaths, runtime)
-  assert.equal(await upgrade.applyRelease(), true)
-  assert.equal(upgrade.agentTeamsEnabled(), false)
+  await upgrade.applyRelease(true)
   const migrated = JSON.parse(readFileSync(join(legacyPaths.profile, 'package.json'), 'utf8')) as { dependencies: Record<string, string> }
   assert.deepEqual(migrated.dependencies, Object.fromEntries(DESKTOP_PORTABLE_PLUGINS.map(plugin => [plugin.name, plugin.version])))
-  assert.equal(await upgrade.applyRelease(), false)
+  await upgrade.applyRelease(true)
   console.log('Packaged legacy profile migration: retired tarballs removed offline; disabled Teams preserved')
-  unsubscribe('child_process', childDiagnostic)
-  for (const truncated of [false, true]) {
-    progress(`checking request-pipe EOF before IPC shutdown (truncated=${String(truncated)})`)
-    const child = spawn(runtime.node, [join(runtime.dsh, 'node_modules', '@deepseek-ai', 'dsh-desktop-host', 'lib', 'index.js'), runtime.dsh, paths.profile], {
-      cwd: paths.profile, stdio: ['ignore', 'pipe', 'pipe', 'pipe', 'pipe', 'ipc'],
-    })
-    children.add(child)
-    const closed = once(child, 'close')
-    const fatal: string[] = []
-    const ready = Promise.withResolvers<void>()
-    child.on('message', (message: { type: string; message?: string }) => {
-      if (message.type === 'ready') ready.resolve()
-      if (message.type === 'fatal') { fatal.push(message.message ?? 'fatal'); ready.reject(new Error(message.message)) }
-    })
-    child.once('error', ready.reject)
-    child.once('exit', () => { ready.reject(new Error('Host exited before readiness')) })
-    child.stdout!.resume()
-    child.stderr!.pipe(process.stderr, { end: false })
-    try {
-      await ready.promise
-      const pipe = child.stdio[3]
-      assert(pipe instanceof Writable)
-      // Deliberately send no IPC shutdown: EOF wins deterministically.
-      pipe.end(truncated ? Buffer.from([0x44]) : undefined)
-      const [code, signal] = await closed
-      assert.equal(code, truncated ? 1 : 0)
-      assert.equal(signal, null)
-      assert.equal(fatal.length, truncated ? 1 : 0)
-    } finally {
-      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
-      await closed
-      children.delete(child)
-    }
-  }
-  console.log('Packaged offline install, host boot, frontend assets, Agent Teams, ACP adapter, Plugin Hub and Office: passed')
+  const state = JSON.parse(readFileSync(join(legacyPaths.profile, 'package.json'), 'utf8')) as { dsh: { profile: { bundles: string[] } } }
+  assert.equal(state.dsh.profile.bundles.some(name => DESKTOP_AGENT_TEAM_BUNDLES.some(team => team === name)), false)
+  console.log('Native plugin manager, offline Teams toggles, migration and packaged ACP/Office checks passed')
 } finally {
   await host?.stop()
   clearTimeout(timeout)

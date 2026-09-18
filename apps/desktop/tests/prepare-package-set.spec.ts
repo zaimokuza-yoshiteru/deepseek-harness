@@ -46,48 +46,45 @@ describe('desktop package-set selection', () => {
     ])
   })
 
-  it('rejects a required internal package absent from the packed release inputs', () => {
+  it.each([
+    '@deepseek-ai/dsh-base', '@deepseek-ai/cordis', '@deepseek-ai/node-addon-system',
+  ])('rejects required prepared package %s absent from the packed release inputs', (dependency) => {
     const available = new Map<string, PackedDesktopPackage>([
       ['@deepseek-ai/dsh', packed('@deepseek-ai/dsh', {
-        dependencies: { '@deepseek-ai/dsh-base': '^1.0.0' },
+        dependencies: { [dependency]: '^1.0.0' },
       })],
       ['@deepseek-ai/dsh-desktop-host', packed('@deepseek-ai/dsh-desktop-host', {
         dependencies: { '@deepseek-ai/dsh': '^1.0.0' },
       })],
     ])
-    expect(() => selectDesktopPackageClosure(available)).toThrow(/unpacked internal package/u)
+    expect(() => selectDesktopPackageClosure(available)).toThrow(/unpacked package/u)
     expect(() => selectDesktopPackageClosure(new Map([
       ['@deepseek-ai/dsh', packed('@deepseek-ai/dsh')],
     ]))).toThrow(/omit @deepseek-ai\/dsh-desktop-host/u)
   })
 
-  it('includes the official Teams layers and their runtime closure, and rejects a missing layer', () => {
+  it('leaves independently published Office packages to npm resolution', () => {
     const available = new Map<string, PackedDesktopPackage>([
-      ['@deepseek-ai/dsh', packed('@deepseek-ai/dsh')],
-      ['@deepseek-ai/dsh-desktop-host', packed('@deepseek-ai/dsh-desktop-host')],
-      ['@deepseek-ai/dsh-experimental-agent-team-profile', packed('@deepseek-ai/dsh-experimental-agent-team-profile', {
-        dependencies: { '@deepseek-ai/dsh-experimental-agent-team': '1.0.0' },
+      ['@deepseek-ai/dsh', packed('@deepseek-ai/dsh', {
+        dependencies: {
+          '@deepseek-ai/libreoffice-kit': '0.0.1',
+          '@deepseek-ai/libreoffice-kit-wasm': '0.0.1',
+        },
       })],
-      ['@deepseek-ai/dsh-experimental-agent-team-web-profile', packed('@deepseek-ai/dsh-experimental-agent-team-web-profile')],
-      ['@deepseek-ai/dsh-experimental-agent-team', packed('@deepseek-ai/dsh-experimental-agent-team')],
+      ['@deepseek-ai/dsh-desktop-host', packed('@deepseek-ai/dsh-desktop-host')],
     ])
-    const roots = ['@deepseek-ai/dsh-experimental-agent-team-profile', '@deepseek-ai/dsh-experimental-agent-team-web-profile']
-    expect(selectDesktopPackageClosure(available, roots).map(entry => entry.manifest.name)).toContain('@deepseek-ai/dsh-experimental-agent-team')
-    available.delete(roots[1]!)
-    expect(() => selectDesktopPackageClosure(available, roots)).toThrow(/omit @deepseek-ai\/dsh-experimental-agent-team-web-profile/u)
+    expect(selectDesktopPackageClosure(available).map(entry => entry.manifest.name)).toEqual([
+      '@deepseek-ai/dsh', '@deepseek-ai/dsh-desktop-host',
+    ])
   })
 
-  it('requires the Desktop Host entry and its packaged overlay', () => {
+  it('requires the Desktop Host entry', () => {
     const files = [
       'package/lib/index.js',
-      'package/config/desktop.cordis.patch.yml',
     ]
     expect(() => {
       assertDesktopHostPackageFiles(files)
     }).not.toThrow()
-    expect(() => {
-      assertDesktopHostPackageFiles(files.slice(0, 1))
-    }).toThrow(/desktop\.cordis\.patch\.yml/u)
     expect(() => {
       assertDesktopHostPackageFiles(files.slice(1))
     }).toThrow(/lib\/index\.js/u)

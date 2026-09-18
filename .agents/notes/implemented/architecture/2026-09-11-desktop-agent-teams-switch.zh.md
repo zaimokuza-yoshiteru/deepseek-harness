@@ -1,27 +1,23 @@
-# Agent Note: 桌面 Agent Teams 离线开关
+# Agent Note：桌面 Agent Teams 离线选择
 
 Status: implemented
 
 [English](2026-09-11-desktop-agent-teams-switch.md) | 中文
 
-## Problem
+## 问题
 
-内部桌面用户需要关闭实验性 Teams，并在无法访问 registry 时重新开启。删除 npm 包会让恢复依赖下载，还可能导致 Host 与 Web 两层状态不一致。
+桌面用户需要关闭 Teams 后无需下载依赖即可恢复。Hub 控制退役后，profile 升级仍须保留用户的选择。
 
-## Decision
+## 决策
 
-Plugin Hub 通过 [Desktop 实验性功能桥接](2026-09-13-desktop-experiment-bridge.zh.md)提供一个本地化的 Teams 开关。两个官方 bundle 注册同时变化；包依赖和缓存字节始终保留。profile manifest 使用 `dsh.desktop.agentTeams` 记录选择。未保存选择时沿用发布版本的默认值，明确选择则跨重启和 seed 升级保留。这部分取代[便携分发说明](2026-09-10-desktop-portable-distribution.zh.md)中固定启用的决策；其运行时、registry、打包和数据目录决策继续有效。
+两个官方 Teams 模块始终包含在生产运行时中，新便携 profile 默认同时选择它们。DSH 原生插件管理器分别列出 Host 和 Web 模块；关闭两个模块即可关闭 Teams 执行与展示，并保留其依赖文件。
 
-切换在桌面锁保护下更新两个 profile 层并重启一个后端，不调用 pnpm。重启失败时保留配置选择并显示启动恢复操作。Electron 串行执行功能与插件变更。Host 声明支持空闲重启，检查存活 agent 和处理中的 API 响应，然后在同一事件循环轮次接受关闭。仍有工作时拒绝切换；不支持此能力的旧 Host 需要更新应用。成功切换后刷新主窗口。会话和 Teams 存储不会删除。
+迁移将旧 `dsh.desktop.agentTeams` 选择转换为原生 `dsh.profile.bundles`，随后删除旧字段。旧值明确为 false 时关闭两个模块，否则分别保留已有模块选择。后续种子升级只读取原生选择，避免旧字段重新开启用户关闭的模块。
 
-## Alternatives considered
+## 考虑过的替代方案
 
-**提供两个可卸载插件。** 单独卸载可能隐藏面板却保留团队工具，重新安装还可能需要 registry。单一开关保留两层及其依赖。
+分支专用的组合开关会重复官方界面，并需要额外的生命周期接口。本发行版遵循原生行为，并在文档中说明完全关闭 Teams 需要关闭两个模块。
 
-**只改变可见面板。** 这会让模型侧的团队工具继续启用，与关闭 Teams 的含义不符。
+## 影响
 
-## Consequences
-
-关闭 Teams 不会缩小应用体积。重新启用需要重启一个后端，无需安装或下载包。为使现有 profile 获得 Host 的空闲重启能力，需要新的桌面构建序号。
-
-定向测试覆盖实验性功能桥接、包管理器输出、拒绝后的状态恢复、agent 和 API 工作期间的空闲检查、离线切换、迁移恢复、插件保留与升级持久化。打包运行时验证覆盖真实 Host 启动及两种状态下的 Teams 客户端注册。Windows 原生执行仍由发布工作流负责；这些检查不需要真实模型调用。
+切换不会缩小应用体积或触发包下载。Office 保持安装，并通过原生服务查询识别 Teams 已关闭。迁移与实际成品 RPC 检查覆盖启停选择保留、离线重新启用及过时 Hub 依赖移除。
