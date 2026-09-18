@@ -34,6 +34,12 @@ New-Item -ItemType Directory -Force $env:TEMP, $env:APPDATA, $env:LOCALAPPDATA |
 $env:DSH_DESKTOP_DISTRIBUTION_VERSION = $inputData.version
 $env:DSH_TELEMETRY_MODE = 'DISABLED'
 $env:CSC_IDENTITY_AUTO_DISCOVERY = 'false'
+# pnpm/action-setup lives in runneradmin's home, which this user cannot read.
+$tooling = Join-Path $env:USERPROFILE 'build-tools'
+$npmCli = Join-Path (Split-Path $inputData.node) 'node_modules\npm\bin\npm-cli.js'
+& $inputData.node $npmCli install --prefix $tooling --ignore-scripts --no-audit --no-fund pnpm@11.23.0
+if ($LASTEXITCODE -ne 0) { throw 'Standard-user pnpm setup failed' }
+$env:PATH = (Join-Path $tooling 'node_modules\.bin') + ';' + $env:PATH
 Set-Location $inputData.repo
 git config --global --add safe.directory $inputData.repo
 & $inputData.node apps/desktop/scripts/ci-portable-build.mjs win-x64
