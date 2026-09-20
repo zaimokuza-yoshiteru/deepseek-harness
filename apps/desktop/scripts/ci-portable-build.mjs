@@ -4,6 +4,8 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const target = process.argv[2]
+const mode = process.argv[3] ?? 'build'
+if (!['build', 'startup'].includes(mode)) throw new Error('Expected build or startup mode')
 if (!['mac-arm64', 'win-x64'].includes(target)) throw new Error('Expected a portable desktop target')
 if (process.platform === 'win32') {
   const elevated = execFileSync('powershell.exe', ['-NoProfile', '-Command',
@@ -23,7 +25,15 @@ const run = args => {
   if (child.error) throw child.error
   if (child.status !== 0 || child.signal !== null) throw new Error(`Desktop CI command failed: ${args.join(' ')}`)
 }
-run(['install', '--frozen-lockfile'])
+run(['install', '--frozen-lockfile', ...(mode === 'startup' ? ['--ignore-scripts'] : [])])
+if (mode === 'startup') {
+  const child = spawnSync(process.execPath, ['apps/desktop/scripts/startup-timing.mjs', target], {
+    stdio: 'inherit', env: { ...process.env, DSH_STANDARD_USER_VERIFIED: '1' },
+  })
+  if (child.error) throw child.error
+  if (child.status !== 0 || child.signal !== null) throw new Error('Packaged GUI startup timing failed')
+  process.exit(0)
+}
 run(['exec', 'vitest', 'run', ...[
   'npm-environment', 'project-manager', 'distribution', 'shell-environment', 'plugin-seed', 'package-target',
   'host-process', 'main-startup', 'prepare-package-set', 'locale', 'icons', 'profile-core-cleanup', 'preload-app', 'node-environment',

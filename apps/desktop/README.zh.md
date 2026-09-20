@@ -62,6 +62,8 @@ pnpm --dir apps/desktop run package:portable:mac:arm64
 
 Windows 构建命令为 `pnpm --dir apps/desktop run package:portable:win:x64`。GitHub Actions 创建临时普通账号，再以无管理员身份安装依赖、构建和验证最终应用。仅创建账号使用 runner 的管理权限。检查涵盖原生插件管理、ACP/Office RPC、Teams 离线开关、profile 迁移和 Windows Devin 硬链接回退。构建产物、诊断、profile、签名材料和凭证不进入 Git。标签 `0.1.6.alpha.2.1` 对应应用 SemVer `0.1.6-alpha.2.1`，核心包保持 `0.1.6-alpha.2`。
 
+**Desktop portable smoke replay** 工作流接受已有构建的 run ID。Windows 会解压该次构建的原始 ZIP，核验普通用户身份，分别测量全新 profile 的 GUI 启动，以及完全退出后使用同一 profile 再次启动。在 `desktop-startup-win-x64` 产物中查看 `result.json` 和截图：就绪标准为设置按钮可见且成功打开设置对话框。报告记录 ZIP 的 SHA256 和渲染页面的绘制时间。启动计时不含 ZIP 解压，也不代表用户电脑的安全扫描或操作系统冷缓存表现。macOS 重测保留后端检查。
+
 ## Release versions
 
 便携标签采用 `0.1.6.alpha.2.<counter>`，应用元数据采用 `0.1.6-alpha.2.<counter>`。核心与插件版本分别固定。标准上游安装包命令从 package manifest 推导版本。

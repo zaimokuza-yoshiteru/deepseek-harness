@@ -1,3 +1,4 @@
+param([ValidateSet('build', 'startup')][string]$Mode = 'build')
 # The runner creates the account; dependency installation, build and smoke run only as that standard user.
 $ErrorActionPreference = 'Stop'
 $user = 'dshbuilder'
@@ -16,7 +17,7 @@ $node = (Get-Command node).Source
 $pwsh = (Get-Command pwsh).Source
 $script = Join-Path $root 'build.ps1'
 # Values are passed in JSON; no command substitution or credential is written to disk.
-@{ repo = $repo; node = $node; path = $env:PATH; root = $root; version = $env:DSH_DESKTOP_DISTRIBUTION_VERSION } |
+@{ repo = $repo; node = $node; path = $env:PATH; root = $root; version = $env:DSH_DESKTOP_DISTRIBUTION_VERSION; mode = $Mode } |
   ConvertTo-Json | Set-Content (Join-Path $root 'inputs.json')
 @'
 $ErrorActionPreference = 'Stop'
@@ -42,7 +43,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Standard-user pnpm setup failed' }
 $env:PATH = (Join-Path $tooling 'node_modules\.bin') + ';' + $env:PATH
 Set-Location $inputData.repo
 git config --global --add safe.directory $inputData.repo
-& $inputData.node apps/desktop/scripts/ci-portable-build.mjs win-x64
+& $inputData.node apps/desktop/scripts/ci-portable-build.mjs win-x64 $inputData.mode
 exit $LASTEXITCODE
 '@ | Set-Content $script
 $stdout = Join-Path $root 'stdout.log'
