@@ -80,7 +80,10 @@ for (const kind of ['fresh-profile', 'same-profile-relaunch']) {
     await settings.waitFor({ state: 'visible' })
     mark('homeVisibleMs')
     const welcome = page.getByRole('button', { name: /^(Continue|继续)$/u, exact: true })
-    if (await welcome.isVisible()) { await welcome.click(); mark('welcomeDismissedMs') }
+    // Native onboarding can advance asynchronously or skip the key step when a provider exists.
+    await page.addLocatorHandler(welcome, async () => { await welcome.click(); mark('welcomeDismissedMs') })
+    const configureLater = page.getByRole('button', { name: /^(Configure later|稍后配置)$/u, exact: true })
+    await page.addLocatorHandler(configureLater, async () => { await configureLater.click(); mark('apiSetupDismissedMs') })
     await settings.click()
     await page.getByRole('dialog').getByRole('button', { name: 'ACP adapter', exact: true }).waitFor({ state: 'visible' })
     mark('interactiveMs')
