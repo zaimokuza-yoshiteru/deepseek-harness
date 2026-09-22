@@ -24,7 +24,7 @@ Extract the complete ZIP. Open `DSH Desktop.app` on macOS or `DSH Desktop.exe` o
 
 The window displays the native startup page while one backend starts. Core production dependencies execute from the application ASAR; startup does not install them. First launch copies the prepared plugin dependencies into the writable profile. The upstream Node/Python and document-tool payload is included and prepared under the data home as needed. Full runtime integrity checks run during packaging.
 
-Native Edit menus provide select all, copy, paste, cut, undo, and redo. HTTP/HTTPS links open in the system browser; the link context menu can copy the original address.
+Native Edit menus provide select all, copy, paste, cut, undo, and redo. Chat links follow the native “Open chat links in” setting. New-window HTTP/HTTPS links open in the system browser; the link context menu can open or copy the original address.
 
 ## Plugins and Teams
 
