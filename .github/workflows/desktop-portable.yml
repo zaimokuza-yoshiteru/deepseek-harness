@@ -67,6 +67,16 @@ jobs:
             apps/desktop/.desktop-build/targets/${{ matrix.target }}/artifacts/standard-user-*.json
           if-no-files-found: error
           compression-level: 0
+      - name: Upload macOS GUI startup evidence
+        if: always() && runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-startup-mac-arm64
+          path: |
+            .artifacts/startup-timing/result.json
+            .artifacts/startup-timing/*.png
+            .artifacts/startup-timing/launch-error.txt
+          if-no-files-found: warn
 
   release:
     if: github.ref_type == 'tag'

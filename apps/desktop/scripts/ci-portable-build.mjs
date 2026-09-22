@@ -42,6 +42,14 @@ run(['exec', 'vitest', 'run', ...[
 run(['--dir', 'apps/desktop', 'run', target === 'mac-arm64' ? 'package:portable:mac:arm64' : 'package:portable:win:x64'])
 run(['exec', 'tsx', 'apps/desktop/scripts/smoke-portable.ts', target])
 const directory = join('apps/desktop/.desktop-build/targets', target, 'artifacts')
+if (target === 'mac-arm64') {
+  const executable = join(directory, 'mac-arm64', 'DSH Desktop.app', 'Contents', 'MacOS', 'DSH Desktop')
+  const gui = spawnSync(process.execPath, ['apps/desktop/scripts/startup-timing.mjs', target, executable], {
+    stdio: 'inherit', env: { ...process.env, DSH_STANDARD_USER_VERIFIED: '1' },
+  })
+  if (gui.error) throw gui.error
+  if (gui.status !== 0 || gui.signal !== null) throw new Error('Packaged macOS GUI startup failed')
+}
 mkdirSync(directory, { recursive: true })
 writeFileSync(join(directory, `standard-user-${target}.json`), JSON.stringify({
   target, standardUser: true, build: 'passed', packagedSmoke: 'passed', version: process.env.DSH_DESKTOP_DISTRIBUTION_VERSION,
