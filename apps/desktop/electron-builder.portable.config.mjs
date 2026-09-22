@@ -1,14 +1,17 @@
 /** Internal ZIP distribution; no npm publication, installer, or automatic updater. */
 import { resolveDesktopTargetBuildPaths } from './scripts/desktop-build-paths.mjs'
 import { join } from 'node:path'
+import { prepareWindowsAsarUnpack, verifyWindowsAsarUnpack } from './scripts/windows-asar-unpack.mjs'
 import { fileURLToPath } from 'node:url'
 
-const tag = process.env.DSH_DESKTOP_DISTRIBUTION_VERSION ?? '0.1.6.alpha.2.1'
-const version = tag.replace('0.1.6.alpha.', '0.1.6-alpha.')
-if (!/^0\.1\.6-alpha\.2\.[1-9][0-9]*$/u.test(version)) {
-  throw new Error('desktop portable: expected distribution version 0.1.6.alpha.2.<positive integer>')
+const tag = process.env.DSH_DESKTOP_DISTRIBUTION_VERSION ?? '0.1.7.alpha.1.1'
+const version = tag.replace('0.1.7.alpha.', '0.1.7-alpha.')
+if (!/^0\.1\.7-alpha\.1\.[1-9][0-9]*$/u.test(version)) {
+  throw new Error('desktop portable: expected distribution version 0.1.7.alpha.1.<positive integer>')
 }
 const paths = resolveDesktopTargetBuildPaths()
+
+let windowsCode = []
 
 export default {
   appId: 'io.github.zaimokuza-yoshiteru.dsh-desktop',
@@ -20,7 +23,15 @@ export default {
   electronDist: paths.electron,
   electronFuses: { runAsNode: true },
   npmRebuild: false,
-  files: ['lib/*.js', 'lib/*.cjs', 'renderer/**/*', 'package.json',
+  beforePack: async context => {
+    if (context.electronPlatformName === 'win32') windowsCode = await prepareWindowsAsarUnpack(context, paths.dsh)
+  },
+  afterPack: async context => {
+    if (context.electronPlatformName === 'win32') {
+      await verifyWindowsAsarUnpack(paths.dsh, context.packager.getResourcesDir(context.appOutDir), windowsCode)
+    }
+  },
+  files: ['lib/*.js', 'lib/*.cjs', 'lib/welcome/**/*', 'renderer/**/*', 'package.json',
     { from: paths.dsh, to: 'dsh', filter: ['**/*'] },
     { from: join(paths.dsh, 'node_modules'), to: 'dsh/node_modules', filter: ['**/*'] },
   ],

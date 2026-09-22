@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-13-desktop-experiment-bridge.md
-2026-09-13-desktop-experiment-bridge.md: 2495e90cdb2f75cd595a34dac73f680b96e1011f
-2026-09-13-desktop-experiment-bridge.zh.md: b9421959059ef51aada60a110a080ce87fd5899e
+2026-09-13-desktop-experiment-bridge.md: b79805ca85aad00734eeee6f57b99aed6a5f5fd7
+2026-09-13-desktop-experiment-bridge.zh.md: b8f105743c9727a534e8cd9bbae7d33c9aae666b

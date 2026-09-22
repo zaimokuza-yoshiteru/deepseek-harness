@@ -4,7 +4,7 @@
 
 ## Summary
 
-本分支提供 macOS Apple Silicon 与 Windows x64 ZIP，内置 DSH `0.1.6-alpha.2`、ACP adapter `0.1.6-alpha.2.0` 和 Agent Teams Office `0.1.0-beta.2`。使用者无需另外安装 DSH、Node.js、npm 或 pnpm。Devin、Kimi 等 Agent 命令仍需自行安装。
+本分支提供 macOS Apple Silicon 与 Windows x64 ZIP，内置 DSH `0.1.7-alpha.1`、ACP adapter `0.1.7-alpha.1.1` 和 Agent Teams Office `0.1.0-beta.3`。使用者无需另外安装 DSH、Node.js、npm 或 pnpm。Devin、Kimi 等 Agent 命令仍需自行安装。
 
 ## Table of Contents
 
@@ -28,9 +28,9 @@
 
 ## Plugins and Teams
 
-点击应用侧栏的 **插件**，打开 DSH 原生插件管理器。选择安装操作，输入 `@scope/plugin-name@version` 形式的包信息，检查包信息后安装。插件必须兼容 DSH `0.1.6-alpha.2`。安装、删除与启停由原生管理器负责，并由其提示需要的重载或受阻操作。应用不再内置 Plugin Hub 及其桌面 IPC 接口。
+点击应用侧栏的 **插件**，打开 DSH 原生插件管理器。选择安装操作，输入 `@scope/plugin-name@version` 形式的包信息，检查包信息后安装。插件必须兼容 DSH `0.1.7-alpha.1`。安装、删除与启停由原生管理器负责，并由其提示需要的重载或受阻操作。应用不再内置 Plugin Hub 及其桌面 IPC 接口。
 
-新 profile 默认启用 Agent Teams。原生管理器分别列出官方 Agent Teams Host 和 Web 模块。关闭两个模块即可关闭 Teams，重新开启两个模块即可恢复。依赖始终保留在应用中，切换不需要下载。迁移保留旧桌面开关状态，后续升级分别保留原生模块的启停选择。
+新 profile 默认启用 Agent Teams。原生管理器提供一个包含 Host 和 Web 模块的官方 Agent Teams 插件，启停该插件即可切换 Teams，无需下载依赖。迁移保留原 Host 插件的启用选择，并移除已退役的独立 Web 插件。
 
 内置 Office 在团队会话的右侧边栏提供办公室入口，支持 3D 和像素视图，需要 WebGL，最多显示 16 个队友和一个 Lead。关闭 Teams 时入口隐藏；渲染库及许可声明随插件内置，重新开启不需要下载 Office。也可以在插件管理器中单独禁用 Office。
 
@@ -60,13 +60,13 @@ pnpm --dir apps/desktop run package:portable:mac:arm64
 
 ```
 
-Windows 构建命令为 `pnpm --dir apps/desktop run package:portable:win:x64`。GitHub Actions 创建临时普通账号，再以无管理员身份安装依赖、构建和验证最终应用。仅创建账号使用 runner 的管理权限。检查涵盖原生插件管理、ACP/Office RPC、Teams 离线开关、profile 迁移和 Windows Devin 硬链接回退。构建产物、诊断、profile、签名材料和凭证不进入 Git。标签 `0.1.6.alpha.2.1` 对应应用 SemVer `0.1.6-alpha.2.1`，核心包保持 `0.1.6-alpha.2`。
+Windows 构建命令为 `pnpm --dir apps/desktop run package:portable:win:x64`。GitHub Actions 创建临时普通账号，再以无管理员身份安装依赖、构建和验证最终应用。仅创建账号使用 runner 的管理权限。检查涵盖原生插件管理、ACP/Office RPC、Teams 离线开关、profile 迁移和 Devin 固定 stdio MCP 入口和会话能力隔离。构建产物、诊断、profile、签名材料和凭证不进入 Git。标签 `0.1.7.alpha.1.1` 对应应用 SemVer `0.1.7-alpha.1.1`，核心包保持 `0.1.7-alpha.1`。
 
 **Desktop portable smoke replay** 工作流接受已有构建的 run ID。Windows 会解压该次构建的原始 ZIP，核验普通用户身份，分别测量全新 profile 的 GUI 启动，以及完全退出后使用同一 profile 再次启动。在 `desktop-startup-win-x64` 产物中查看 `result.json` 和截图：就绪标准为设置按钮可见且成功打开设置对话框。报告记录 ZIP 的 SHA256 和渲染页面的绘制时间。启动计时不含 ZIP 解压，也不代表用户电脑的安全扫描或操作系统冷缓存表现。macOS 重测保留后端检查。
 
 ## Release versions
 
-便携标签采用 `0.1.6.alpha.2.<counter>`，应用元数据采用 `0.1.6-alpha.2.<counter>`。核心与插件版本分别固定。标准上游安装包命令从 package manifest 推导版本。
+便携标签采用 `0.1.7.alpha.1.<counter>`，应用元数据采用 `0.1.7-alpha.1.<counter>`。核心与插件版本分别固定。标准上游安装包命令从 package manifest 推导版本。
 
 ## Windows EV signing
 
@@ -75,3 +75,9 @@ Windows 构建命令为 `pnpm --dir apps/desktop run package:portable:win:x64`�
 ## Dev Note
 
 参见[便携发行决策](../../.agents/notes/implemented/architecture/2026-09-10-desktop-portable-distribution.zh.md)与[原生实验功能管理](../../.agents/notes/implemented/architecture/2026-09-13-desktop-experiment-bridge.zh.md)。运行时与用户插件依赖图保持分离，渲染进程不启用 Node integration。
+
+桌面构建将原生账户流协议打入主进程入口，应用启动不依赖额外的工作区包或其 peer 安装。
+
+## Upload updates
+
+便携构建通过 [GitHub Release 晋级流程](../../.github/workflows/desktop-promote.yml)发布已验证的 CI ZIP 和 SHA256 校验文件，不上传到上游自动更新服务。

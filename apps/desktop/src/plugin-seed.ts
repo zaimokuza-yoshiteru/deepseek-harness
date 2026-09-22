@@ -38,6 +38,7 @@ export async function applyPluginSeed(
   const old = existsSync(manifestPath) ? JSON.parse(readFileSync(manifestPath, 'utf8')) as ProfileManifest : undefined
   const bundled = new Set<string>(DESKTOP_PORTABLE_PLUGINS.map(plugin => plugin.name))
   bundled.add('@zaimokuza/dsh-plugin-hub')
+  bundled.add('@deepseek-ai/dsh-experimental-agent-team-web-profile')
   const core = new Set(runtime.sharedPackages.map(entry => entry.name))
   if (existsSync(join(profile, DESKTOP_PACKAGE_SET_FILE))) {
     for (const entry of readDesktopCorePackageSet(profile).packages) {

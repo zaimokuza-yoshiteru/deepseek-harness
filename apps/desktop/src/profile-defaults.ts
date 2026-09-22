@@ -3,7 +3,6 @@
 /** Official Agent Teams layers, ordered after the base and Web layers. */
 export const DESKTOP_AGENT_TEAM_BUNDLES = [
   '@deepseek-ai/dsh-experimental-agent-team-profile',
-  '@deepseek-ai/dsh-experimental-agent-team-web-profile',
 ] as const
 
 const BASE_BUNDLES = ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'] as const

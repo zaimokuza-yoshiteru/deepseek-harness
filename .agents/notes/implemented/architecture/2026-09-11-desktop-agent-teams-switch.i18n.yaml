@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-11-desktop-agent-teams-switch.md
-2026-09-11-desktop-agent-teams-switch.md: aab739104ac4a6a884266ce5ee63440cb0a1f009
-2026-09-11-desktop-agent-teams-switch.zh.md: e9b500a56871cd8599310d9eae1368d1b180c13c
+2026-09-11-desktop-agent-teams-switch.md: 30d07372894c4c673855073b1913d2ad5385d370
+2026-09-11-desktop-agent-teams-switch.zh.md: c5c4a3763e25123a46a4721ad5768677ee284dc8

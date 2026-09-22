@@ -34,6 +34,7 @@ if (mode === 'startup') {
   if (child.status !== 0 || child.signal !== null) throw new Error('Packaged GUI startup timing failed')
   process.exit(0)
 }
+run(['--dir', 'native/system/packages/entry', 'run', 'build:js'])
 run(['exec', 'vitest', 'run', ...[
   'npm-environment', 'project-manager', 'distribution', 'shell-environment', 'plugin-seed', 'package-target',
   'host-process', 'main-startup', 'prepare-package-set', 'locale', 'icons', 'profile-core-cleanup', 'preload-app', 'node-environment',

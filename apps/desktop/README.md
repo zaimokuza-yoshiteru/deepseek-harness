@@ -4,7 +4,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-This fork ships macOS Apple Silicon and Windows x64 ZIPs with DSH `0.1.6-alpha.2`, ACP adapter `0.1.6-alpha.2.0`, and Agent Teams Office `0.1.0-beta.2`. Recipients do not install DSH, Node.js, npm, or pnpm separately. Agent executables such as Devin and Kimi remain external.
+This fork ships macOS Apple Silicon and Windows x64 ZIPs with DSH `0.1.7-alpha.1`, ACP adapter `0.1.7-alpha.1.1`, and Agent Teams Office `0.1.0-beta.3`. Recipients do not install DSH, Node.js, npm, or pnpm separately. Agent executables such as Devin and Kimi remain external.
 
 ## Table of Contents
 
@@ -28,9 +28,9 @@ Native Edit menus provide select all, copy, paste, cut, undo, and redo. HTTP/HTT
 
 ## Plugins and Teams
 
-Open **Plugins** in the application sidebar to use DSH’s native plugin manager. Choose its installation action, enter a package specification such as `@scope/plugin-name@version`, review the package, and install it. Plugins must support DSH `0.1.6-alpha.2`. The native manager owns package installation, removal and activation, and reports any required reload or blocked operation. Plugin Hub and its desktop IPC bridge are not included.
+Open **Plugins** in the application sidebar to use DSH’s native plugin manager. Choose its installation action, enter a package specification such as `@scope/plugin-name@version`, review the package, and install it. Plugins must support DSH `0.1.7-alpha.1`. The native manager owns package installation, removal and activation, and reports any required reload or blocked operation. Plugin Hub and its desktop IPC bridge are not included.
 
-Agent Teams is enabled for a new profile. The native manager lists the official Agent Teams Host and Web bundles separately. Disable both to turn Teams off; enable both to restore it. Their dependencies remain in the application, so toggling needs no download. Migration preserves the old desktop switch choice and subsequently preserves each native bundle selection independently.
+Agent Teams is enabled for a new profile. The native manager exposes one official Agent Teams bundle containing Host and Web modules. Disable or enable that bundle to switch Teams without downloading dependencies. Migration retains the previous Host bundle selection and removes the retired separate Web bundle.
 
 Bundled Office appears in the right sidebar of a team conversation and offers 3D and pixel views. It requires WebGL, displays up to 16 teammates and one lead, and hides its entry while Teams is disabled. Rendering libraries and license notices ship with the plugin; reopening Teams requires no Office download. Office can also be disabled independently in the plugin manager.
 
@@ -60,13 +60,13 @@ pnpm --dir apps/desktop run package:portable:mac:arm64
 
 ```
 
-The Windows command is `pnpm --dir apps/desktop run package:portable:win:x64`. GitHub Actions provisions a temporary standard account, then installs dependencies, builds and checks the final application without administrator membership. Only account provisioning uses the runner’s administrative privileges. Checks cover native plugin management, ACP/Office RPCs, offline Teams toggles, profile migration and Windows Devin hard-link fallback. Build outputs, diagnostics, profiles, signing materials, and credentials stay outside Git history. Tag `0.1.6.alpha.2.1` maps to application SemVer `0.1.6-alpha.2.1`; core packages keep `0.1.6-alpha.2`.
+The Windows command is `pnpm --dir apps/desktop run package:portable:win:x64`. GitHub Actions provisions a temporary standard account, then installs dependencies, builds and checks the final application without administrator membership. Only account provisioning uses the runner’s administrative privileges. Checks cover native plugin management, ACP/Office RPCs, offline Teams toggles, profile migration and Devin’s fixed stdio MCP entry and isolated session capabilities. Build outputs, diagnostics, profiles, signing materials, and credentials stay outside Git history. Tag `0.1.7.alpha.1.1` maps to application SemVer `0.1.7-alpha.1.1`; core packages keep `0.1.7-alpha.1`.
 
 The **Desktop portable smoke replay** workflow accepts a previous build run ID. On Windows it extracts that exact ZIP, verifies an ordinary-user identity, and times a fresh-profile GUI launch and a complete relaunch with the same profile. Read `result.json` and screenshots in the `desktop-startup-win-x64` artifact: readiness requires a visible Settings button and a successfully opened Settings dialog. The report records the ZIP SHA256 and renderer paint timings. ZIP extraction, user-machine security scanning and OS cold-cache behavior are not represented by the launch timings. The macOS replay retains its backend checks.
 
 ## Release versions
 
-Portable tags use `0.1.6.alpha.2.<counter>` and application metadata uses `0.1.6-alpha.2.<counter>`. Core and plugin versions remain separately pinned. Standard upstream installer commands derive their versions from the package manifests.
+Portable tags use `0.1.7.alpha.1.<counter>` and application metadata uses `0.1.7-alpha.1.<counter>`. Core and plugin versions remain separately pinned. Standard upstream installer commands derive their versions from the package manifests.
 
 ## Windows EV signing
 
@@ -75,3 +75,9 @@ Portable ZIPs are unsigned and need no EV token. Upstream signed-installer scrip
 ## Dev Note
 
 See the [portable distribution decision](../../.agents/notes/implemented/architecture/2026-09-10-desktop-portable-distribution.md) and [native experiment management](../../.agents/notes/implemented/architecture/2026-09-13-desktop-experiment-bridge.md). Runtime and user-plugin dependency graphs remain separate; the renderer has no Node integration.
+
+The desktop build bundles the native account stream protocol into the main-process entry, so application launch does not depend on a separate workspace package or its peer installation.
+
+## Upload updates
+
+Portable builds use [GitHub Release promotion](../../.github/workflows/desktop-promote.yml) to publish the verified CI ZIPs and SHA256 checksums. They do not upload to the upstream automatic-update service.

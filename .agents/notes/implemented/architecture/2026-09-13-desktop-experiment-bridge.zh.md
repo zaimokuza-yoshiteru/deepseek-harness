@@ -20,4 +20,4 @@ DSH alpha.2 已提供原生模块管理。保留 Hub 专用的 Electron 实验�
 
 ## 影响
 
-渲染进程仍运行在沙箱中，不启用 Node integration。成品验证覆盖安装 ACP、Office 后的原生模块列表和 Teams 离线切换，以及 profile 迁移和 Windows Devin 文件链接回退。真实模型服务测试与这些确定性的发行检查分别执行。
+渲染进程仍运行在沙箱中，不启用 Node integration。成品验证覆盖安装 ACP、Office 后的原生模块列表和 Teams 离线切换，以及 profile 迁移和 Devin MCP 注册与会话隔离。真实模型服务测试与这些确定性的发行检查分别执行。

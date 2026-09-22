@@ -10,7 +10,7 @@ Internal recipients need a double-click application without separate DSH or Java
 
 ## Decision
 
-The desktop branch ships macOS arm64 and Windows x64 ZIPs with DSH `0.1.6-alpha.2`, ACP `0.1.6-alpha.2.0` and Office `0.1.0-beta.2`. Tag `0.1.6.alpha.2.1` maps to application SemVer `0.1.6-alpha.2.1`. Both public plugin tarballs are locked by npm integrity; Hub is absent.
+The desktop branch ships macOS arm64 and Windows x64 ZIPs with DSH `0.1.7-alpha.1`, ACP `0.1.7-alpha.1.1` and Office `0.1.0-beta.3`. Tag `0.1.7.alpha.1.1` maps to application SemVer `0.1.7-alpha.1.1`. Both public plugin tarballs are locked by npm integrity; Hub is absent.
 
 Core production dependencies execute from ASAR under Electron Node mode. The official Node/Python and document-tool payload remains bundled. The native startup page appears before profile preparation and one Host serves the application. First launch copies prebuilt plugin dependencies; additional user plugins may require registry access during migration.
 
@@ -26,4 +26,4 @@ Requiring system runtimes would reduce archive size but contradict offline start
 
 ## Consequences
 
-Verification covers npm TLS settings, shell exports, icons, native plugin RPCs, offline Teams changes, rollback and old-profile migration. Windows checks force file-symlink denial and verify the packaged ACP hard-link fallback against synthetic Devin configuration without reading credentials. Real provider logins and live model tests remain separate.
+Verification covers npm TLS settings, shell exports, icons, native plugin RPCs, offline Teams changes, rollback and old-profile migration. Devin checks run the packaged Electron in Node mode with synthetic native CLI configuration and real MCP stdio/HTTP transports, covering fixed registration, concurrent session isolation and capability revocation without reading credentials. Real provider logins and live model tests remain separate.

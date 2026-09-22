@@ -10,7 +10,7 @@ Status: implemented
 
 ## 决策
 
-desktop 分支提供 macOS arm64 与 Windows x64 ZIP，内置 DSH `0.1.6-alpha.2`、ACP `0.1.6-alpha.2.0` 和 Office `0.1.0-beta.2`。标签 `0.1.6.alpha.2.1` 映射为应用 SemVer `0.1.6-alpha.2.1`。两个公开插件 tarball 均以 npm integrity 锁定，不含 Hub。
+desktop 分支提供 macOS arm64 与 Windows x64 ZIP，内置 DSH `0.1.7-alpha.1`、ACP `0.1.7-alpha.1.1` 和 Office `0.1.0-beta.3`。标签 `0.1.7.alpha.1.1` 映射为应用 SemVer `0.1.7-alpha.1.1`。两个公开插件 tarball 均以 npm integrity 锁定，不含 Hub。
 
 核心生产依赖由 Electron Node 模式从 ASAR 执行，保留官方内置 Node/Python 和文档工具运行时。原生启动页面在 profile 准备前出现，应用只运行一个 Host。首次启动复制预构建插件依赖，其他用户插件在迁移时可能需要访问 registry。
 
@@ -26,4 +26,4 @@ CI 在两个平台分别创建临时普通账号，依赖安装、编译、ZIP �
 
 ## 影响
 
-验证覆盖 npm TLS 配置、shell 导出变量、图标、原生插件 RPC、Teams 离线切换、回滚和旧 profile 迁移。Windows 检查强制拒绝文件符号链接，以合成 Devin 配置验证成品 ACP 的硬链接回退，不读取凭证。真实服务登录与在线模型测试单独进行。
+验证覆盖 npm TLS 配置、shell 导出变量、图标、原生插件 RPC、Teams 离线切换、回滚和旧 profile 迁移。Devin 检查通过打包 Electron 的 Node 模式、合成原生 CLI 配置及真实 MCP stdio/HTTP 传输，验证固定注册、并发会话隔离和能力撤销，不读取凭证。真实服务登录与在线模型测试单独进行。

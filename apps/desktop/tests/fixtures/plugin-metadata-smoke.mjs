@@ -1,6 +1,7 @@
 // Validate installed plugin metadata against the exact packaged host. A working
 // SRC endpoint alone does not prove that the generated client can register.
 import assert from 'node:assert/strict'
+import { packagedProfile } from './packaged-profile.mjs'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
@@ -11,11 +12,11 @@ assert.ok(runtime && profile, 'Expected runtime and profile directories')
 const hostRequire = createRequire(join(runtime, 'package.json'))
 const pluginRequire = createRequire(join(profile, 'package.json'))
 const loadHost = name => import(pathToFileURL(hostRequire.resolve(name)).href)
-const { Context } = await loadHost('@deepseek-ai/cordis')
+const scope = await packagedProfile(runtime, profile)
 const { default: Registry } = await loadHost('@deepseek-ai/dsh-typert-registry')
 const { validateTypertManifest } = await loadHost('@deepseek-ai/dsh-typert-loader')
 const manifest = JSON.parse(readFileSync(join(profile, 'package.json'), 'utf8'))
-const ctx = new Context()
+const ctx = scope.ctx
 const fiber = ctx.plugin(Registry)
 let hostPackages = 0
 let remotePackages = 0
@@ -37,4 +38,5 @@ try {
   assert.ok(hostPackages > 0 && remotePackages > 0, 'Expected generated Host and Remote plugin metadata')
 } finally {
   await fiber.dispose()
+  await scope.close()
 }

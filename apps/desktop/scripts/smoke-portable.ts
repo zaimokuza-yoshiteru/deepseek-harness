@@ -60,7 +60,6 @@ const runtime = {
   pnpm: join(packagedResources, 'runtime', 'pnpm', 'bin', 'pnpm.mjs'),
   dsh: join(packagedResources, 'app.asar', 'dsh'),
   pluginSeed: join(packagedResources, 'plugin-seed'),
-  profileResolution: 'runtime' as const,
 }
 const paths = resolveDesktopPaths(home)
 const manager = new DesktopProjectManager(paths, runtime)
@@ -70,7 +69,7 @@ let hostCookie = ''
 const request = (input: Request): Promise<Response> => forwardWebRequest(input, hostUrl, hostCookie)
 async function startHost(): Promise<void> {
   host = new DesktopHostProcess(runtime.node, runtime.dsh, paths.profile, undefined, process.env, undefined,
-    join(packagedResources, 'runtime', 'primary-runtime'), 'runtime', runtime)
+    join(packagedResources, 'runtime', 'primary-runtime'), runtime)
   const ready = await host.start()
   hostUrl = ready.url
   hostCookie = await authenticateWebHost(hostUrl)
@@ -161,7 +160,7 @@ try {
   const [metadataCode, metadataSignal] = await once(metadata, 'exit')
   assert.equal(metadataSignal, null)
   assert.equal(metadataCode, 0, 'Final plugin metadata must register on the packaged host and client registry')
-  const devinConfig = spawn(runtime.node, ['--expose-internals', join(import.meta.dirname, '../tests/fixtures/devin-config-smoke.mjs'), paths.profile], {
+  const devinConfig = spawn(runtime.node, ['--expose-internals', join(import.meta.dirname, '../tests/fixtures/devin-config-smoke.mjs'), runtime.dsh, paths.profile], {
     env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: 'inherit',
   })
   const [devinCode, devinSignal] = await once(devinConfig, 'exit')
@@ -169,7 +168,7 @@ try {
   assert.equal(devinCode, 0, 'Packaged Devin config must support ordinary Windows users and preserve original files')
   const hostStart = performance.now()
   await startHost()
-  assert.equal(readDesktopRuntime(runtime.dsh).release.version, '0.1.6-alpha.2')
+  assert.equal(readDesktopRuntime(runtime.dsh).release.version, '0.1.7-alpha.1')
   const response = await request(new Request('dsh-app://app/index.html'))
   assert.equal(response.status, 200)
   const html = await response.text()

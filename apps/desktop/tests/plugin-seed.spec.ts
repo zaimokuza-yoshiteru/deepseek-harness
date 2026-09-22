@@ -109,3 +109,22 @@ it('preserves native per-bundle Teams choices across subsequent seed upgrades', 
   await applyPluginSeed(f.profile, f.seed, f.backup, f.runtime, async (install) => { expect(install).toBe(false) })
   expect(JSON.parse(readFileSync(join(f.profile, 'package.json'), 'utf8'))).toEqual(manifest)
 })
+
+
+it('removes the retired Teams web package while retaining the merged Teams selection and user plugin', async () => {
+  const f = fixture()
+  const host = '@deepseek-ai/dsh-experimental-agent-team-profile'
+  const web = '@deepseek-ai/dsh-experimental-agent-team-web-profile'
+  writeFileSync(join(f.profile, 'package.json'), JSON.stringify({
+    dependencies: { [web]: '0.1.6-alpha.2', 'user-plugin': '1.2.3' },
+    dsh: { profile: { bundles: [host, web, 'user-plugin'] } },
+  }))
+  writeFileSync(join(f.profile, 'settings.yaml'), 'agents: []\n')
+  await applyPluginSeed(f.profile, f.seed, f.backup, f.runtime, async (install) => { expect(install).toBe(true) })
+  const manifest = JSON.parse(readFileSync(join(f.profile, 'package.json'), 'utf8')) as { dependencies: Record<string, string>; dsh: { profile: { bundles: string[] } } }
+  expect(manifest.dependencies).not.toHaveProperty(web)
+  expect(manifest.dependencies['user-plugin']).toBe('1.2.3')
+  expect(manifest.dsh.profile.bundles.filter(name => name === host)).toEqual([host])
+  expect(manifest.dsh.profile.bundles).not.toContain(web)
+  expect(readFileSync(join(f.profile, 'settings.yaml'), 'utf8')).toBe('agents: []\n')
+})

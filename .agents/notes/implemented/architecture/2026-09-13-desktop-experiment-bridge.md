@@ -20,4 +20,4 @@ Keeping both native and Hub controls would retain an obsolete authority and risk
 
 ## Consequences
 
-The renderer remains sandboxed without Node integration. Packaged verification exercises native bundle listing and offline Teams changes with ACP and Office installed, alongside profile migration and Windows Devin file-link fallback. Real model-provider tests remain separate from these deterministic distribution checks.
+The renderer remains sandboxed without Node integration. Packaged verification exercises native bundle listing and offline Teams changes with ACP and Office installed, alongside profile migration and Devin MCP registration and session isolation. Real model-provider tests remain separate from these deterministic distribution checks.

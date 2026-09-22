@@ -10,13 +10,13 @@ Desktop users need to disable Teams and restore it without downloading dependenc
 
 ## Decision
 
-Both official Teams bundles remain inside the production runtime. New portable profiles select both. DSH’s native plugin manager lists the Host and Web bundles separately; disabling both removes Teams execution and presentation, while retaining their installed bytes.
+The official Teams bundle contains both Host and Web modules inside the production runtime. New portable profiles enable it. DSH’s native plugin manager controls execution and presentation together while retaining installed dependencies.
 
-Migration converts the old `dsh.desktop.agentTeams` selection to native `dsh.profile.bundles`, then removes that legacy field. An explicit old false disables both; otherwise existing bundle selections survive independently. Later seed upgrades read only native selections, so a retired flag cannot re-enable a user-disabled bundle.
+Migration converts the old `dsh.desktop.agentTeams` selection to native `dsh.profile.bundles`, then removes that legacy field. An explicit old false disables Teams; otherwise the previous Host bundle selection survives. The retired separate Web bundle is removed. Later seed upgrades read only native selections, so a retired flag cannot re-enable a user-disabled bundle.
 
 ## Alternatives considered
 
-A fork-specific combined toggle would duplicate the official interface and require another lifecycle bridge. The distribution follows native behavior and documents that complete Teams shutdown requires disabling both bundles.
+A fork-specific combined toggle would duplicate the official interface and require another lifecycle bridge. The distribution follows the native combined bundle without a private control.
 
 ## Consequences
 

@@ -10,13 +10,14 @@ import { once } from 'node:events'
 const desktopRequire = createRequire(new URL('../package.json', import.meta.url))
 const webRequire = createRequire(new URL('../../web/package.json', import.meta.url))
 const { _electron } = webRequire('playwright')
+const { expect } = webRequire('playwright/test')
 const extractZip = desktopRequire('extract-zip')
 const target = process.argv[2]
 assert.ok(['mac-arm64', 'win-x64'].includes(target), 'Expected mac-arm64 or win-x64')
 const output = resolve('.artifacts/startup-timing')
 await mkdir(output, { recursive: true })
 const report = { target, archive: null, sha256: null, standardUser: process.env.DSH_STANDARD_USER_VERIFIED === '1',
-  measurement: 'Process launch to visible Settings button and successful Settings dialog interaction; no model invocation.',
+  measurement: 'Process launch through native welcome to a visible account menu and successful Settings dialog interaction; no model invocation.',
   limitations: 'Fresh CI machine, immediately after ZIP extraction; not an OS disk-cache cold boot or a user endpoint security reproduction. Extraction is excluded.',
   runs: [] }
 let executable = process.argv[3] && resolve(process.argv[3])
@@ -41,12 +42,16 @@ await mkdir(profile, { recursive: true })
 await writeFile(join(profile, 'cordis.patch.yml'), '- id: webserver\n  config:\n    host: 127.0.0.1\n    port: 0\n')
 const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/KEY|SECRET|TOKEN|PASSWORD|^ELECTRON_RUN_AS_NODE$|^NODE_OPTIONS$|^NODE_PATH$/iu.test(name)))
 Object.assign(env, { DSH_HOME: home, DSH_TELEMETRY_MODE: 'DISABLED', DSH_DESKTOP_OPEN_DEVTOOLS: '0',
+  HOME: home, USERPROFILE: home, ZDOTDIR: home, DSH_DESKTOP_DIAGNOSTIC_FILE: join(output, 'launch-error.txt'),
   npm_config_registry: 'http://127.0.0.1:1/unreachable/', npm_config_userconfig: join(home, 'absent.npmrc') })
 const save = () => writeFile(join(output, 'result.json'), JSON.stringify(report, null, 2) + '\n')
 for (const kind of ['fresh-profile', 'same-profile-relaunch']) {
   const run = { kind, timings: {}, errors: [], requests: [] }
   report.runs.push(run)
   let app, page, child, firstScreenshot
+  let stopping = false
+  const welcomeTasks = []
+  const seenWindows = new WeakSet()
   const started = performance.now()
   const wallStart = Date.now()
   const elapsed = () => Math.round(performance.now() - started)
@@ -55,6 +60,22 @@ for (const kind of ['fresh-profile', 'same-profile-relaunch']) {
   try {
     app = await _electron.launch({ executablePath: executable, env, args: ['--lang=en-US'], timeout: 300_000 })
     child = app.process()
+    const handleWelcome = candidate => {
+      if (seenWindows.has(candidate)) return
+      seenWindows.add(candidate)
+      const task = (async () => {
+        await candidate.waitForURL(url => url.href.startsWith('dsh-app://app/') || url.pathname.endsWith('/welcome.html'), { timeout: 300_000 })
+        await candidate.waitForLoadState('domcontentloaded')
+        if (!candidate.url().includes('welcome.html')) return
+        mark('nativeWelcomeMs')
+        await candidate.locator('#api-key').click()
+        await candidate.locator('#skip-key').click()
+        mark('nativeWelcomeDismissedMs')
+      })().catch(error => { if (!stopping) run.errors.push({ ms: elapsed(), type: 'welcome', message: error.message }) })
+      welcomeTasks.push(task)
+    }
+    app.on('window', handleWelcome)
+    for (const candidate of app.windows()) handleWelcome(candidate)
     mark('automationConnectedMs')
     run.application = await app.evaluate(({ app }) => ({ version: app.getVersion(), packaged: app.isPackaged }))
     assert.equal(run.application.packaged, true)
@@ -71,21 +92,26 @@ for (const kind of ['fresh-profile', 'same-profile-relaunch']) {
       run.requests.push({ startMs: start, durationMs: elapsed() - start, protocol: url.protocol, path: url.pathname })
     })
     page.on('requestfailed', request => {
-      run.errors.push({ ms: elapsed(), type: 'request-failed', detail: request.failure()?.errorText })
+      if (!stopping) run.errors.push({ ms: elapsed(), type: 'request-failed', detail: request.failure()?.errorText })
       requests.delete(request)
     })
     firstScreenshot = page.screenshot({ path: join(output, `${kind}-first-window.png`), timeout: 15_000 }).catch(() => {})
     await page.waitForURL('dsh-app://app/**', { timeout: 300_000 })
-    const settings = page.getByRole('button', { name: /^(Settings|设置)$/u, exact: true })
-    await settings.waitFor({ state: 'visible' })
+    const accountMenu = page.getByRole('button', { name: /^(Account menu|账号菜单)$/u, exact: true })
+    await accountMenu.waitFor({ state: 'visible' })
     mark('homeVisibleMs')
     const welcome = page.getByRole('button', { name: /^(Continue|继续)$/u, exact: true })
     // Native onboarding can advance asynchronously or skip the key step when a provider exists.
     await page.addLocatorHandler(welcome, async () => { await welcome.click(); mark('welcomeDismissedMs') })
     const configureLater = page.getByRole('button', { name: /^(Configure later|稍后配置)$/u, exact: true })
     await page.addLocatorHandler(configureLater, async () => { await configureLater.click(); mark('apiSetupDismissedMs') })
-    await settings.click()
-    await page.getByRole('dialog').getByRole('button', { name: 'ACP adapter', exact: true }).waitFor({ state: 'visible' })
+    await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()
+      .some(window => window.webContents.getURL().startsWith('dsh-app://app/') && window.isVisible())),
+      { timeout: 300_000, message: 'The workspace must be visible after native welcome' }).toBe(true)
+    mark('workspaceVisibleMs')
+    await accountMenu.click()
+    await page.getByRole('menuitem', { name: /^(Settings|设置)$/u, exact: true }).click()
+    await page.getByRole('dialog').getByRole('button', { name: /^(General|通用设置)$/u, exact: true }).waitFor({ state: 'visible' })
     mark('interactiveMs')
     run.renderer = await page.evaluate(() => ({
       bootPagePresent: !!document.querySelector('[data-dsh-boot]'),
@@ -105,6 +131,7 @@ for (const kind of ['fresh-profile', 'same-profile-relaunch']) {
     if (page) await page.screenshot({ path: join(output, `${kind}-failure.png`), timeout: 10_000 }).catch(() => {})
     throw error
   } finally {
+    stopping = true
     await firstScreenshot
     await save()
     if (app) {
@@ -112,6 +139,7 @@ for (const kind of ['fresh-profile', 'same-profile-relaunch']) {
       try {
         await Promise.race([app.close(), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('GUI shutdown timed out')), 30_000) })])
         if (child.exitCode === null && child.signalCode === null) await once(child, 'exit')
+        await Promise.all(welcomeTasks)
         run.exit = { code: child.exitCode, signal: child.signalCode }
         assert.equal(child.exitCode, 0)
         assert.equal(child.signalCode, null)
