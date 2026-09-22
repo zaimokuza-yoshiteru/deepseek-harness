@@ -1,6 +1,8 @@
 /** Sign final native runtime files before the enclosing Desktop application is signed. */
 
 import { createHash } from 'node:crypto'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { closeSync, openSync, readSync } from 'node:fs'
 import { join } from 'node:path'
 import { inventoryDesktopRuntime } from '../src/runtime-tree.ts'
@@ -10,6 +12,17 @@ import { macOSCachePolicy } from './macos-cache-policy.ts'
 import { signMacOSRuntimeCode, verifyMacOSRuntimeCode } from './verify-macos-signature.mjs'
 
 const MACH_O_MAGICS = new Set(['cafebabe', 'cafebabf', 'cefaedfe', 'cffaedfe', 'feedface', 'feedfacf', 'bebafeca', 'bfbafeca'])
+
+/** Preserve the native Office helper's JIT entitlement in certificate-free portable builds.
+ * @param helper - Materialized LibreOffice helper executable before manifest hashing.
+ * @returns Resolves after ad-hoc signing and strict signature verification.
+ */
+export async function signPortableMacOSOfficeHelper(helper: string): Promise<void> {
+  const run = promisify(execFile)
+  await run('/usr/bin/codesign', ['--force', '--sign', '-', '--timestamp=none', '--entitlements',
+    join(import.meta.dirname, 'jit-entitlements.plist'), helper])
+  await run('/usr/bin/codesign', ['--verify', '--strict', helper])
+}
 
 function magic(path: string): string {
   const descriptor = openSync(path, 'r')

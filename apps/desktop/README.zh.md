@@ -76,7 +76,7 @@ Windows 构建命令为 `pnpm --dir apps/desktop run package:portable:win:x64`�
 
 参见[便携发行决策](../../.agents/notes/implemented/architecture/2026-09-10-desktop-portable-distribution.zh.md)与[原生实验功能管理](../../.agents/notes/implemented/architecture/2026-09-13-desktop-experiment-bridge.zh.md)。运行时与用户插件依赖图保持分离，渲染进程不启用 Node integration。
 
-桌面构建将原生账户流协议打入主进程入口，应用启动不依赖额外的工作区包或其 peer 安装。
+桌面构建将原生账户流协议打入主进程入口，应用启动不依赖额外的工作区包或其 peer 安装。macOS 便携构建在记录运行时哈希之前，为文档转换辅助程序执行保留上游 JIT 权限的临时签名，无需开发者证书或管理员账户。
 
 ## Upload updates
 

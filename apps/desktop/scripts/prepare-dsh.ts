@@ -29,6 +29,7 @@ import {
 } from './desktop-release-environment.mjs'
 import {
   signMacOSRuntime,
+  signPortableMacOSOfficeHelper,
 } from './macos-runtime.ts'
 import { resolveDesktopBuildTarget, resolveDesktopTargetBuildPaths } from './desktop-build-paths.mjs'
 import { desktopRuntimeFileExclusion } from './runtime-file-policy.ts'
@@ -157,6 +158,10 @@ async function main(): Promise<void> {
     if (process.platform === 'darwin' && process.env.DSH_DESKTOP_PORTABLE !== '1') {
       await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'sign:dsh-native', () => signMacOSRuntime(DSH_OUTPUT_ROOT, resolveDesktopAppId(process.env), resolveMacOSSigningEnvironment(process.env), join(BUILD_PATHS.root, 'signature-cache')))
       await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'sign:primary-native', () => signMacOSRuntime(join(RUNTIME_ROOT, 'primary-runtime'), resolveDesktopAppId(process.env), resolveMacOSSigningEnvironment(process.env), join(BUILD_PATHS.root, 'signature-cache')))
+    }
+    if (process.platform === 'darwin' && process.env.DSH_DESKTOP_PORTABLE === '1') {
+      await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'sign:portable-office', () =>
+        signPortableMacOSOfficeHelper(join(DSH_OUTPUT_ROOT, 'node_modules', '@deepseek-ai', `libreoffice-kit-${officeEngine}`, 'bin', 'libreoffice-kit')))
     }
     await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'runtime:manifests', () => prepareRuntimeManifests(DSH_OUTPUT_ROOT))
     await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'runtime:primary-smoke', async () => smokePrimaryRuntime(join(RUNTIME_ROOT, 'primary-runtime')))

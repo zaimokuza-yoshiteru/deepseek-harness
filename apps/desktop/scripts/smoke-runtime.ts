@@ -50,8 +50,33 @@ export async function smokeDesktopRuntime(
     writeFileSync(join(plugin, 'index.js'), `
 import { Context } from '@deepseek-ai/cordis'
 import { inspect } from 'node:util'
+import { subscribe, unsubscribe } from 'node:diagnostics_channel'
+import { basename } from 'node:path'
 export function apply(ctx) {
   if (!(ctx instanceof Context)) throw new Error('desktop runtime: external plugin loaded another Cordis instance')
+  ctx.effect(() => {
+    const children = new Map()
+    const observe = ({ process: child }) => {
+      const closed = (code, signal) => {
+        children.delete(child)
+        console.log('desktop runtime: Office helper exit', JSON.stringify({ code, signal }))
+      }
+      const spawned = () => {
+        if (/^libreoffice-kit(?:[.]exe)?$/.test(basename(child.spawnfile))) child.once('close', closed)
+        else children.delete(child)
+      }
+      children.set(child, { spawned, closed })
+      child.once('spawn', spawned)
+    }
+    subscribe('child_process', observe)
+    return () => {
+      unsubscribe('child_process', observe)
+      for (const [child, { spawned, closed }] of children) {
+        child.off('spawn', spawned)
+        child.off('close', closed)
+      }
+    }
+  })
   ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: '/desktop-smoke',
     handler(_request, response) { response.end('plugin route ready') } }))
   for (const input of ${JSON.stringify(inputs)}) {
@@ -93,6 +118,8 @@ export function apply(ctx) {
     const pluginResponse = await fetch(new URL('/desktop-smoke', ready.url), { headers: { cookie } })
     if (await pluginResponse.text() !== 'plugin route ready') throw new Error('desktop runtime: plugin HTTP route failed')
     for (const { extension } of inputs) {
+      const started = performance.now()
+      console.log(`desktop runtime: converting ${extension}`)
       const converted = await fetch(new URL(`/desktop-smoke-office/${extension}`, ready.url), {
         headers: { cookie }, signal: AbortSignal.timeout(120_000),
       })
@@ -102,6 +129,7 @@ export function apply(ctx) {
         || !pdf.subarray(-1024).toString().trimEnd().endsWith('%%EOF')) {
         throw new Error(`desktop runtime: invalid ${extension} PDF output`)
       }
+      console.log(`desktop runtime: ${extension} conversion passed in ${Math.round(performance.now() - started)} ms`)
     }
     console.log('desktop runtime: DOCX, XLSX, PPTX to PDF passed')
   } finally {

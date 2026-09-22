@@ -76,7 +76,7 @@ Portable ZIPs are unsigned and need no EV token. Upstream signed-installer scrip
 
 See the [portable distribution decision](../../.agents/notes/implemented/architecture/2026-09-10-desktop-portable-distribution.md) and [native experiment management](../../.agents/notes/implemented/architecture/2026-09-13-desktop-experiment-bridge.md). Runtime and user-plugin dependency graphs remain separate; the renderer has no Node integration.
 
-The desktop build bundles the native account stream protocol into the main-process entry, so application launch does not depend on a separate workspace package or its peer installation.
+The desktop build bundles the native account stream protocol into the main-process entry, so application launch does not depend on a separate workspace package or its peer installation. Portable macOS builds ad-hoc sign the document conversion helper with the upstream JIT entitlement before recording its runtime hashes; no developer certificate or administrator account is required.
 
 ## Upload updates
 
