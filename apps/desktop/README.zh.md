@@ -78,7 +78,7 @@ Windows 构建命令为 `pnpm --dir apps/desktop run package:portable:win:x64`�
 
 ## Dev Note
 
-参见[便携发行决策](../../.agents/notes/implemented/architecture/2026-09-10-desktop-portable-distribution.zh.md)与[原生实验功能管理](../../.agents/notes/implemented/architecture/2026-09-13-desktop-experiment-bridge.zh.md)。运行时与用户插件依赖图保持分离，渲染进程不启用 Node integration。
+参见[便携发行与原生插件管理决策](../../.agents/notes/implemented/architecture/2026-09-10-desktop-portable-distribution.zh.md)。运行时与用户插件依赖图保持分离，渲染进程不启用 Node integration。
 
 桌面壳采用上游生产依赖布局，包含 API Gateway 及其 Cordis peer。依赖在构建阶段安装，应用启动时从本地加载。macOS 便携构建在记录运行时哈希之前，为文档转换辅助程序执行保留上游 JIT 权限的临时签名，无需开发者证书或管理员账户。
 

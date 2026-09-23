@@ -1,4 +1,4 @@
-# Agent Note: Desktop ZIP distribution with npm configuration
+# Agent Note: Portable desktop distribution and native plugin management
 
 Status: implemented
 
@@ -6,24 +6,22 @@ English | [中文](2026-09-10-desktop-portable-distribution.zh.md)
 
 ## Problem
 
-Internal recipients need a double-click application without separate DSH or JavaScript-tool installation. Existing Nexus registry and TLS configuration must work for additional plugins, and normal operation must not require administrator privileges.
+Internal recipients need a double-click application without separate DSH, Node.js or package-manager installation, with Nexus/TLS settings and no administrator requirement. Teams must toggle offline, and upgrades must retain user choices without a second plugin-management authority.
 
 ## Decision
 
-The desktop branch ships macOS arm64 and Windows x64 ZIPs with DSH `0.1.7-alpha.1`, ACP `0.1.7-alpha.1.1` and Office `0.1.0-beta.3`. Tag `0.1.7.alpha.1.1` maps to application SemVer `0.1.7-alpha.1.1`. Both public plugin tarballs are locked by npm integrity; Hub is absent.
+The desktop branch produces macOS arm64 and Windows x64 ZIPs. Core dependencies run from ASAR under Electron Node mode; the Node/Python and document-tool payload remains bundled. A native startup page precedes profile preparation and one Host serves the application. First launch copies prebuilt ACP and Office dependencies, pinned by npm integrity; additional user plugins can require registry access during migration. Exact pins live in [portable-plugins.ts](../../../../apps/desktop/src/portable-plugins.ts), and the [desktop README](../../../../apps/desktop/README.md) owns release numbering, isolated data paths, telemetry defaults, shell/npm configuration, menus and links. Personal configuration, credentials and backups are not release inputs.
 
-Core production dependencies execute from ASAR under Electron Node mode. The official Node/Python and document-tool payload remains bundled. The native startup page appears before profile preparation and one Host serves the application. First launch copies prebuilt plugin dependencies; additional user plugins may require registry access during migration.
+DSH’s native plugin manager owns activation, reloads, concurrency and errors; Electron retains upstream shutdown and recovery. No Hub experiment IPC, preload API, private idle-shutdown protocol or separate package-manager window remains. The renderer stays sandboxed without Node integration. The official Teams bundle includes Host and Web modules and is enabled in new profiles. Switching it retains dependencies and application size; Office stays installed and detects disabled Teams through the native service lookup.
 
-Seed upgrades move the complete old profile into `desktop/migration-backups/<UUID>` before changing files and restore it if preparation fails. Retired local core tarballs are recognized from their recorded inventory and exact specifications. The [native experiment decision](2026-09-13-desktop-experiment-bridge.md) owns Hub removal and Teams state migration. Sessions and workspaces are not cleared.
+Seed migration backs up the complete old profile under `desktop/migration-backups/<UUID>` and restores it on preparation failure. It removes Hub and the retired separate Teams Web bundle while preserving other plugins, configuration and sessions. Retired local core tarballs are recognized by their recorded inventory and exact specifications. The old `dsh.desktop.agentTeams` field is removed: explicit false disables Teams; otherwise the previous Host selection survives in `dsh.profile.bundles`. Later upgrades use native selections, so an obsolete flag cannot re-enable Teams.
 
-The [desktop README](../../../../apps/desktop/README.md#environment-and-registry) owns shell import, npmrc precedence and the exact export exclusions. The isolated desktop home, telemetry default, Edit menus, native icons and external link context actions remain. Personal shell files, credentials and profile backups are never release inputs.
-
-CI provisions a disposable standard account on each platform. Dependency installation, compilation, ZIP creation and packaged smoke execute under that account, with assertions rejecting root or administrator membership. Administrative runner privileges are used only to create the account and grant access to the disposable checkout. The same verified archives are promoted to GitHub Release.
+Dependency installation, compilation, packaging and verification run without root or administrator membership. Windows uses a disposable standard account; macOS temporarily removes administrator membership from the logged-in runner and restores it afterward, preserving the Aqua session required by document conversion. Privileged operations only provision or restore the build identity and access. GitHub Release receives the same verified archives.
 
 ## Alternatives considered
 
-Requiring system runtimes would reduce archive size but contradict offline startup requirements. Official signed installers require separate certificate infrastructure; this distribution instead uses ad-hoc macOS signing and unsigned Windows ZIPs. OS approval prompts can remain.
+System runtimes reduce archive size but defeat offline startup. Certificate-managed installers require separate signing infrastructure; portable builds use ad-hoc macOS signing and unsigned Windows ZIPs, so OS approval prompts remain possible. A fork-specific Teams toggle or retained Hub would duplicate native state ownership and require another lifecycle bridge.
 
 ## Consequences
 
-Verification covers npm TLS settings, shell exports, icons, native plugin RPCs, offline Teams changes, rollback and old-profile migration. Devin checks run the packaged Electron in Node mode with synthetic native CLI configuration and real MCP stdio/HTTP transports, covering fixed registration, concurrent session isolation and capability revocation without reading credentials. Real provider logins and live model tests remain separate.
+Packaged checks cover npm TLS, shell exports, [native icons](../bug-fix/2026-09-11-desktop-finder-icons.md), plugin listing/RPCs with ACP and Office, offline Teams reactivation, preserved activation choices, Hub removal, rollback and old-profile migration. Devin checks use packaged Electron, synthetic CLI configuration and real MCP stdio/HTTP transports to verify fixed registration, concurrent session isolation and capability revocation without user credentials. These deterministic checks do not replace real provider login or model tests.
