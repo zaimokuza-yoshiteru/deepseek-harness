@@ -4,7 +4,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-This branch targets macOS Apple Silicon and Windows x64 ZIPs with DSH `0.1.7-alpha.2`, ACP adapter `0.1.7-alpha.1.1`, and Agent Teams Office `0.1.0-beta.3`. Recipients do not install DSH, Node.js, npm, or pnpm separately. Agent executables such as Devin and Kimi remain external.
+This branch targets macOS Apple Silicon and Windows x64 ZIPs with DSH `0.1.7-alpha.2`, ACP adapter `0.1.7-alpha.2.1`, and Agent Teams Office `0.1.0-beta.4`. Recipients do not install DSH, Node.js, npm, or pnpm separately. Agent executables such as Devin and Kimi remain external.
 
 ## Table of Contents
 
@@ -27,8 +27,6 @@ The window displays the native startup page while one backend starts. Core produ
 Native Edit menus provide select all, copy, paste, cut, undo, and redo. Chat links follow the native “Open chat links in” setting. New-window HTTP/HTTPS links open in the system browser; the link context menu can open or copy the original address.
 
 ## Plugins and Teams
-
-The plugin pins remain from the preceding release until compatible versions are selected. Do not publish this branch before updating the pins and passing packaged plugin regression checks.
 
 Open **Plugins** in the application sidebar to use DSH’s native plugin manager. Choose its installation action, enter a package specification such as `@scope/plugin-name@version`, review the package, and install it. Plugins must support DSH `0.1.7-alpha.2`. The native manager owns package installation, removal and activation, and reports any required reload or blocked operation. Plugin Hub and its desktop IPC bridge are not included.
 

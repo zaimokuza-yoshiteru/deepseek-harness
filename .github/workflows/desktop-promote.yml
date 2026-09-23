@@ -87,9 +87,9 @@ jobs:
                   metadata = [p for p in paths if p.endswith('/plugin-seed/package.json')]
                   assert len(metadata) == 1
                   manifest = json.loads(archive.read(metadata[0]))
-                  assert manifest['dependencies']['@zaimokuza/dsh-acp-adapter'] == '0.1.7-alpha.1.1'
+                  assert manifest['dependencies']['@zaimokuza/dsh-acp-adapter'] == '0.1.7-alpha.2.1'
                   assert '@zaimokuza/dsh-plugin-hub' not in manifest['dependencies']
-                  assert manifest['dependencies']['@zaimokuza/dsh-agent-teams-office'] == '0.1.0-beta.3'
+                  assert manifest['dependencies']['@zaimokuza/dsh-agent-teams-office'] == '0.1.0-beta.4'
                   assert '@deepseek-ai/dsh-experimental-agent-team-profile' in manifest['dsh']['profile']['bundles']
                   assert '@deepseek-ai/dsh-experimental-agent-team-web-profile' not in manifest['dsh']['profile']['bundles']
               print('Verified', name)

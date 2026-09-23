@@ -2,14 +2,14 @@
 export const DESKTOP_PORTABLE_PLUGINS = [
   {
     name: '@zaimokuza/dsh-acp-adapter',
-    version: '0.1.7-alpha.1.1',
-    integrity: 'sha512-f6nBMflJrRyKhoqPpXIhJndHUt6xGNym3xyntP3KL8QK0xd8cmXw6KT9sU/GGt/jGdQ0OBmapJvtKtmdywJljA==',
+    version: '0.1.7-alpha.2.1',
+    integrity: 'sha512-uBa8A2uLSkJA/hRBZB9C2ngQ0GOsxTteCU0OldKOajptdQb/mM4cFt1KTTQDhpSV3jVdkn7c4U44IWetC18HIg==',
     notice: 'ACP-ADAPTER-LICENSE',
   },
   {
     name: '@zaimokuza/dsh-agent-teams-office',
-    version: '0.1.0-beta.3',
-    integrity: 'sha512-gZAW7VXzt0lQvyS0K4mgk9IxsZF8aGlOjjLiF59ZM3y4taaqzBzLztgokyJk8fFnOFKqChG5VX0OjqBf0UZTng==',
+    version: '0.1.0-beta.4',
+    integrity: 'sha512-5uovvjIN2wn8fyhg+Joxd33DtaCADdVFfNOhwc1rTidz7ScEyxFDOxX/qmFAlbNXIE/TDkdruuKS7lZETbsQ0Q==',
     notice: 'AGENT-TEAMS-OFFICE-LICENSE',
   },
 ] as const

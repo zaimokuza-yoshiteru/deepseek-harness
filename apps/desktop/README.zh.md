@@ -4,7 +4,7 @@
 
 ## Summary
 
-本分支提供 macOS Apple Silicon 与 Windows x64 ZIP，内置 DSH `0.1.7-alpha.2`、ACP adapter `0.1.7-alpha.1.1` 和 Agent Teams Office `0.1.0-beta.3`。使用者无需另外安装 DSH、Node.js、npm 或 pnpm。Devin、Kimi 等 Agent 命令仍需自行安装。
+本分支提供 macOS Apple Silicon 与 Windows x64 ZIP，内置 DSH `0.1.7-alpha.2`、ACP adapter `0.1.7-alpha.2.1` 和 Agent Teams Office `0.1.0-beta.4`。使用者无需另外安装 DSH、Node.js、npm 或 pnpm。Devin、Kimi 等 Agent 命令仍需自行安装。
 
 ## Table of Contents
 
@@ -27,8 +27,6 @@
 原生编辑菜单支持全选、复制、粘贴、剪切、撤销和重做。聊天链接遵循原生“聊天链接打开方式”设置。新窗口 HTTP/HTTPS 链接由系统浏览器打开，链接右键菜单可打开或复制原地址。
 
 ## Plugins and Teams
-
-插件版本暂时保留上一发行版的固定值，等待选择兼容版本。更新版本并通过成品插件回归前，不应发布此分支。
 
 点击应用侧栏的 **插件**，打开 DSH 原生插件管理器。选择安装操作，输入 `@scope/plugin-name@version` 形式的包信息，检查包信息后安装。插件必须兼容 DSH `0.1.7-alpha.2`。安装、删除与启停由原生管理器负责，并由其提示需要的重载或受阻操作。应用不再内置 Plugin Hub 及其桌面 IPC 接口。
 
