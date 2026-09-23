@@ -4,7 +4,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-This fork ships macOS Apple Silicon and Windows x64 ZIPs with DSH `0.1.7-alpha.1`, ACP adapter `0.1.7-alpha.1.1`, and Agent Teams Office `0.1.0-beta.3`. Recipients do not install DSH, Node.js, npm, or pnpm separately. Agent executables such as Devin and Kimi remain external.
+This branch targets macOS Apple Silicon and Windows x64 ZIPs with DSH `0.1.7-alpha.2`, ACP adapter `0.1.7-alpha.1.1`, and Agent Teams Office `0.1.0-beta.3`. Recipients do not install DSH, Node.js, npm, or pnpm separately. Agent executables such as Devin and Kimi remain external.
 
 ## Table of Contents
 
@@ -28,7 +28,9 @@ Native Edit menus provide select all, copy, paste, cut, undo, and redo. Chat lin
 
 ## Plugins and Teams
 
-Open **Plugins** in the application sidebar to use DSH’s native plugin manager. Choose its installation action, enter a package specification such as `@scope/plugin-name@version`, review the package, and install it. Plugins must support DSH `0.1.7-alpha.1`. The native manager owns package installation, removal and activation, and reports any required reload or blocked operation. Plugin Hub and its desktop IPC bridge are not included.
+The plugin pins remain from the preceding release until compatible versions are selected. Do not publish this branch before updating the pins and passing packaged plugin regression checks.
+
+Open **Plugins** in the application sidebar to use DSH’s native plugin manager. Choose its installation action, enter a package specification such as `@scope/plugin-name@version`, review the package, and install it. Plugins must support DSH `0.1.7-alpha.2`. The native manager owns package installation, removal and activation, and reports any required reload or blocked operation. Plugin Hub and its desktop IPC bridge are not included.
 
 Agent Teams is enabled for a new profile. The native manager exposes one official Agent Teams bundle containing Host and Web modules. Disable or enable that bundle to switch Teams without downloading dependencies. Migration retains the previous Host bundle selection and removes the retired separate Web bundle.
 
@@ -43,6 +45,8 @@ Shell import excludes `ELECTRON_*`, `DSH_DESKTOP_*`, `NODE_OPTIONS`, `NODE_PATH`
 The bundled pnpm `11.23.0` reads `~/.npmrc`, or the file selected by `npm_config_userconfig`, including scoped registries, authentication, CA certificates, and `strict-ssl=false`. `npm_config_registry` and `npm_config_strict_ssl` override file settings. No system npm is required. TLS relaxation is scoped to package operations; package storage follows pnpm configuration.
 
 ## Data and upgrades
+
+Fatal startup reports retain the ten most recent files in Electron’s logs directory: `~/Library/Logs/DSH Desktop` on macOS and `electron-user-data/logs` under the data home on Windows. Reports can contain error and renderer diagnostics; inspect them before sharing. Plugin bundle responses use `no-store` to avoid retaining obsolete per-launch bundles in Chromium’s disk cache.
 
 The default data home is `~/.dsh-desktop`; explicit `DSH_HOME` is respected. Electron data is under `electron-user-data` and plugin files under `profiles/desktop`. Telemetry defaults to disabled. Replace the complete application to upgrade; this distribution does not automatically update or publish npm packages.
 
@@ -60,13 +64,13 @@ pnpm --dir apps/desktop run package:portable:mac:arm64
 
 ```
 
-The Windows command is `pnpm --dir apps/desktop run package:portable:win:x64`. GitHub Actions installs dependencies, builds and checks the final application without administrator membership. Windows uses a temporary standard account. macOS retains the runner’s desktop login session, removes its administrator membership for the build and GUI checks, and restores membership afterward; a newly created account without a desktop login crashes the native document converter. Only account provisioning and restoration use administrative privileges. Checks cover native plugin management, ACP/Office RPCs, offline Teams toggles, profile migration and Devin’s fixed stdio MCP entry and isolated session capabilities. Build outputs, diagnostics, profiles, signing materials, and credentials stay outside Git history. Tag `0.1.7.alpha.1.1` maps to application SemVer `0.1.7-alpha.1.1`; core packages keep `0.1.7-alpha.1`.
+The Windows command is `pnpm --dir apps/desktop run package:portable:win:x64`. GitHub Actions installs dependencies, builds and checks the final application without administrator membership. Windows uses a temporary standard account. macOS retains the runner’s desktop login session, removes its administrator membership for the build and GUI checks, and restores membership afterward; a newly created account without a desktop login crashes the native document converter. Only account provisioning and restoration use administrative privileges. Checks cover native plugin management, ACP/Office RPCs, offline Teams toggles, profile migration and Devin’s fixed stdio MCP entry and isolated session capabilities. Build outputs, diagnostics, profiles, signing materials, and credentials stay outside Git history. Tag `0.1.7.alpha.2.1` maps to application SemVer `0.1.7-alpha.2.1`; core packages keep `0.1.7-alpha.2`.
 
 The **Desktop portable smoke replay** workflow accepts a previous build run ID. On Windows it extracts that exact ZIP, verifies an ordinary-user identity, and times a fresh-profile GUI launch and a complete relaunch with the same profile. Read `result.json` and screenshots in the `desktop-startup-win-x64` artifact: readiness requires a visible account menu and a successfully opened Settings dialog. The macOS build also runs this GUI check under its standard-user identity. The report records the ZIP SHA256 and renderer paint timings. ZIP extraction, user-machine security scanning and OS cold-cache behavior are not represented by the launch timings. The macOS replay retains its backend checks.
 
 ## Release versions
 
-Portable tags use `0.1.7.alpha.1.<counter>` and application metadata uses `0.1.7-alpha.1.<counter>`. Core and plugin versions remain separately pinned. Standard upstream installer commands derive their versions from the package manifests.
+Portable tags use `0.1.7.alpha.2.<counter>` and application metadata uses `0.1.7-alpha.2.<counter>`. Core and plugin versions remain separately pinned. Standard upstream installer commands derive their versions from the package manifests.
 
 ## Windows EV signing
 
@@ -76,7 +80,7 @@ Portable ZIPs are unsigned and need no EV token. Upstream signed-installer scrip
 
 See the [portable distribution decision](../../.agents/notes/implemented/architecture/2026-09-10-desktop-portable-distribution.md) and [native experiment management](../../.agents/notes/implemented/architecture/2026-09-13-desktop-experiment-bridge.md). Runtime and user-plugin dependency graphs remain separate; the renderer has no Node integration.
 
-The desktop build bundles the native account stream protocol into the main-process entry, so application launch does not depend on a separate workspace package or its peer installation. Portable macOS builds ad-hoc sign the document conversion helper with the upstream JIT entitlement before recording its runtime hashes; no developer certificate or administrator account is required.
+The desktop shell includes API Gateway and its Cordis peer as production dependencies using the upstream package layout. They are installed during the build and load locally at application launch. Portable macOS builds ad-hoc sign the document conversion helper with the upstream JIT entitlement before recording its runtime hashes; no developer certificate or administrator account is required.
 
 ## Upload updates
 

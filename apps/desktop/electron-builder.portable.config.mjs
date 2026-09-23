@@ -4,10 +4,10 @@ import { join } from 'node:path'
 import { prepareWindowsAsarUnpack, verifyWindowsAsarUnpack } from './scripts/windows-asar-unpack.mjs'
 import { fileURLToPath } from 'node:url'
 
-const tag = process.env.DSH_DESKTOP_DISTRIBUTION_VERSION ?? '0.1.7.alpha.1.1'
+const tag = process.env.DSH_DESKTOP_DISTRIBUTION_VERSION ?? '0.1.7.alpha.2.1'
 const version = tag.replace('0.1.7.alpha.', '0.1.7-alpha.')
-if (!/^0\.1\.7-alpha\.1\.[1-9][0-9]*$/u.test(version)) {
-  throw new Error('desktop portable: expected distribution version 0.1.7.alpha.1.<positive integer>')
+if (!/^0\.1\.7-alpha\.2\.[1-9][0-9]*$/u.test(version)) {
+  throw new Error('desktop portable: expected distribution version 0.1.7.alpha.2.<positive integer>')
 }
 const paths = resolveDesktopTargetBuildPaths()
 

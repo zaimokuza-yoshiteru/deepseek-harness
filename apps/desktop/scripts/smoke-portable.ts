@@ -168,7 +168,7 @@ try {
   assert.equal(devinCode, 0, 'Packaged Devin config must support ordinary Windows users and preserve original files')
   const hostStart = performance.now()
   await startHost()
-  assert.equal(readDesktopRuntime(runtime.dsh).release.version, '0.1.7-alpha.1')
+  assert.equal(readDesktopRuntime(runtime.dsh).release.version, '0.1.7-alpha.2')
   const response = await request(new Request('dsh-app://app/index.html'))
   assert.equal(response.status, 200)
   const html = await response.text()
