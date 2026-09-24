@@ -16,6 +16,7 @@ import { resolveDesktopPaths } from '../src/paths.ts'
 import { desktopTargetBuildPaths } from './desktop-build-paths.mjs'
 import { DESKTOP_PORTABLE_PLUGINS } from '../src/portable-plugins.ts'
 import { smokeDesktopRuntime } from './smoke-runtime.ts'
+import { verifyRuntimeArchive } from './verify-runtime-archive.ts'
 
 const target = process.argv[2]
 if (target !== 'mac-arm64' && target !== 'win-x64') throw new Error('Expected mac-arm64 or win-x64')
@@ -143,6 +144,8 @@ const timeout = setTimeout(() => {
 }, target === 'win-x64' ? 300_000 : 180_000)
 subscribe('child_process', childDiagnostic)
 try {
+  progress('verifying final ASAR bytes against the prepared runtime inventory')
+  await verifyRuntimeArchive(join(packagedResources, 'app.asar'), readDesktopRuntime(runtime.dsh))
   progress('converting Office documents and resolving the skill CLI from the final ASAR')
   await smokeDesktopRuntime(runtime.dsh, runtime.node, readDesktopRuntime(runtime.dsh), process.env,
     join(packagedResources, 'runtime'))

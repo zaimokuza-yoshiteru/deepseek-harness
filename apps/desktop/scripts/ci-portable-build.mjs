@@ -1,6 +1,6 @@
 /** Build and verify the portable application from a non-administrator CI account. */
 import { execFileSync, spawnSync } from 'node:child_process'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const target = process.argv[2]
@@ -44,8 +44,22 @@ run(['exec', 'vitest', 'run', ...[
   .map(name => `packages/boot/app-boot/tests/${name}.spec.ts`),
 'packages/boot/plugin-manager/tests/operations.spec.ts'])
 run(['--dir', 'apps/desktop', 'run', target === 'mac-arm64' ? 'package:portable:mac:arm64' : 'package:portable:win:x64'])
-run(['exec', 'tsx', 'apps/desktop/scripts/smoke-portable.ts', target])
 const directory = join('apps/desktop/.desktop-build/targets', target, 'artifacts')
+try {
+  run(['exec', 'tsx', 'apps/desktop/scripts/smoke-portable.ts', target])
+} catch (error) {
+  // Compare the identical ZIP at an independently extracted, shorter Windows path.
+  // This is diagnostic evidence only: the original failure still fails the build.
+  if (target === 'win-x64') {
+    const archives = readdirSync(directory).filter(name => name.endsWith('.zip'))
+    if (archives.length === 1) {
+      console.log('Desktop CI: diagnosing the same Windows ZIP after temporary extraction')
+      try { run(['exec', 'tsx', 'apps/desktop/scripts/smoke-portable.ts', target, join(directory, archives[0])]) }
+      catch (diagnosticError) { console.error(diagnosticError) }
+    }
+  }
+  throw error
+}
 if (target === 'mac-arm64') {
   const executable = join(directory, 'mac-arm64', 'DSH Desktop.app', 'Contents', 'MacOS', 'DSH Desktop')
   const gui = spawnSync(process.execPath, ['apps/desktop/scripts/startup-timing.mjs', target, executable], {

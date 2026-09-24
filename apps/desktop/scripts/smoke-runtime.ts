@@ -59,23 +59,31 @@ export function apply(ctx) {
   ctx.effect(() => {
     const children = new Map()
     const observe = ({ process: child }) => {
+      let stderr = ''
+      const diagnostic = chunk => { stderr = (stderr + String(chunk)).slice(-8192) }
       const closed = (code, signal) => {
         children.delete(child)
+        child.stderr?.off('data', diagnostic)
         console.log('desktop runtime: Office helper exit', JSON.stringify({ code, signal }))
+        if (code !== 0 || signal !== null) console.error('desktop runtime: Office helper failure', JSON.stringify({ args: child.spawnargs, stderr }))
       }
       const spawned = () => {
-        if (/^libreoffice-kit(?:[.]exe)?$/.test(basename(child.spawnfile))) child.once('close', closed)
+        if (/^libreoffice-kit(?:[.]exe)?$/.test(basename(child.spawnfile))) {
+          child.stderr?.on('data', diagnostic)
+          child.once('close', closed)
+        }
         else children.delete(child)
       }
-      children.set(child, { spawned, closed })
+      children.set(child, { spawned, closed, diagnostic })
       child.once('spawn', spawned)
     }
     subscribe('child_process', observe)
     return () => {
       unsubscribe('child_process', observe)
-      for (const [child, { spawned, closed }] of children) {
+      for (const [child, { spawned, closed, diagnostic }] of children) {
         child.off('spawn', spawned)
         child.off('close', closed)
+        child.stderr?.off('data', diagnostic)
       }
     }
   })
