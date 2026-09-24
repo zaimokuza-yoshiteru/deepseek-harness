@@ -38,7 +38,11 @@ run(['--dir', 'native/system/packages/entry', 'run', 'build:js'])
 run(['exec', 'vitest', 'run', ...[
   'npm-environment', 'project-manager', 'distribution', 'shell-environment', 'plugin-seed', 'package-target',
   'host-process', 'main-startup', 'prepare-package-set', 'locale', 'icons', 'profile-core-cleanup', 'preload-app', 'node-environment',
-].map(name => `apps/desktop/tests/${name}.spec.ts`)])
+  'desktop-build-paths', 'development-project', 'installed-update-package-content', 'welcome-startup', 'windows-asar-unpack',
+].map(name => `apps/desktop/tests/${name}.spec.ts`),
+...['plugin-compatibility', 'profile-compatibility', 'compatibility-preflight']
+  .map(name => `packages/boot/app-boot/tests/${name}.spec.ts`),
+'packages/boot/plugin-manager/tests/operations.spec.ts'])
 run(['--dir', 'apps/desktop', 'run', target === 'mac-arm64' ? 'package:portable:mac:arm64' : 'package:portable:win:x64'])
 run(['exec', 'tsx', 'apps/desktop/scripts/smoke-portable.ts', target])
 const directory = join('apps/desktop/.desktop-build/targets', target, 'artifacts')

@@ -2,7 +2,7 @@
 // SRC endpoint alone does not prove that the generated client can register.
 import assert from 'node:assert/strict'
 import { packagedProfile } from './packaged-profile.mjs'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -12,6 +12,25 @@ assert.ok(runtime && profile, 'Expected runtime and profile directories')
 const hostRequire = createRequire(join(runtime, 'package.json'))
 const pluginRequire = createRequire(join(profile, 'package.json'))
 const loadHost = name => import(pathToFileURL(hostRequire.resolve(name)).href)
+const { evaluatePluginCompatibility, loadProfileDirectory } = await loadHost('@deepseek-ai/dsh-app-boot')
+const installAnchor = join(runtime, 'node_modules/@deepseek-ai/dsh/package.json')
+assert.equal(existsSync(join(profile, 'compatibility.json')), false, 'Fresh packaged profiles must need no exemptions')
+const pinnedPlugins = ['@zaimokuza/dsh-acp-adapter', '@zaimokuza/dsh-agent-teams-office']
+for (const name of pinnedPlugins) {
+  const path = join(profile, 'node_modules', name, 'package.json')
+  const original = readFileSync(path, 'utf8')
+  const pkg = JSON.parse(original)
+  assert.equal(evaluatePluginCompatibility(pkg), undefined, `${name} must support the packaged runtime`)
+  assert.ok(loadProfileDirectory('dsh', profile, installAnchor).layers.some(layer => layer.packageName === name))
+  try {
+    writeFileSync(path, JSON.stringify({ ...pkg, peerDependencies: { ...pkg.peerDependencies, '@deepseek-ai/dsh': '0.1.7-alpha.2' } }))
+    assert.equal(loadProfileDirectory('dsh', profile, installAnchor).layers.some(layer => layer.packageName === name), false,
+      'Native bundle admission must reject incompatible peers without an exemption')
+  } finally {
+    writeFileSync(path, original)
+  }
+}
+console.log('Packaged plugin admission: pinned bundles accepted; incompatible bundles rejected without exemptions')
 const scope = await packagedProfile(runtime, profile)
 const { default: Registry } = await loadHost('@deepseek-ai/dsh-typert-registry')
 const { validateTypertManifest } = await loadHost('@deepseek-ai/dsh-typert-loader')
