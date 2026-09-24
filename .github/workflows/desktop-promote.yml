@@ -45,7 +45,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$SOURCE_RUN" =~ ^[0-9]+$ ]]
-          [[ "$DESKTOP_TAG" =~ ^0\.1\.7\.rc\.1\.[1-9][0-9]*$ ]]
+          [[ "$DESKTOP_TAG" =~ ^0\.1\.7\.rc\.2\.[1-9][0-9]*$ ]]
           export SOURCE_SHA="$(git rev-parse "refs/tags/$DESKTOP_TAG^{commit}")"
           git merge-base --is-ancestor "$SOURCE_SHA" origin/desktop
           gh api "repos/$GH_REPO/actions/runs/$SOURCE_RUN" > /tmp/source-run.json
@@ -90,9 +90,9 @@ jobs:
                   metadata = [p for p in paths if p.endswith('/plugin-seed/package.json')]
                   assert len(metadata) == 1
                   manifest = json.loads(archive.read(metadata[0]))
-                  assert manifest['dependencies']['@zaimokuza/dsh-acp-adapter'] == '0.1.7-rc.1.0'
+                  assert manifest['dependencies']['@zaimokuza/dsh-acp-adapter'] == '0.1.7-rc.2.0'
                   assert '@zaimokuza/dsh-plugin-hub' not in manifest['dependencies']
-                  assert manifest['dependencies']['@zaimokuza/dsh-agent-teams-office'] == '0.1.0-beta.5'
+                  assert manifest['dependencies']['@zaimokuza/dsh-agent-teams-office'] == '0.1.0-beta.6'
                   assert '@deepseek-ai/dsh-experimental-agent-team-profile' in manifest['dsh']['profile']['bundles']
                   assert '@deepseek-ai/dsh-experimental-agent-team-web-profile' not in manifest['dsh']['profile']['bundles']
               print('Verified', name)
