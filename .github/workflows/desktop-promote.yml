@@ -71,7 +71,7 @@ jobs:
           set -euo pipefail
           cd artifacts
           python3 - <<'PY'
-          import json, os, pathlib, zipfile
+          import hashlib, json, os, pathlib, zipfile
           tag = os.environ['DESKTOP_TAG']
           expected = {f'dsh-desktop-{tag}-{target}.zip' for target in ['mac-arm64', 'win-x64']}
           assert {p.name for p in pathlib.Path('.').glob('*.zip')} == expected
@@ -79,6 +79,9 @@ jobs:
               evidence = json.load(open(f'standard-user-{target}.json'))
               assert evidence['target'] == target and evidence['version'] == tag
               assert evidence['standardUser'] is True and evidence['packagedSmoke'] == 'passed'
+              assert evidence['archive'] == f'dsh-desktop-{tag}-{target}.zip'
+              with open(evidence['archive'], 'rb') as source:
+                  assert hashlib.file_digest(source, 'sha256').hexdigest() == evidence['sha256']
           for name in sorted(expected):
               with zipfile.ZipFile(name) as archive:
                   assert archive.testzip() is None

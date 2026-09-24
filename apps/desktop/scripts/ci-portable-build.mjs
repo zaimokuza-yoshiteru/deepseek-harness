@@ -1,6 +1,7 @@
 /** Build and verify the portable application from a non-administrator CI account. */
 import { execFileSync, spawnSync } from 'node:child_process'
-import { mkdirSync, readdirSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { createReadStream, mkdirSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const target = process.argv[2]
@@ -45,21 +46,15 @@ run(['exec', 'vitest', 'run', ...[
 'packages/boot/plugin-manager/tests/operations.spec.ts'])
 run(['--dir', 'apps/desktop', 'run', target === 'mac-arm64' ? 'package:portable:mac:arm64' : 'package:portable:win:x64'])
 const directory = join('apps/desktop/.desktop-build/targets', target, 'artifacts')
-try {
-  run(['exec', 'tsx', 'apps/desktop/scripts/smoke-portable.ts', target])
-} catch (error) {
-  // Compare the identical ZIP at an independently extracted, shorter Windows path.
-  // This is diagnostic evidence only: the original failure still fails the build.
-  if (target === 'win-x64') {
-    const archives = readdirSync(directory).filter(name => name.endsWith('.zip'))
-    if (archives.length === 1) {
-      console.log('Desktop CI: diagnosing the same Windows ZIP after temporary extraction')
-      try { run(['exec', 'tsx', 'apps/desktop/scripts/smoke-portable.ts', target, join(directory, archives[0])]) }
-      catch (diagnosticError) { console.error(diagnosticError) }
-    }
-  }
-  throw error
-}
+const archives = readdirSync(directory).filter(name => name.endsWith('.zip'))
+const archive = `dsh-desktop-${process.env.DSH_DESKTOP_DISTRIBUTION_VERSION}-${target}.zip`
+if (archives.length !== 1 || archives[0] !== archive) throw new Error('Expected exactly the release ZIP for this target')
+// Exercise the recipient's complete ZIP at an independent extraction path. The native Windows
+// Office engine cannot bootstrap from the deeply nested CI build output directory.
+run(['exec', 'tsx', 'apps/desktop/scripts/smoke-portable.ts', target, join(directory, archive)])
+const hash = createHash('sha256')
+for await (const bytes of createReadStream(join(directory, archive))) hash.update(bytes)
+const sha256 = hash.digest('hex')
 if (target === 'mac-arm64') {
   const executable = join(directory, 'mac-arm64', 'DSH Desktop.app', 'Contents', 'MacOS', 'DSH Desktop')
   const gui = spawnSync(process.execPath, ['apps/desktop/scripts/startup-timing.mjs', target, executable], {
@@ -71,4 +66,5 @@ if (target === 'mac-arm64') {
 mkdirSync(directory, { recursive: true })
 writeFileSync(join(directory, `standard-user-${target}.json`), JSON.stringify({
   target, standardUser: true, build: 'passed', packagedSmoke: 'passed', version: process.env.DSH_DESKTOP_DISTRIBUTION_VERSION,
+  archive, sha256,
 }, null, 2) + '\n')

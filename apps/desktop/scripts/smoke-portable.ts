@@ -42,18 +42,21 @@ const resources = target === 'mac-arm64'
 const executable = target === 'mac-arm64'
   ? join(resources, '..', 'MacOS', 'DSH Desktop') : join(resources, '..', 'DSH Desktop.exe')
 if (process.versions.electron === undefined) {
-  // Inspect the physical archive under Node before Electron installs its ASAR filesystem hooks.
-  console.log('Packaged smoke: verifying final ASAR bytes against the prepared runtime inventory')
-  const archivePath = join(resources, 'app.asar')
-  const inventory = JSON.parse((await (await readAsar(archivePath)).readFile(join('dsh', 'desktop-runtime.json'))).toString()) as DesktopRuntimeDescriptor
-  await verifyRuntimeArchive(archivePath, inventory)
-  const child = spawn(executable, ['--expose-internals', '--import', 'tsx/esm', import.meta.filename, target], {
-    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', DSH_DESKTOP_SMOKE_RESOURCES: resources }, stdio: 'inherit',
-  })
-  const [code, signal] = await once(child, 'exit')
-  if (archive !== undefined) rmSync(artifacts, { recursive: true, force: true })
-  assert.equal(signal, null)
-  assert.equal(code, 0)
+  try {
+    // Inspect the physical archive under Node before Electron installs its ASAR filesystem hooks.
+    console.log('Packaged smoke: verifying final ASAR bytes against the prepared runtime inventory')
+    const archivePath = join(resources, 'app.asar')
+    const inventory = JSON.parse((await (await readAsar(archivePath)).readFile(join('dsh', 'desktop-runtime.json'))).toString()) as DesktopRuntimeDescriptor
+    await verifyRuntimeArchive(archivePath, inventory)
+    const child = spawn(executable, ['--expose-internals', '--import', 'tsx/esm', import.meta.filename, target], {
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', DSH_DESKTOP_SMOKE_RESOURCES: resources }, stdio: 'inherit',
+    })
+    const [code, signal] = await once(child, 'exit')
+    assert.equal(signal, null)
+    assert.equal(code, 0)
+  } finally {
+    if (archive !== undefined) rmSync(artifacts, { recursive: true, force: true })
+  }
   process.exit(0)
 }
 const packagedResources = process.env.DSH_DESKTOP_SMOKE_RESOURCES ?? resources
