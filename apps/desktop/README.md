@@ -22,7 +22,7 @@ This branch targets macOS Apple Silicon and Windows x64 ZIPs with DSH `0.1.7-rc.
 
 Extract the complete ZIP. Open `DSH Desktop.app` on macOS or `DSH Desktop.exe` on Windows. Keep the Windows executable with its adjacent files. The Mac application uses ad-hoc signing without notarization; system security approval may be required. The Windows executable is unsigned.
 
-The window displays the native startup page while one backend starts. Core production dependencies execute from the application ASAR; startup does not install them. First launch copies the prepared plugin dependencies into the writable profile. The upstream Node/Python and document-tool payload is included and prepared under the data home as needed. Full runtime integrity checks run during packaging.
+The window displays the native startup page while one backend starts. Core production dependencies execute from the application ASAR; startup does not install them. First launch copies the prepared plugin dependencies into the writable profile. The upstream Node/Python and document-tool payload is included and prepared under the data home as needed. The Office CLI, selected native engine and their dependency closure are unpacked from ASAR for bundled Node execution. Full runtime integrity checks run during packaging; final-archive smoke checks also convert DOCX, XLSX and PPTX and execute the skill CLI with an empty PATH.
 
 Native Edit menus provide select all, copy, paste, cut, undo, and redo. Chat links follow the native “Open chat links in” setting. New-window HTTP/HTTPS links open in the system browser; the link context menu can open or copy the original address.
 

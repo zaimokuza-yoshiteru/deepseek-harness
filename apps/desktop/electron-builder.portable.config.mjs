@@ -1,6 +1,7 @@
 /** Internal ZIP distribution; no npm publication, installer, or automatic updater. */
-import { resolveDesktopTargetBuildPaths } from './scripts/desktop-build-paths.mjs'
-import { join } from 'node:path'
+import { desktopTargetPlatform, resolveDesktopBuildTarget, resolveDesktopTargetBuildPaths } from './scripts/desktop-build-paths.mjs'
+import { join, relative, sep } from 'node:path'
+import { officePackageDirectories } from '../../scripts/libreoffice-packages.mjs'
 import { prepareWindowsAsarUnpack, verifyWindowsAsarUnpack } from './scripts/windows-asar-unpack.mjs'
 import { fileURLToPath } from 'node:url'
 
@@ -24,6 +25,10 @@ export default {
   electronFuses: { runAsNode: true },
   npmRebuild: false,
   beforePack: async context => {
+    const office = await officePackageDirectories(paths.dsh, desktopTargetPlatform(resolveDesktopBuildTarget()))
+    const patterns = office.map(directory => `**/${relative(paths.dsh, directory).split(sep).join('/')}/**/*`)
+    const existing = context.packager.config.asarUnpack ?? []
+    context.packager.config.asarUnpack = [...(typeof existing === 'string' ? [existing] : existing), ...patterns]
     if (context.electronPlatformName === 'win32') windowsCode = await prepareWindowsAsarUnpack(context, paths.dsh)
   },
   afterPack: async context => {

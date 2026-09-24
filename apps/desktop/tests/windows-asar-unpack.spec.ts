@@ -44,6 +44,8 @@ const cleanups: (() => Promise<void>)[] = []
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) await cleanup()
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true })
+  vi.doUnmock('../scripts/desktop-build-paths.mjs')
+  vi.resetModules()
 })
 
 function unsignedWindowsConfig(appId: string, source: string) {
@@ -227,32 +229,43 @@ it.each([false, true])('unpacks platform ripgrep executables with external sourc
   }
 })
 
-it.each([false, true])('keeps the complete Office engine outside ASAR with external source=%s', async (external) => {
-  const input = await fixture(external)
-  const engine = join('node_modules', '@deepseek-ai', 'libreoffice-kit-win32-x64')
-  const files = ['package.json', 'prebuilds.json', 'bin/libreoffice-kit', 'program/registry/main.xcd']
-  for (const file of files) {
-    const path = join(input.source, engine, file)
-    await mkdir(dirname(path), { recursive: true })
-    await writeFile(path, '{}')
-  }
-  const wasm = join(input.source, 'node_modules/@deepseek-ai/libreoffice-kit-wasm/package.json')
-  await mkdir(dirname(wasm), { recursive: true })
-  await writeFile(wasm, '{}')
-  const config = unsignedWindowsConfig('com.example.office', input.source)
-  input.config.asarUnpack = [...config.asarUnpack]
-  await config.beforePack(input.context)
-  await packageFixture(input)
-  const archive = await readAsar(join(input.resources, 'app.asar'))
-  expect(archive.getFile(join('dsh', 'node_modules', '@deepseek-ai', 'libreoffice-kit-wasm', 'package.json')).unpacked).not.toBe(true)
-  for (const name of ['@deepseek-ai/libreoffice-kit', 'office-codec']) {
-    expect(archive.getFile(join('dsh', 'node_modules', name, 'cli.js')).unpacked).toBe(true)
-  }
-  for (const file of files) {
-    expect(archive.getFile(join('dsh', engine, file), false).unpacked).toBe(true)
-    expect(await readFile(join(input.resources, 'app.asar.unpacked', 'dsh', engine, file), 'utf8')).toBe('{}')
-  }
-})
+it.each([[false, false], [false, true], [true, false], [true, true]])(
+  'keeps the Office CLI and dependencies outside ASAR (external=%s, portable=%s)', async (external, portable) => {
+    const input = await fixture(external)
+    const engine = join('node_modules', '@deepseek-ai', 'libreoffice-kit-win32-x64')
+    const files = ['package.json', 'prebuilds.json', 'bin/libreoffice-kit', 'program/registry/main.xcd']
+    for (const file of files) {
+      const path = join(input.source, engine, file)
+      await mkdir(dirname(path), { recursive: true })
+      await writeFile(path, '{}')
+    }
+    const wasm = join(input.source, 'node_modules/@deepseek-ai/libreoffice-kit-wasm/package.json')
+    await mkdir(dirname(wasm), { recursive: true })
+    await writeFile(wasm, '{}')
+    vi.doMock('../scripts/desktop-build-paths.mjs', async () => {
+      const actual = await vi.importActual<typeof import('../scripts/desktop-build-paths.mjs')>('../scripts/desktop-build-paths.mjs')
+      return { ...actual,
+        resolveDesktopTargetBuildPaths: () => ({ ...actual.desktopTargetBuildPaths('win-x64'), dsh: input.source }),
+        resolveDesktopBuildTarget: () => 'win-x64',
+      }
+    })
+    const config = portable
+      ? (await import('../electron-builder.portable.config.mjs')).default
+      : unsignedWindowsConfig('com.example.office', input.source)
+    input.config.asarUnpack = [...config.asarUnpack]
+    await config.beforePack(input.context)
+    await packageFixture(input)
+    const archive = await readAsar(join(input.resources, 'app.asar'))
+    expect(archive.getFile(join('dsh', 'node_modules', '@deepseek-ai', 'libreoffice-kit-wasm', 'package.json')).unpacked).not.toBe(true)
+    for (const name of ['@deepseek-ai/libreoffice-kit', 'office-codec']) {
+      expect(archive.getFile(join('dsh', 'node_modules', name, 'cli.js')).unpacked).toBe(true)
+    }
+    for (const file of files) {
+      expect(archive.getFile(join('dsh', engine, file), false).unpacked).toBe(true)
+      expect(await readFile(join(input.resources, 'app.asar.unpacked', 'dsh', engine, file), 'utf8')).toBe('{}')
+    }
+  },
+)
 
 async function seal(input: Awaited<ReturnType<typeof fixture>>): Promise<DesktopRuntimeDescriptor> {
   const descriptor: DesktopRuntimeDescriptor = {

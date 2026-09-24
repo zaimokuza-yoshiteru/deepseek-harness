@@ -15,6 +15,7 @@ import { readDesktopRuntime } from '../src/runtime-tree.ts'
 import { resolveDesktopPaths } from '../src/paths.ts'
 import { desktopTargetBuildPaths } from './desktop-build-paths.mjs'
 import { DESKTOP_PORTABLE_PLUGINS } from '../src/portable-plugins.ts'
+import { smokeDesktopRuntime } from './smoke-runtime.ts'
 
 const target = process.argv[2]
 if (target !== 'mac-arm64' && target !== 'win-x64') throw new Error('Expected mac-arm64 or win-x64')
@@ -142,7 +143,10 @@ const timeout = setTimeout(() => {
 }, target === 'win-x64' ? 300_000 : 180_000)
 subscribe('child_process', childDiagnostic)
 try {
-  progress(stage)
+  progress('converting Office documents and resolving the skill CLI from the final ASAR')
+  await smokeDesktopRuntime(runtime.dsh, runtime.node, readDesktopRuntime(runtime.dsh), process.env,
+    join(packagedResources, 'runtime'))
+  progress('installing the packaged seed')
   for (const plugin of DESKTOP_PORTABLE_PLUGINS) {
     assert.ok(existsSync(join(runtime.pluginSeed, 'node_modules', plugin.name, 'package.json')),
       `Packaged seed is missing ${plugin.name}; include plugin-seed/node_modules explicitly`)
