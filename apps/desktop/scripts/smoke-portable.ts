@@ -7,11 +7,12 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import extractZip from '@electron-internal/extract-zip'
+import { readAsar } from 'app-builder-lib/out/asar/asar.js'
 import { DesktopProjectManager } from '../src/project-manager.ts'
 import { DesktopHostProcess } from '../src/host-process.ts'
 import { authenticateWebHost, forwardWebRequest } from '../src/web-document.ts'
 import { DESKTOP_AGENT_TEAM_BUNDLES } from '../src/profile-defaults.ts'
-import { readDesktopRuntime } from '../src/runtime-tree.ts'
+import { readDesktopRuntime, type DesktopRuntimeDescriptor } from '../src/runtime-tree.ts'
 import { resolveDesktopPaths } from '../src/paths.ts'
 import { desktopTargetBuildPaths } from './desktop-build-paths.mjs'
 import { DESKTOP_PORTABLE_PLUGINS } from '../src/portable-plugins.ts'
@@ -41,6 +42,11 @@ const resources = target === 'mac-arm64'
 const executable = target === 'mac-arm64'
   ? join(resources, '..', 'MacOS', 'DSH Desktop') : join(resources, '..', 'DSH Desktop.exe')
 if (process.versions.electron === undefined) {
+  // Inspect the physical archive under Node before Electron installs its ASAR filesystem hooks.
+  console.log('Packaged smoke: verifying final ASAR bytes against the prepared runtime inventory')
+  const archivePath = join(resources, 'app.asar')
+  const inventory = JSON.parse((await (await readAsar(archivePath)).readFile(join('dsh', 'desktop-runtime.json'))).toString()) as DesktopRuntimeDescriptor
+  await verifyRuntimeArchive(archivePath, inventory)
   const child = spawn(executable, ['--expose-internals', '--import', 'tsx/esm', import.meta.filename, target], {
     env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', DSH_DESKTOP_SMOKE_RESOURCES: resources }, stdio: 'inherit',
   })
@@ -144,8 +150,6 @@ const timeout = setTimeout(() => {
 }, target === 'win-x64' ? 300_000 : 180_000)
 subscribe('child_process', childDiagnostic)
 try {
-  progress('verifying final ASAR bytes against the prepared runtime inventory')
-  await verifyRuntimeArchive(join(packagedResources, 'app.asar'), readDesktopRuntime(runtime.dsh))
   progress('converting Office documents and resolving the skill CLI from the final ASAR')
   await smokeDesktopRuntime(runtime.dsh, runtime.node, readDesktopRuntime(runtime.dsh), process.env,
     join(packagedResources, 'runtime'))
