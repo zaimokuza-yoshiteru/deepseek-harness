@@ -1,6 +1,19 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for 2026-09-10-desktop-portable-distribution.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-10-desktop-portable-distribution.md
-2026-09-10-desktop-portable-distribution.md: 1c53a615f4eaa9a128bb43fdd38fb38bcb412d34
-2026-09-10-desktop-portable-distribution.zh.md: 170ac8e28eb362ddf46bc110d67acd7ec90c9ba0
+/agent-note-portable-desktop-distribution-and-native-plugin-management:
+  en: 11e052b4a12573d6
+  zh: 3c3cbd3851d046f3
+/agent-note-portable-desktop-distribution-and-native-plugin-management/problem:
+  en: 72ee6d9ad73a312b
+  zh: a811292abdd0cd69
+/agent-note-portable-desktop-distribution-and-native-plugin-management/decision:
+  en: 712f16a800603950
+  zh: 49799a8012a4a7f1
+/agent-note-portable-desktop-distribution-and-native-plugin-management/alternatives-considered:
+  en: ff66c9867c49ffe3
+  zh: dd09e368d7c9cc66
+/agent-note-portable-desktop-distribution-and-native-plugin-management/consequences:
+  en: 00c52d328793fd85
+  zh: 2b20ad80f0e34b06
