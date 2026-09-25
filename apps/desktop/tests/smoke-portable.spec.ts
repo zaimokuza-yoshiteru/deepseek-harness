@@ -14,13 +14,13 @@ function resources(): string {
 
 it('rejects missing and empty Windows tray resources and accepts a nonempty packaged icon', () => {
   const missing = resources()
-  expect(() => assertPackagedWindowsTrayIcon(missing)).toThrow('missing its tray icon')
+  expect(() => { assertPackagedWindowsTrayIcon(missing) }).toThrow('missing its tray icon')
 
   const empty = resources()
   writeFileSync(join(empty, 'tray.ico'), Buffer.alloc(0))
-  expect(() => assertPackagedWindowsTrayIcon(empty)).toThrow('missing its tray icon')
+  expect(() => { assertPackagedWindowsTrayIcon(empty) }).toThrow('missing its tray icon')
 
   const packaged = resources()
   writeFileSync(join(packaged, 'tray.ico'), Buffer.from([0, 1, 2]))
-  expect(() => assertPackagedWindowsTrayIcon(packaged)).not.toThrow()
+  expect(() => { assertPackagedWindowsTrayIcon(packaged) }).not.toThrow()
 })
