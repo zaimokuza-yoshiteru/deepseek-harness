@@ -1,0 +1,31 @@
+# Bilingual-pair consistency record for desktop-portable.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/user/guide/desktop-portable.md
+/dsh-desktop-portable-distribution:
+  en: 07713e3794fb3102
+  zh: 8b127a67470f349b
+/dsh-desktop-portable-distribution/summary:
+  en: 186c570ad4193448
+  zh: 31bd1cec56cba7dc
+/dsh-desktop-portable-distribution/table-of-contents:
+  en: 01845d4e92499124
+  zh: 977c012983ac5a63
+/dsh-desktop-portable-distribution/open-the-application:
+  en: fe0cf4142b343215
+  zh: 21da236ad4fe6c3b
+/dsh-desktop-portable-distribution/plugins-and-teams:
+  en: 982e4989f6232470
+  zh: 8c37c2c68d3e76d5
+/dsh-desktop-portable-distribution/environment-and-registry:
+  en: b9ccfd2740936e22
+  zh: 8a526ae3c593392f
+/dsh-desktop-portable-distribution/data-and-upgrades:
+  en: ac73b7d88df811fc
+  zh: bd0e2caafb758ad2
+/dsh-desktop-portable-distribution/build-and-release:
+  en: 4371f4757a0537a4
+  zh: e6a0f45591785070
+/dsh-desktop-portable-distribution/dev-note:
+  en: 96aa18832bf8da4b
+  zh: 36a1fa8619d2c8e7

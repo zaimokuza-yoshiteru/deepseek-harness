@@ -10,7 +10,7 @@ Status: implemented
 
 ## 决策
 
-desktop 分支生成 macOS arm64 与 Windows x64 ZIP。核心依赖由 Electron Node 模式从 ASAR 执行，保留内置 Node/Python 和文档工具运行时。原生启动页面在 profile 准备前显示，应用只运行一个 Host。首次启动复制以 npm integrity 锁定的预构建 ACP 和 Office 依赖；其他用户插件在迁移时可能需要访问 registry。精确版本由 [portable-plugins.ts](../../../../apps/desktop/src/portable-plugins.ts) 管理，[桌面 README](../../../../apps/desktop/README.zh.md) 负责发行编号、独立数据路径、遥测默认值、shell/npm 配置、菜单与链接。个人配置、凭证和备份不作为发行输入。
+desktop 分支生成 macOS arm64 与 Windows x64 ZIP。核心依赖由 Electron Node 模式从 ASAR 执行，保留内置 Node/Python 和文档工具运行时。原生启动页面在 profile 准备前显示，应用只运行一个 Host。首次启动复制以 npm integrity 锁定的预构建 ACP 和 Office 依赖；其他用户插件在迁移时可能需要访问 registry。精确版本由 [portable-plugins.ts](../../../../apps/desktop/src/portable-plugins.ts) 管理，[桌面 README](../../../../docs/user/guide/desktop-portable.zh.md) 负责发行编号、独立数据路径、遥测默认值、shell/npm 配置、菜单与链接。个人配置、凭证和备份不作为发行输入。
 
 DSH 原生插件管理器负责启停、重载、并发与错误处理，Electron 保留上游关闭和恢复机制。不再保留 Hub 实验功能 IPC、preload API、私有空闲关闭协议或独立包管理窗口。渲染进程仍运行在沙箱中，不启用 Node integration。官方 Teams 组合包包含 Host 和 Web 模块，新 profile 默认启用。切换状态保留依赖且不改变应用体积；Office 保持安装，通过原生服务查找感知 Teams 已禁用。
 

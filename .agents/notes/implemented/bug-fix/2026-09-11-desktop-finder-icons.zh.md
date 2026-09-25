@@ -10,7 +10,7 @@ Finder 显示损坏的绿色小图标，而 Dock 图标仍可正常显示。elec
 
 ## Decision
 
-便携配置使用已提交的 ICNS 和 ICO 文件，它们由官方 `icons@1.2.3` 工具从桌面 SVG 生成。[上游修复](https://github.com/electron-userland/electron-builder-binaries/blob/master/packages/icons/CHANGELOG.md)采用 ARGB `ic04`/`ic05` 帧和正确的 Retina PNG 尺寸。资源完整性记录固定 SVG、原生输出和下载的工具压缩包。使用原生输入可避开旧 builder 的 SVG 转换路径。
+便携配置使用已提交的 ICNS 和 ICO 文件，它们由官方 `icons@1.2.3` 工具从 `apps/desktop/resources/` 中的上游黑色鲸鱼平台 SVG 生成。[上游修复](https://github.com/electron-userland/electron-builder-binaries/blob/master/packages/icons/CHANGELOG.md)采用 ARGB `ic04`/`ic05` 帧和正确的 Retina PNG 尺寸。资源完整性记录固定 SVG、原生输出和下载的工具压缩包。使用原生输入可避开旧 builder 的 SVG 转换路径。
 
 ## Alternatives considered
 

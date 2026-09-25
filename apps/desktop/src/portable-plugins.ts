@@ -1,9 +1,9 @@
-/** Exact plugin tarball pins included in the portable offline seed; unpublished candidates require their packed bytes. */
+/** Exact plugin tarball pins included in the portable offline seed; verified against the published npm tarballs. */
 export const DESKTOP_PORTABLE_PLUGINS = [
   {
     name: '@zaimokuza/dsh-acp-adapter',
     version: '0.1.7-rc.2.0',
-    integrity: 'sha512-anyi6lgEd5fuicreoIN+zY18lPhLgzzAAR8r1hkIdAlRJgHXUPROhDlC+PDtNRWAdAPQs4EakNBB59RkRKNqhA==',
+    integrity: 'sha512-8h4RHQYzp2kHbQhdR2Y4wtBvIx2vVCY1M55/Nyst/uSUn9Sk7x2uLFfgC4l1B2EYVbuXlyXWeXhVuz4ogpFRUA==',
     notice: 'ACP-ADAPTER-LICENSE',
   },
   {

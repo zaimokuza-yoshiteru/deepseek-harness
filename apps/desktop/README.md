@@ -2,6 +2,8 @@
 
 English | [中文](README.zh.md)
 
+For this fork’s ZIP releases, data paths, upgrades and plugin pins, see the [portable distribution guide](../../docs/user/guide/desktop-portable.md). The installer and signing sections below describe the upstream distribution.
+
 The desktop application is an Electron shell around the complete dsh Web application. An Electron RunAsNode child starts the shared profile runner, and Electron immediately loads the packaged Web entry at `dsh-app://app/`. Its shared loading page waits for Host boot injections, then starts the client without navigating to another document. Electron forwards application HTTP requests to the authenticated Web Host, dropping connection-level response headers (`transfer-encoding`, `connection`, `keep-alive`) that describe the Node fetch rather than the resource, and marking plugin bundle responses `no-store` because their per-launch revisions would only accumulate in Chromium's disk cache; WebSocket streams connect to that Host with credentials attached only for the owned application window. Node IPC carries boot injections, readiness, and shutdown. Desktop defaults to port `19387`, separate from Web’s `3080`; a `webserver.config.port` patch can override it.
 
 The first application-menu command, **About DeepSeek Harness**, opens Electron's native About panel with the application icon, product name, and installed release version. The menu follows the Desktop shell locale. On macOS, Hide, Hide Others, Show All, and Quit use localized labels; Hide and Quit include the DeepSeek Harness product name. These commands retain their native actions and shortcuts. macOS reads the icon from its application bundle, so an unpackaged development launch displays Electron's icon; Windows receives the packaged PNG.

@@ -10,7 +10,7 @@ Finder displays corrupt green small icons while the Dock icon remains readable. 
 
 ## Decision
 
-The portable configuration packages checked-in ICNS and ICO files generated from the desktop SVG with the official `icons@1.2.3` tool. Its [upstream fix](https://github.com/electron-userland/electron-builder-binaries/blob/master/packages/icons/CHANGELOG.md) uses ARGB `ic04`/`ic05` frames and correct Retina PNG sizes. The asset integrity record pins the SVG, native outputs, and downloaded tool archive. Native inputs avoid the old builder's SVG conversion path.
+The portable configuration packages checked-in ICNS and ICO files generated from the upstream black-whale platform SVGs in `apps/desktop/resources/` with the official `icons@1.2.3` tool. Its [upstream fix](https://github.com/electron-userland/electron-builder-binaries/blob/master/packages/icons/CHANGELOG.md) uses ARGB `ic04`/`ic05` frames and correct Retina PNG sizes. The asset integrity record pins the SVG, native outputs, and downloaded tool archive. Native inputs avoid the old builder's SVG conversion path.
 
 ## Alternatives considered
 
