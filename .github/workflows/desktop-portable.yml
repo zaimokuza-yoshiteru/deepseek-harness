@@ -8,7 +8,7 @@ on:
       version:
         description: Desktop build version (manual runs upload artifacts only)
         required: true
-        default: '0.1.7.rc.1.1'
+        default: '0.1.7.rc.2.1'
 
 permissions:
   contents: read
@@ -36,7 +36,7 @@ jobs:
       run:
         shell: ${{ matrix.shell }}
     env:
-      DSH_DESKTOP_DISTRIBUTION_VERSION: ${{ inputs.version || '0.1.7.rc.1.1' }}
+      DSH_DESKTOP_DISTRIBUTION_VERSION: ${{ inputs.version || '0.1.7.rc.2.1' }}
       DSH_TELEMETRY_MODE: DISABLED
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
     steps:

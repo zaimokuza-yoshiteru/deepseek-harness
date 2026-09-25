@@ -5,9 +5,6 @@ import { dirname, join } from 'node:path'
 import { dump, load } from 'js-yaml'
 import { DESKTOP_PACKAGE_SET_FILE, readDesktopCorePackageSet } from './core-package-set.ts'
 
-/** Enables the temporary production-profile cleanup; remove this module and its caller together. */
-const CLEAN_PROFILE_CORE_PACKAGES = true
-
 function object(value: unknown): Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new Error('desktop profile cleanup: expected an object')
@@ -58,8 +55,7 @@ function prune(value: Record<string, unknown>, field: string, names: ReadonlySet
  * @param production - Whether this launch uses the packaged application.
  */
 export function cleanProfileCorePackages(profile: string, packageNames: readonly string[], production: boolean): void {
-  // oxlint-disable-next-line typescript/no-unnecessary-condition -- release cleanup has an explicit source switch.
-  if (!CLEAN_PROFILE_CORE_PACKAGES || !production || !existsSync(profile)) return
+  if (!production || !existsSync(profile)) return
   const names = new Set(packageNames)
   const recordPath = join(profile, DESKTOP_PACKAGE_SET_FILE)
   if (existsSync(recordPath)) {

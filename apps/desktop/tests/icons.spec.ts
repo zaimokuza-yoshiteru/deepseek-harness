@@ -13,7 +13,7 @@ describe('portable desktop icons', () => {
     const inventory = JSON.parse(readFileSync(new URL('icon-integrity.json', assets), 'utf8')) as {
       files: Record<string, string>
     }
-    expect(Object.keys(inventory.files)).toEqual(['icon.svg', 'icon.icns', 'icon.ico'])
+    expect(Object.keys(inventory.files)).toEqual(['../resources/icon-macos.svg', '../resources/icon-windows.svg', 'icon.icns', 'icon.ico'])
     for (const [name, digest] of Object.entries(inventory.files)) {
       expect(createHash('sha256').update(readFileSync(new URL(name, assets))).digest('hex')).toBe(digest)
     }

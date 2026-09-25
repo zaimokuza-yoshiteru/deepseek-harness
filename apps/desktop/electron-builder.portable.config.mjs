@@ -5,11 +5,12 @@ import { officePackageDirectories } from '../../scripts/libreoffice-packages.mjs
 import { prepareWindowsAsarUnpack, verifyWindowsAsarUnpack } from './scripts/windows-asar-unpack.mjs'
 import { fileURLToPath } from 'node:url'
 
-const tag = process.env.DSH_DESKTOP_DISTRIBUTION_VERSION ?? '0.1.7.rc.1.1'
+const tag = process.env.DSH_DESKTOP_DISTRIBUTION_VERSION ?? '0.1.7.rc.2.1'
 const version = tag.replace('0.1.7.rc.', '0.1.7-rc.')
-if (!/^0\.1\.7-rc\.1\.[1-9][0-9]*$/u.test(version)) {
-  throw new Error('desktop portable: expected distribution version 0.1.7.rc.1.<positive integer>')
+if (!/^0\.1\.7-rc\.2\.[1-9][0-9]*$/u.test(version)) {
+  throw new Error('desktop portable: expected distribution version 0.1.7.rc.2.<positive integer>')
 }
+const target = resolveDesktopBuildTarget()
 const paths = resolveDesktopTargetBuildPaths()
 
 let windowsCode = []
@@ -25,7 +26,7 @@ export default {
   electronFuses: { runAsNode: true },
   npmRebuild: false,
   beforePack: async context => {
-    const office = await officePackageDirectories(paths.dsh, desktopTargetPlatform(resolveDesktopBuildTarget()))
+    const office = await officePackageDirectories(paths.dsh, desktopTargetPlatform(target))
     const patterns = office.map(directory => `**/${relative(paths.dsh, directory).split(sep).join('/')}/**/*`)
     const existing = context.packager.config.asarUnpack ?? []
     context.packager.config.asarUnpack = [...(typeof existing === 'string' ? [existing] : existing), ...patterns]
@@ -44,6 +45,7 @@ export default {
   extraResources: [
     { from: paths.runtime, to: 'runtime' },
     { from: 'resources/icon.png', to: 'icon.png' },
+    ...(target === 'win-x64' ? [{ from: 'resources/tray-windows.ico', to: 'tray.ico' }] : []),
     { from: join(paths.root, 'plugin-seed'), to: 'plugin-seed' },
     // Electron Builder excludes nested node_modules from a parent FileSet.
     { from: join(paths.root, 'plugin-seed', 'node_modules'), to: 'plugin-seed/node_modules', filter: ['**/*'] },

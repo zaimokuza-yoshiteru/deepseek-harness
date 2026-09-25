@@ -40,6 +40,7 @@ run(['exec', 'vitest', 'run', ...[
   'npm-environment', 'project-manager', 'distribution', 'shell-environment', 'plugin-seed', 'package-target',
   'host-process', 'main-startup', 'prepare-package-set', 'locale', 'icons', 'profile-core-cleanup', 'preload-app', 'node-environment',
   'desktop-build-paths', 'development-project', 'installed-update-package-content', 'welcome-startup', 'windows-asar-unpack',
+  'portable-config', 'smoke-portable', 'tray-icon', 'quit-confirmation', 'background-notice', 'tray',
 ].map(name => `apps/desktop/tests/${name}.spec.ts`),
 ...['plugin-compatibility', 'profile-compatibility', 'compatibility-preflight']
   .map(name => `packages/boot/app-boot/tests/${name}.spec.ts`),
@@ -49,9 +50,10 @@ const directory = join('apps/desktop/.desktop-build/targets', target, 'artifacts
 const archives = readdirSync(directory).filter(name => name.endsWith('.zip'))
 const archive = `dsh-desktop-${process.env.DSH_DESKTOP_DISTRIBUTION_VERSION}-${target}.zip`
 if (archives.length !== 1 || archives[0] !== archive) throw new Error('Expected exactly the release ZIP for this target')
-// Exercise the recipient's complete ZIP at an independent extraction path. The native Windows
-// Office engine cannot bootstrap from the deeply nested CI build output directory.
+// Exercise the recipient's complete ZIP at an independent extraction path.
 run(['exec', 'tsx', 'apps/desktop/scripts/smoke-portable.ts', target, join(directory, archive)])
+// RC2 upgrades the native Office engine; also cover the deep Windows build path that failed with RC1.
+if (target === 'win-x64') run(['exec', 'tsx', 'apps/desktop/scripts/smoke-portable.ts', target])
 const hash = createHash('sha256')
 for await (const bytes of createReadStream(join(directory, archive))) hash.update(bytes)
 const sha256 = hash.digest('hex')

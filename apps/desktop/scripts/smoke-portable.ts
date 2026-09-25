@@ -18,6 +18,7 @@ import { desktopTargetBuildPaths } from './desktop-build-paths.mjs'
 import { DESKTOP_PORTABLE_PLUGINS } from '../src/portable-plugins.ts'
 import { smokeDesktopRuntime } from './smoke-runtime.ts'
 import { verifyRuntimeArchive } from './verify-runtime-archive.ts'
+import { assertPackagedWindowsTrayIcon } from './verify-packaged-tray-icon.ts'
 
 const target = process.argv[2]
 if (target !== 'mac-arm64' && target !== 'win-x64') throw new Error('Expected mac-arm64 or win-x64')
@@ -43,6 +44,7 @@ const executable = target === 'mac-arm64'
   ? join(resources, '..', 'MacOS', 'DSH Desktop') : join(resources, '..', 'DSH Desktop.exe')
 if (process.versions.electron === undefined) {
   try {
+    if (target === 'win-x64') assertPackagedWindowsTrayIcon(resources)
     // Inspect the physical archive under Node before Electron installs its ASAR filesystem hooks.
     console.log('Packaged smoke: verifying final ASAR bytes against the prepared runtime inventory')
     const archivePath = join(resources, 'app.asar')
@@ -153,6 +155,9 @@ const timeout = setTimeout(() => {
 }, target === 'win-x64' ? 300_000 : 180_000)
 subscribe('child_process', childDiagnostic)
 try {
+  // Use the final resource directory selected for this packaged Electron process,
+  // including the temporary extraction passed by the ZIP replay path.
+  if (target === 'win-x64') assertPackagedWindowsTrayIcon(packagedResources)
   progress('converting Office documents and resolving the skill CLI from the final ASAR')
   await smokeDesktopRuntime(runtime.dsh, runtime.node, readDesktopRuntime(runtime.dsh), process.env,
     join(packagedResources, 'runtime'))
@@ -182,7 +187,7 @@ try {
   assert.equal(devinCode, 0, 'Packaged Devin config must support ordinary Windows users and preserve original files')
   const hostStart = performance.now()
   await startHost()
-  assert.equal(readDesktopRuntime(runtime.dsh).release.version, '0.1.7-rc.1')
+  assert.equal(readDesktopRuntime(runtime.dsh).release.version, '0.1.7-rc.2')
   const response = await request(new Request('dsh-app://app/index.html'))
   assert.equal(response.status, 200)
   const html = await response.text()
