@@ -77,7 +77,7 @@ jobs:
           set -euo pipefail
           cd artifacts
           python3 - <<'PY'
-          import hashlib, io, json, os, pathlib, posixpath, re, tarfile, zipfile
+          import hashlib, io, json, os, pathlib, posixpath, re, ssl, tarfile, zipfile
 
           tag = os.environ['DESKTOP_TAG']
           source_sha = os.environ['SOURCE_SHA']
@@ -159,7 +159,18 @@ jobs:
               with zipfile.ZipFile(archive_name) as archive:
                   assert archive.testzip() is None
                   paths = archive.namelist()
-                  assert not any(pathlib.PurePosixPath(p).name in ['.npmrc', '.env'] or re.search(r'\.(?:pem|key|p12|pfx)$', p, re.I) or '/.git/' in p for p in paths)
+                  for path in paths:
+                      assert pathlib.PurePosixPath(path).name not in ['.npmrc', '.env'] and '/.git/' not in path, path
+                      if not re.search(r'\.(?:pem|key|p12|pfx)$', path, re.I):
+                          continue
+                      # pip requires its bundled public CA certificates for HTTPS verification.
+                      assert re.search(r'/runtime/primary-runtime/dependencies/python/(?:lib/python[0-9]+\.[0-9]+|Lib)/site-packages/pip/_vendor/certifi/cacert\.pem$', path), path
+                      certificate_text = archive.read(path).decode('ascii')
+                      without_comments = re.sub(r'^#[^\n]*', '', certificate_text, flags=re.M).strip()
+                      certificates = re.findall(r'-----BEGIN CERTIFICATE-----[A-Za-z0-9+/=\s]+-----END CERTIFICATE-----', without_comments)
+                      assert certificates and not re.sub(r'-----BEGIN CERTIFICATE-----[A-Za-z0-9+/=\s]+-----END CERTIFICATE-----', '', without_comments).strip(), path
+                      ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT).load_verify_locations(cadata='\n'.join(certificates))
+                      print('Verified public CA bundle', path, hashlib.sha256(archive.read(path)).hexdigest())
                   metadata = [p for p in paths if p.endswith('/plugin-seed/package.json')]
                   assert len(metadata) == 1
                   prefix = metadata[0][:-len('package.json')]
