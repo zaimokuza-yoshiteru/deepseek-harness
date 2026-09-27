@@ -54,7 +54,7 @@ Shell 导入排除 `ELECTRON_*`、`DSH_DESKTOP_*`、`NODE_OPTIONS`、`NODE_PATH`
 
 ## Build and release
 
-本地构建可以在原有 ACP 和 Office 固定版本之外加入未发布的插件。先构建各插件，再将 `DSH_DESKTOP_LOCAL_PLUGINS` 设为包目录绝对路径的 JSON 数组，然后执行打包命令：
+本地构建可以在原有 ACP 和 Office 固定版本之外加入未发布的插件。先构建各插件，再将 `DSH_DESKTOP_LOCAL_PLUGINS` 设为包目录或 `.tgz` 归档绝对路径的 JSON 数组，然后执行打包命令：
 
 ```sh
 export DSH_DESKTOP_LOCAL_PLUGINS='["/path/to/dsh-boot-ocbc","/path/to/dsh-atlassian-kanban"]'
@@ -86,4 +86,4 @@ Windows 构建命令为 `pnpm --dir apps/desktop run package:portable:win:x64`�
 
 参见[便携发行与原生插件管理决策](../../../.agents/notes/implemented/architecture/2026-09-10-desktop-portable-distribution.zh.md)。运行时与用户插件依赖图保持分离，渲染进程不启用 Node integration。
 
-CI 使用 `apps/desktop/release-plugins/` 下纳入版本控制的 OCBC 启动画面和 Atlassian 看板插件包，按 `apps/desktop/release-plugins.json` 校验 SHA256 后解包并构建两个平台。准备这些输入无需网络或凭证。插件发布包排除本地配置、测试数据、内部实施与验证记录；前端样式虚拟模块使用相对路径，避免构建注释泄露本机目录。
+CI 使用 `apps/desktop/release-plugins/` 下纳入版本控制的 OCBC 启动画面和 Atlassian 看板插件包，按 `apps/desktop/release-plugins.json` 校验 SHA256 后构建两个平台。模板原样复制这些归档，不再重新打包或继承父目录文件。准备这些输入无需网络或凭证。插件发布包排除本地配置、测试数据、内部实施与验证记录；前端样式虚拟模块使用相对路径，避免构建注释泄露本机目录。

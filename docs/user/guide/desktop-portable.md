@@ -54,7 +54,7 @@ Plugin-template upgrades retain a complete profile backup under `desktop/migrati
 
 ## Build and release
 
-A local build can add unpublished plugins without changing the default ACP and Office pins. Build each plugin first, then set `DSH_DESKTOP_LOCAL_PLUGINS` to a JSON array of absolute package directories before running the packaging command:
+A local build can add unpublished plugins without changing the default ACP and Office pins. Build each plugin first, then set `DSH_DESKTOP_LOCAL_PLUGINS` to a JSON array of absolute package directories or `.tgz` archive paths before running the packaging command:
 
 ```sh
 export DSH_DESKTOP_LOCAL_PLUGINS='["/path/to/dsh-boot-ocbc","/path/to/dsh-atlassian-kanban"]'
@@ -86,4 +86,4 @@ Portable builds use [GitHub Release promotion](../../../.github/workflows/deskto
 
 See the [portable distribution and native plugin management decision](../../../.agents/notes/implemented/architecture/2026-09-10-desktop-portable-distribution.md). Runtime and user-plugin dependency graphs remain separate; the renderer has no Node integration.
 
-CI extracts the audited OCBC startup and Atlassian Kanban archives versioned under `apps/desktop/release-plugins/` and checks their SHA256 pins in `apps/desktop/release-plugins.json` before building both platforms. Preparing these inputs requires no network or credential. Plugin distributions exclude local configuration, test data, and internal implementation and validation records. Frontend stylesheet virtual modules use relative paths so build comments omit machine-local directories.
+CI uses the audited OCBC startup and Atlassian Kanban archives versioned under `apps/desktop/release-plugins/` and checks their SHA256 pins in `apps/desktop/release-plugins.json` before building both platforms. The seed copies these archives unchanged, without repacking or inheriting files from parent directories. Preparing these inputs requires no network or credential. Plugin distributions exclude local configuration, test data, and internal implementation and validation records. Frontend stylesheet virtual modules use relative paths so build comments omit machine-local directories.

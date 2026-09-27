@@ -50,7 +50,7 @@ jobs:
           package-manager-cache: false
       - name: Verify tag and source branch
         run: node apps/desktop/scripts/verify-portable-tag.mjs
-      - name: Verify and extract audited local plugins
+      - name: Verify audited local plugin archives
         run: node apps/desktop/scripts/prepare-release-plugins.mjs
       - uses: pnpm/action-setup@v4
       - name: Build and test as a standard Windows user

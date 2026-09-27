@@ -1,7 +1,8 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
+import { c as createTar } from 'tar'
 import { preparePluginSeed } from '../scripts/prepare-plugin-seed.ts'
 
 const roots: string[] = []
@@ -38,4 +39,21 @@ it('refuses a local bundle that would replace a pinned registry plugin', async (
   vi.stubEnv('DSH_DESKTOP_LOCAL_PLUGINS', JSON.stringify([f.plugin]))
   await expect(preparePluginSeed(f.seed, process.execPath, 'unused', '0.1.7-rc.2'))
     .rejects.toThrow('duplicate desktop plugin')
+})
+
+it('retains archive bytes without packing or inheriting an ancestor license', async () => {
+  const f = directories()
+  const packageRoot = join(f.plugin, 'package')
+  mkdirSync(packageRoot)
+  writeFileSync(join(packageRoot, 'package.json'), JSON.stringify({ name: 'local', version: '1.0.0', files: ['lib'], dsh: { bundle: { patch: 'bundle.yml' } } }))
+  const archive = join(f.root, 'input.tgz')
+  await createTar({ file: archive, cwd: f.plugin, gzip: true }, ['package'])
+  writeFileSync(join(f.root, 'LICENSE'), 'unrelated ancestor license')
+  const manager = join(f.root, 'manager.cjs')
+  // Stop at installation after observing the prepared archive; no registry access is needed.
+  writeFileSync(manager, "process.exit(process.argv.includes('pack') ? 99 : 7)\n")
+  vi.stubEnv('DSH_DESKTOP_LOCAL_PLUGINS', JSON.stringify([archive]))
+  await expect(preparePluginSeed(f.seed, process.execPath, manager, '0.1.7-rc.2'))
+    .rejects.toThrow('plugin seed installation failed: 7')
+  expect(readFileSync(join(f.seed, 'desktop-local-plugins/local-1.0.0.tgz'))).toEqual(readFileSync(archive))
 })

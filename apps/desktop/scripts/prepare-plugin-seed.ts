@@ -1,14 +1,15 @@
 /** Build the writable plugin template once; application startup never installs its dependencies. */
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { delimiter, dirname, join, resolve } from 'node:path'
 import { parse } from 'yaml'
+import { t as listTar } from 'tar'
 import { DESKTOP_PORTABLE_PLUGINS } from '../src/portable-plugins.ts'
 import { desktopProfileBundles } from '../src/profile-defaults.ts'
 
 /** Materialize pinned plugins without host peer copies or personal npm configuration.
- * Local package directories come from the JSON array DSH_DESKTOP_LOCAL_PLUGINS and must already be built.
+ * DSH_DESKTOP_LOCAL_PLUGINS names prebuilt package directories or .tgz archives; archives retain their original bytes.
  * @param root - Target-owned output directory.
  * @param node - Bundled Node executable.
  * @param pnpm - Bundled package manager entry.
@@ -29,12 +30,23 @@ export async function preparePluginSeed(root: string, node: string, pnpm: string
   const localPlugins: { name: string; spec: string }[] = []
   const inputs: unknown = JSON.parse(process.env.DSH_DESKTOP_LOCAL_PLUGINS ?? '[]')
   if (!Array.isArray(inputs) || !inputs.every((value): value is string => typeof value === 'string')) {
-    throw new Error('DSH_DESKTOP_LOCAL_PLUGINS must be a JSON array of package directories')
+    throw new Error('DSH_DESKTOP_LOCAL_PLUGINS must be a JSON array of package directories or archives')
   }
   const names = new Set<string>(DESKTOP_PORTABLE_PLUGINS.map(plugin => plugin.name))
   for (const input of inputs) {
     const directory = resolve(input)
-    const manifest = JSON.parse(readFileSync(join(directory, 'package.json'), 'utf8')) as {
+    const archived = statSync(directory).isFile()
+    let manifestText = ''
+    if (archived) {
+      const chunks: Buffer[] = []
+      await listTar({ file: directory, onReadEntry(entry) {
+        if (entry.path === 'package/package.json' && entry.type === 'File') {
+          entry.on('data', (chunk: Buffer) => { chunks.push(chunk) })
+        }
+      } })
+      manifestText = Buffer.concat(chunks).toString('utf8')
+    } else manifestText = readFileSync(join(directory, 'package.json'), 'utf8')
+    const manifest = JSON.parse(manifestText) as {
       name?: string
       version?: string
       files?: string[]
@@ -49,14 +61,17 @@ export async function preparePluginSeed(root: string, node: string, pnpm: string
     names.add(manifest.name)
     const packages = join(root, 'desktop-local-plugins')
     mkdirSync(packages, { recursive: true })
-    await new Promise<void>((accept, reject) => {
-      const child = spawn(node, ['--expose-internals', pnpm, `--config.userconfig=${config}`, '--config.ignore-scripts=true', 'pack', '--pack-destination', packages], {
-        cwd: directory, stdio: 'inherit', env: environment,
-      })
-      child.once('error', reject)
-      child.once('close', (code, signal) => code === 0 ? accept() : reject(new Error(`local plugin pack failed: ${String(code ?? signal)}`)))
-    })
     const file = `${manifest.name.replace(/^@/u, '').replace('/', '-')}-${manifest.version}.tgz`
+    if (archived) cpSync(directory, join(packages, file))
+    else {
+      await new Promise<void>((accept, reject) => {
+        const child = spawn(node, ['--expose-internals', pnpm, `--config.userconfig=${config}`, '--config.ignore-scripts=true', 'pack', '--pack-destination', packages], {
+          cwd: directory, stdio: 'inherit', env: environment,
+        })
+        child.once('error', reject)
+        child.once('close', (code, signal) => code === 0 ? accept() : reject(new Error(`local plugin pack failed: ${String(code ?? signal)}`)))
+      })
+    }
     localPlugins.push({ name: manifest.name, spec: `file:./desktop-local-plugins/${file}` })
   }
   const plugins = [
