@@ -16,6 +16,9 @@ assert.ok(process.versions.electron, 'The packaged RunAsNode fuse must be enable
 const scope = await packagedProfile(runtime, profile)
 const require = createRequire(join(profile, 'package.json'))
 const installed = dirname(require.resolve('@zaimokuza/dsh-acp-adapter/package.json'))
+// The adapter owns its SDK dependency; the core runtime may use a different MCP package generation.
+const adapterRequire = createRequire(join(installed, 'package.json'))
+const loadAdapter = name => import(pathToFileURL(adapterRequire.resolve(name)).href)
 const home = await fs.mkdtemp(join(tmpdir(), 'desktop devin mcp '))
 const cleanup = []
 const configPath = join(home, 'fixture-mcp.json')
@@ -36,11 +39,11 @@ const subprocess = { spawn(spec) {
 } }
 try {
   const { prepareDevinMcp } = await import(pathToFileURL(join(installed, 'lib/host/teams/devin-config.js')).href)
-  const { Client } = await scope.load('@modelcontextprotocol/sdk/client/index.js')
-  const { StdioClientTransport } = await scope.load('@modelcontextprotocol/sdk/client/stdio.js')
-  const { Server } = await scope.load('@modelcontextprotocol/sdk/server/index.js')
-  const { StreamableHTTPServerTransport } = await scope.load('@modelcontextprotocol/sdk/server/streamableHttp.js')
-  const { ListToolsRequestSchema, CallToolRequestSchema } = await scope.load('@modelcontextprotocol/sdk/types.js')
+  const { Client } = await loadAdapter('@modelcontextprotocol/sdk/client/index.js')
+  const { StdioClientTransport } = await loadAdapter('@modelcontextprotocol/sdk/client/stdio.js')
+  const { Server } = await loadAdapter('@modelcontextprotocol/sdk/server/index.js')
+  const { StreamableHTTPServerTransport } = await loadAdapter('@modelcontextprotocol/sdk/server/streamableHttp.js')
+  const { ListToolsRequestSchema, CallToolRequestSchema } = await loadAdapter('@modelcontextprotocol/sdk/types.js')
   async function endpoint(name) {
     let calls = 0, active = true
     const http = createServer((req, res) => { void (async () => {

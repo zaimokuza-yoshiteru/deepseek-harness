@@ -128,3 +128,41 @@ it('removes the retired Teams web package while retaining the merged Teams selec
   expect(manifest.dsh.profile.bundles).not.toContain(web)
   expect(readFileSync(join(f.profile, 'settings.yaml'), 'utf8')).toBe('agents: []\n')
 })
+
+it('upgrades a bundled local archive while preserving its disabled state and user settings', async () => {
+  const f = fixture()
+  const name = '@example/local-plugin'
+  const spec = 'file:./desktop-local-plugins/local.tgz'
+  const seedManifest = JSON.parse(readFileSync(join(f.seed, 'package.json'), 'utf8')) as { dependencies: Record<string, string> }
+  seedManifest.dependencies[name] = spec
+  writeFileSync(join(f.seed, 'package.json'), JSON.stringify(seedManifest))
+  for (const [directory, content] of [[f.seed, 'new-archive'], [f.profile, 'old-archive']] as const) {
+    mkdirSync(join(directory, 'desktop-local-plugins'))
+    writeFileSync(join(directory, 'desktop-local-plugins', 'local.tgz'), content)
+  }
+  writeFileSync(join(f.profile, 'package.json'), JSON.stringify({ dependencies: { [name]: spec }, dsh: { profile: { bundles: [] } } }))
+  writeFileSync(join(f.profile, 'cordis.patch.yml'), 'user-configuration')
+  await applyPluginSeed(f.profile, f.seed, f.backup, f.runtime, async (install) => { expect(install).toBe(false) })
+  const manifest = JSON.parse(readFileSync(join(f.profile, 'package.json'), 'utf8')) as ProfileForTest
+  expect(manifest.dependencies[name]).toBe(spec)
+  expect(manifest.dsh.profile.bundles).not.toContain(name)
+  expect(readFileSync(join(f.profile, 'desktop-local-plugins', 'local.tgz'), 'utf8')).toBe('new-archive')
+  expect(readFileSync(join(f.profile, 'cordis.patch.yml'), 'utf8')).toBe('user-configuration')
+})
+
+interface ProfileForTest { dependencies: Record<string, string>; dsh: { profile: { bundles: string[] } } }
+
+it('enables newly bundled local plugins and removes retired seed-owned plugins offline', async () => {
+  const f = fixture()
+  const name = 'local-plugin'
+  const manifest = JSON.parse(readFileSync(join(f.seed, 'package.json'), 'utf8')) as { dependencies: Record<string, string> }
+  manifest.dependencies[name] = 'file:./desktop-local-plugins/local.tgz'
+  writeFileSync(join(f.seed, 'package.json'), JSON.stringify(manifest))
+  writeFileSync(join(f.profile, 'package.json'), JSON.stringify({ dependencies: { retired: 'file:./desktop-local-plugins/retired.tgz' }, dsh: { profile: { bundles: ['retired'] } } }))
+  writeFileSync(join(f.profile, 'desktop-plugin-seed.json'), JSON.stringify({ id: 'old', plugins: ['retired'] }))
+  await applyPluginSeed(f.profile, f.seed, f.backup, f.runtime, async (install) => { expect(install).toBe(false) })
+  const updated = JSON.parse(readFileSync(join(f.profile, 'package.json'), 'utf8')) as ProfileForTest
+  expect(updated.dsh.profile.bundles).toContain(name)
+  expect(updated.dsh.profile.bundles).not.toContain('retired')
+  expect(updated.dependencies).not.toHaveProperty('retired')
+})

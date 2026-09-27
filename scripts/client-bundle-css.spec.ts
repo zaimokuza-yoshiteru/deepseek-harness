@@ -39,6 +39,7 @@ describe('client bundle CSS Modules', () => {
       if (typeof virtualId !== 'string' || plugin.load === undefined) {
         throw new Error('CSS Modules plugin hooks are incomplete')
       }
+      expect(virtualId).not.toMatch(/css:(?:\/|[a-z]:)/iu)
       const watched: string[] = []
 
       const output = await plugin.load.call({ addWatchFile: id => watched.push(id) }, virtualId)
@@ -63,6 +64,7 @@ describe('client bundle global CSS', () => {
       if (typeof virtualId !== 'string' || plugin.load === undefined) {
         throw new Error('global CSS plugin hooks are incomplete')
       }
+      expect(virtualId).not.toMatch(/css:(?:\/|[a-z]:)/iu)
       const watched: string[] = []
 
       const output = await plugin.load.call({ addWatchFile: id => watched.push(id) }, virtualId)
@@ -86,6 +88,7 @@ describe('client bundle global CSS', () => {
       if (typeof virtualId !== 'string' || plugin.load === undefined) {
         throw new Error('inline CSS plugin hooks are incomplete')
       }
+      expect(virtualId).not.toMatch(/css:(?:\/|[a-z]:)/iu)
       const watched: string[] = []
 
       const output = await plugin.load.call({ addWatchFile: id => watched.push(id) }, virtualId)

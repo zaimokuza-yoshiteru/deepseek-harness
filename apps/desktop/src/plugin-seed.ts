@@ -36,7 +36,13 @@ export async function applyPluginSeed(
 ): Promise<void> {
   const manifestPath = join(profile, 'package.json')
   const old = existsSync(manifestPath) ? JSON.parse(readFileSync(manifestPath, 'utf8')) as ProfileManifest : undefined
-  const bundled = new Set<string>(DESKTOP_PORTABLE_PLUGINS.map(plugin => plugin.name))
+  const seedManifest = JSON.parse(readFileSync(join(seed, 'package.json'), 'utf8')) as ProfileManifest
+  const seedPlugins = Object.keys(seedManifest.dependencies ?? {})
+  const previousSeed = existsSync(join(profile, MARKER))
+    ? JSON.parse(readFileSync(join(profile, MARKER), 'utf8')) as { plugins?: string[] } : undefined
+  const bundled = new Set<string>([
+    ...DESKTOP_PORTABLE_PLUGINS.map(plugin => plugin.name), ...seedPlugins, ...previousSeed?.plugins ?? [],
+  ])
   bundled.add('@zaimokuza/dsh-plugin-hub')
   bundled.add('@deepseek-ai/dsh-experimental-agent-team-web-profile')
   const core = new Set(runtime.sharedPackages.map(entry => entry.name))
@@ -72,8 +78,8 @@ export async function applyPluginSeed(
       desktop: { ...old?.dsh?.desktop },
       profile: { ...old?.dsh?.profile, bundles: [
         ...desktopProfileBundles(runtime.release.version, false), ...teams,
-        ...DESKTOP_PORTABLE_PLUGINS.filter(plugin => old === undefined
-          || !Object.hasOwn(old.dependencies ?? {}, plugin.name) || previousBundles.includes(plugin.name)).map(plugin => plugin.name),
+        ...seedPlugins.filter(name => old === undefined
+          || !Object.hasOwn(old.dependencies ?? {}, name) || previousBundles.includes(name)),
         ...previousBundles.filter(name => Object.hasOwn(extras, name)),
       ] },
     }

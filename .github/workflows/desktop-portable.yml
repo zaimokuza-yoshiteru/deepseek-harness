@@ -8,7 +8,7 @@ on:
       version:
         description: Desktop build version (manual runs upload artifacts only)
         required: true
-        default: '0.1.7.rc.2.1'
+        default: '0.1.7.rc.2.2'
 
 permissions:
   contents: read
@@ -36,7 +36,7 @@ jobs:
       run:
         shell: ${{ matrix.shell }}
     env:
-      DSH_DESKTOP_DISTRIBUTION_VERSION: ${{ inputs.version || '0.1.7.rc.2.1' }}
+      DSH_DESKTOP_DISTRIBUTION_VERSION: ${{ inputs.version || '0.1.7.rc.2.2' }}
       DSH_TELEMETRY_MODE: DISABLED
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
     steps:
@@ -50,6 +50,11 @@ jobs:
           package-manager-cache: false
       - name: Verify tag and source branch
         run: node apps/desktop/scripts/verify-portable-tag.mjs
+      - name: Fetch audited local plugin packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: node apps/desktop/scripts/fetch-release-plugins.mjs
       - uses: pnpm/action-setup@v4
       - name: Build and test as a standard Windows user
         if: runner.os == 'Windows'

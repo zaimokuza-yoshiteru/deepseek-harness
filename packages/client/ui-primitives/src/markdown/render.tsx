@@ -612,14 +612,9 @@ function MarkdownFileLink({ file, glyph, children }: {
  * (no surrounding whitespace); anything else stays inert code.
  */
 function inlineCodeHttpUrl(value: string): string | undefined {
-  if (value.trim() !== value) return undefined
-  try {
-    const protocol = new URL(value).protocol
-    return protocol === 'http:' || protocol === 'https:' ? value : undefined
-  } catch {
-    // Not an absolute URL at all — the only way new URL() rejects a string.
-    return undefined
-  }
+  if (value.trim() !== value || !URL.canParse(value)) return undefined
+  const protocol = new URL(value).protocol
+  return protocol === 'http:' || protocol === 'https:' ? value : undefined
 }
 
 function renderImage(url: string, alt: string, key: Key, context: MarkdownRenderContext): ReactNode {

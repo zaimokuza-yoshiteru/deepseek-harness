@@ -4,7 +4,7 @@
 
 ## Summary
 
-本分支提供 macOS Apple Silicon 与 Windows x64 ZIP，内置 DSH `0.1.7-rc.2`、ACP adapter `0.1.7-rc.2.0` 和 Agent Teams Office `0.1.0-beta.6`。使用者无需另外安装 DSH、Node.js、npm 或 pnpm。Devin、Kimi 等 Agent 命令仍需自行安装。
+本分支提供 macOS Apple Silicon 与 Windows x64 ZIP，内置 DSH `0.1.7-rc.2`、ACP adapter `0.1.7-rc.2.0`、Agent Teams Office `0.1.0-beta.6`、OCBC 启动画面 `0.1.3` 和 Atlassian 看板 `0.1.0-alpha.1`。使用者无需另外安装 DSH、Node.js、npm 或 pnpm。Devin、Kimi 等 Agent 命令仍需自行安装。
 
 ## Table of Contents
 
@@ -54,6 +54,15 @@ Shell 导入排除 `ELECTRON_*`、`DSH_DESKTOP_*`、`NODE_OPTIONS`、`NODE_PATH`
 
 ## Build and release
 
+本地构建可以在原有 ACP 和 Office 固定版本之外加入未发布的插件。先构建各插件，再将 `DSH_DESKTOP_LOCAL_PLUGINS` 设为包目录绝对路径的 JSON 数组，然后执行打包命令：
+
+```sh
+export DSH_DESKTOP_LOCAL_PLUGINS='["/path/to/dsh-boot-ocbc","/path/to/dsh-atlassian-kanban"]'
+export DSH_DESKTOP_DISTRIBUTION_VERSION=0.1.7.rc.2.2
+```
+
+每个本地包必须声明明确的 `files` 列表和 `dsh.bundle.patch`，打包阶段不运行插件生命周期脚本。完整压缩包和生产依赖随 ZIP 一起分发，使用者无需保留源码目录或从 registry 下载。压缩包会留在可写 profile 中，供后续包管理操作使用。取消该环境变量即可构建默认的双插件版本。此流程不会发布本地包或携带 profile 凭证；Atlassian 连接在启动后配置。
+
 在对应操作系统上使用仓库锁定依赖构建：
 
 ```sh
@@ -61,7 +70,7 @@ pnpm install --frozen-lockfile
 pnpm --dir apps/desktop run package:portable:mac:arm64
 ```
 
-Windows 构建命令为 `pnpm --dir apps/desktop run package:portable:win:x64`。GitHub Actions 以无管理员身份安装依赖、构建和验证最终应用。Windows 使用临时普通账号；macOS 保留 runner 的桌面登录会话，在构建和 GUI 检查期间移除管理员组身份，完成后恢复。未登录桌面的新建账号会导致原生文档转换程序崩溃。仅账号准备和恢复操作使用管理权限。检查涵盖原生插件管理、ACP/Office RPC、Teams 离线开关、profile 迁移和 Devin 固定 stdio MCP 入口和会话能力隔离。构建产物、诊断、profile、签名材料和凭证不进入 Git。标签 `0.1.7.rc.2.1` 对应应用 SemVer `0.1.7-rc.2.1`，核心包保持 `0.1.7-rc.2`。
+Windows 构建命令为 `pnpm --dir apps/desktop run package:portable:win:x64`。GitHub Actions 以无管理员身份安装依赖、构建和验证最终应用。Windows 使用临时普通账号；macOS 保留 runner 的桌面登录会话，在构建和 GUI 检查期间移除管理员组身份，完成后恢复。未登录桌面的新建账号会导致原生文档转换程序崩溃。仅账号准备和恢复操作使用管理权限。检查涵盖原生插件管理、ACP/Office RPC、Teams 离线开关、profile 迁移和 Devin 固定 stdio MCP 入口和会话能力隔离。构建产物、诊断、profile、签名材料和凭证不进入 Git。标签 `0.1.7.rc.2.2` 对应应用 SemVer `0.1.7-rc.2.2`，核心包保持 `0.1.7-rc.2`。
 
 **Desktop portable smoke replay** 工作流接受已有构建的 run ID。Windows 会解压该次构建的原始 ZIP，核验普通用户身份，分别测量全新 profile 的 GUI 启动，以及完全退出后使用同一 profile 再次启动。在 `desktop-startup-win-x64` 产物中查看 `result.json` 和截图：就绪标准为账号菜单可见且成功打开设置对话框。macOS 构建也会以普通用户身份执行此 GUI 检查。报告记录 ZIP 的 SHA256 和渲染页面的绘制时间。启动计时不含 ZIP 解压，也不代表用户电脑的安全扫描或操作系统冷缓存表现。macOS 重测保留后端检查。
 
@@ -76,3 +85,5 @@ Windows 构建命令为 `pnpm --dir apps/desktop run package:portable:win:x64`�
 ## Dev Note
 
 参见[便携发行与原生插件管理决策](../../../.agents/notes/implemented/architecture/2026-09-10-desktop-portable-distribution.zh.md)。运行时与用户插件依赖图保持分离，渲染进程不启用 Node integration。
+
+CI 从当前 Release 草稿下载经过审计的 OCBC 启动画面和 Atlassian 看板插件包，按 `apps/desktop/release-plugins.json` 校验 SHA256 后构建两个平台。插件发布包排除本地配置、测试数据、内部实施与验证记录；前端样式虚拟模块使用相对路径，避免构建注释泄露本机目录。

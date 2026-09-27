@@ -74,6 +74,14 @@ const runtime = {
   dsh: join(packagedResources, 'app.asar', 'dsh'),
   pluginSeed: join(packagedResources, 'plugin-seed'),
 }
+const seedManifest = JSON.parse(readFileSync(join(runtime.pluginSeed, 'package.json'), 'utf8')) as { dependencies: Record<string, string> }
+const bundledPlugins = Object.keys(seedManifest.dependencies).map((name) => {
+  const manifest = JSON.parse(readFileSync(join(runtime.pluginSeed, 'node_modules', name, 'package.json'), 'utf8')) as {
+    version: string
+    dsh?: { client?: object }
+  }
+  return { name, version: manifest.version, client: manifest.dsh?.client !== undefined }
+})
 const paths = resolveDesktopPaths(home)
 const manager = new DesktopProjectManager(paths, runtime)
 let host: DesktopHostProcess | undefined
@@ -100,7 +108,7 @@ async function rpc<T>(method: string, payload: unknown = {}): Promise<T> {
 interface Bundle { name: string; version?: string; enabled: boolean; error?: unknown }
 async function assertBundles(): Promise<void> {
   const bundles = await rpc<Bundle[]>('pluginManager/listBundles')
-  for (const plugin of DESKTOP_PORTABLE_PLUGINS) {
+  for (const plugin of bundledPlugins) {
     const bundle = bundles.find(item => item.name === plugin.name)
     assert.equal(bundle?.version, plugin.version)
     assert.equal(bundle.enabled, true)
@@ -195,7 +203,7 @@ try {
   console.log(JSON.stringify({ firstPreparationMs: prepared - firstStart,
     firstReadyMs: prepared - firstStart + performance.now() - hostStart, metadataProbeMs: hostStart - prepared }))
   const graph = JSON.parse(html.match(/globalThis\["__DSH_BOOT__"\] = (.*?)<\/script>/u)![1]!) as { entries: { id: string; url: string }[] }
-  for (const name of [...DESKTOP_PORTABLE_PLUGINS.map(plugin => plugin.name), '@deepseek-ai/dsh-experimental-client-ui-agent-team']) {
+  for (const name of [...bundledPlugins.filter(plugin => plugin.client).map(plugin => plugin.name), '@deepseek-ai/dsh-experimental-client-ui-agent-team']) {
     const entry = graph.entries.find(item => item.id === name)
     assert.ok(entry, `Missing client module ${name}`)
     const client = await request(new Request(new URL(entry.url, 'dsh-app://app')))
@@ -252,7 +260,7 @@ try {
   const upgrade = new DesktopProjectManager(legacyPaths, runtime)
   await upgrade.applyRelease(true)
   const migrated = JSON.parse(readFileSync(join(legacyPaths.profile, 'package.json'), 'utf8')) as { dependencies: Record<string, string> }
-  assert.deepEqual(migrated.dependencies, Object.fromEntries(DESKTOP_PORTABLE_PLUGINS.map(plugin => [plugin.name, plugin.version])))
+  assert.deepEqual(migrated.dependencies, seedManifest.dependencies)
   await upgrade.applyRelease(true)
   console.log('Packaged legacy profile migration: retired tarballs removed offline; disabled Teams preserved')
   const state = JSON.parse(readFileSync(join(legacyPaths.profile, 'package.json'), 'utf8')) as { dsh: { profile: { bundles: string[] } } }

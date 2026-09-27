@@ -1,7 +1,7 @@
 /** Build and verify the portable application from a non-administrator CI account. */
 import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { createReadStream, mkdirSync, readdirSync, writeFileSync } from 'node:fs'
+import { createReadStream, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const target = process.argv[2]
@@ -38,13 +38,14 @@ if (mode === 'startup') {
 run(['--dir', 'native/system/packages/entry', 'run', 'build:js'])
 run(['exec', 'vitest', 'run', ...[
   'npm-environment', 'project-manager', 'distribution', 'shell-environment', 'plugin-seed', 'package-target',
-  'host-process', 'main-startup', 'prepare-package-set', 'locale', 'icons', 'profile-core-cleanup', 'preload-app', 'node-environment',
+  'prepare-plugin-seed', 'host-process', 'main-startup', 'prepare-package-set', 'locale', 'icons', 'profile-core-cleanup', 'preload-app', 'node-environment',
   'desktop-build-paths', 'development-project', 'installed-update-package-content', 'welcome-startup', 'windows-asar-unpack',
   'portable-config', 'smoke-portable', 'tray-icon', 'quit-confirmation', 'background-notice', 'tray',
 ].map(name => `apps/desktop/tests/${name}.spec.ts`),
 ...['plugin-compatibility', 'profile-compatibility', 'compatibility-preflight']
   .map(name => `packages/boot/app-boot/tests/${name}.spec.ts`),
 'packages/boot/plugin-manager/tests/operations.spec.ts'])
+process.env.DSH_DESKTOP_LOCAL_PLUGINS = readFileSync('.artifacts/desktop-release-plugins/inputs.json', 'utf8')
 run(['--dir', 'apps/desktop', 'run', target === 'mac-arm64' ? 'package:portable:mac:arm64' : 'package:portable:win:x64'])
 const directory = join('apps/desktop/.desktop-build/targets', target, 'artifacts')
 const archives = readdirSync(directory).filter(name => name.endsWith('.zip'))

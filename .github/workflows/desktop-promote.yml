@@ -91,6 +91,8 @@ jobs:
                   assert len(metadata) == 1
                   manifest = json.loads(archive.read(metadata[0]))
                   assert manifest['dependencies']['@zaimokuza/dsh-acp-adapter'] == '0.1.7-rc.2.0'
+                  assert manifest['dependencies']['dsh-boot-ocbc'] == 'file:./desktop-local-plugins/dsh-boot-ocbc-0.1.3.tgz'
+                  assert manifest['dependencies']['@zaimokuza/dsh-atlassian-kanban'] == 'file:./desktop-local-plugins/zaimokuza-dsh-atlassian-kanban-0.1.0-alpha.1.tgz'
                   assert '@zaimokuza/dsh-plugin-hub' not in manifest['dependencies']
                   assert manifest['dependencies']['@zaimokuza/dsh-agent-teams-office'] == '0.1.0-beta.6'
                   assert '@deepseek-ai/dsh-experimental-agent-team-profile' in manifest['dsh']['profile']['bundles']

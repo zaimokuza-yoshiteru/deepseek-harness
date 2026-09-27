@@ -4,7 +4,7 @@ English | [中文](desktop-portable.zh.md)
 
 ## Summary
 
-This branch targets macOS Apple Silicon and Windows x64 ZIPs with DSH `0.1.7-rc.2`, ACP adapter `0.1.7-rc.2.0`, and Agent Teams Office `0.1.0-beta.6`. Recipients do not install DSH, Node.js, npm, or pnpm separately. Agent executables such as Devin and Kimi remain external.
+This branch targets macOS Apple Silicon and Windows x64 ZIPs with DSH `0.1.7-rc.2`, ACP adapter `0.1.7-rc.2.0`, Agent Teams Office `0.1.0-beta.6`, OCBC startup `0.1.3`, and Atlassian Kanban `0.1.0-alpha.1`. Recipients do not install DSH, Node.js, npm, or pnpm separately. Agent executables such as Devin and Kimi remain external.
 
 ## Table of Contents
 
@@ -54,6 +54,15 @@ Plugin-template upgrades retain a complete profile backup under `desktop/migrati
 
 ## Build and release
 
+A local build can add unpublished plugins without changing the default ACP and Office pins. Build each plugin first, then set `DSH_DESKTOP_LOCAL_PLUGINS` to a JSON array of absolute package directories before running the packaging command:
+
+```sh
+export DSH_DESKTOP_LOCAL_PLUGINS='["/path/to/dsh-boot-ocbc","/path/to/dsh-atlassian-kanban"]'
+export DSH_DESKTOP_DISTRIBUTION_VERSION=0.1.7.rc.2.2
+```
+
+Each local package must declare an explicit `files` list and a `dsh.bundle.patch`; packaging runs no plugin lifecycle scripts. The complete tarballs and production dependencies travel inside the ZIP, so recipients need neither the source directories nor a registry download. Local archives remain in the writable profile for later package-manager operations. Unset the variable to build the default two-plugin distribution. This does not publish the local packages or include profile credentials; Atlassian connections are configured after launch.
+
 Build on the matching operating system using the repository’s locked dependencies:
 
 ```sh
@@ -61,7 +70,7 @@ pnpm install --frozen-lockfile
 pnpm --dir apps/desktop run package:portable:mac:arm64
 ```
 
-The Windows command is `pnpm --dir apps/desktop run package:portable:win:x64`. GitHub Actions installs dependencies, builds and checks the final application without administrator membership. Windows uses a temporary standard account. macOS retains the runner’s desktop login session, removes its administrator membership for the build and GUI checks, and restores membership afterward; a newly created account without a desktop login crashes the native document converter. Only account provisioning and restoration use administrative privileges. Checks cover native plugin management, ACP/Office RPCs, offline Teams toggles, profile migration and Devin’s fixed stdio MCP entry and isolated session capabilities. Build outputs, diagnostics, profiles, signing materials, and credentials stay outside Git history. Tag `0.1.7.rc.2.1` maps to application SemVer `0.1.7-rc.2.1`; core packages keep `0.1.7-rc.2`.
+The Windows command is `pnpm --dir apps/desktop run package:portable:win:x64`. GitHub Actions installs dependencies, builds and checks the final application without administrator membership. Windows uses a temporary standard account. macOS retains the runner’s desktop login session, removes its administrator membership for the build and GUI checks, and restores membership afterward; a newly created account without a desktop login crashes the native document converter. Only account provisioning and restoration use administrative privileges. Checks cover native plugin management, ACP/Office RPCs, offline Teams toggles, profile migration and Devin’s fixed stdio MCP entry and isolated session capabilities. Build outputs, diagnostics, profiles, signing materials, and credentials stay outside Git history. Tag `0.1.7.rc.2.2` maps to application SemVer `0.1.7-rc.2.2`; core packages keep `0.1.7-rc.2`.
 
 The **Desktop portable smoke replay** workflow accepts a previous build run ID. On Windows it extracts that exact ZIP, verifies an ordinary-user identity, and times a fresh-profile GUI launch and a complete relaunch with the same profile. Read `result.json` and screenshots in the `desktop-startup-win-x64` artifact: readiness requires a visible account menu and a successfully opened Settings dialog. The macOS build also runs this GUI check under its standard-user identity. The report records the ZIP SHA256 and renderer paint timings. ZIP extraction, user-machine security scanning and OS cold-cache behavior are not represented by the launch timings. The macOS replay retains its backend checks.
 
@@ -76,3 +85,5 @@ Portable builds use [GitHub Release promotion](../../../.github/workflows/deskto
 ## Dev Note
 
 See the [portable distribution and native plugin management decision](../../../.agents/notes/implemented/architecture/2026-09-10-desktop-portable-distribution.md). Runtime and user-plugin dependency graphs remain separate; the renderer has no Node integration.
+
+CI downloads the audited OCBC startup and Atlassian Kanban plugin archives from the current Release draft and checks their SHA256 pins in `apps/desktop/release-plugins.json` before building both platforms. Plugin distributions exclude local configuration, test data, and internal implementation and validation records. Frontend stylesheet virtual modules use relative paths so build comments omit machine-local directories.
