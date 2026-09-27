@@ -1,77 +1,19 @@
-# DeepSeek Harness
+# DSH 内网桌面端
 
-English | [中文](README.zh.md)
+## 项目架构
 
-DeepSeek Harness (`dsh`) is an open-source agent harness developed by [DeepSeek AI](https://deepseek.com).
+![项目架构手绘草图](architecture.svg)
 
-It is built on an **everything-is-a-plugin** architecture and powered by [Cordis](https://github.com/cordiverse/cordis), whose design is described in [_A Programming Paradigm for Spatiotemporal Composability_](https://arxiv.org/abs/2608.25512).
+## 相对 DSH 0.1.7-rc.2 的改动
 
-Documentation: [https://deepseek-harness.github.io/deepseek-harness/](https://deepseek-harness.github.io/deepseek-harness/)
-
-## Developer preview
-
-DeepSeek Harness is in _developer preview_ and iterating rapidly. **THERE WILL BE COMPATIBILITY-BREAKING CHANGES.**
-
-Review the [safety notice](SAFETY.md) before running the project.
-
-## Run
-
-### Run from `npm`
-
-Install `Node.js`, then run:
-
-```sh
-npx @deepseek-ai/dsh web
-```
-
-The command starts the Web UI at `http://127.0.0.1:3080` by default and opens it in the default browser for a local launch. An SSH launch only prints the host URL because the SSH client or editor owns the local forwarded address. Pass `--no-open` to run the server without opening a browser. See [Web UI guide](docs/user/guide/index.md).
-
-### Run from source
-
-To run from a repository checkout:
-
-```sh
-git clone https://github.com/deepseek-ai/deepseek-harness.git
-cd deepseek-harness
-pnpm install
-pnpm run build
-pnpm dsh web
-```
-
-`pnpm run build` prepares the repository artifacts. `pnpm dsh web` uses those built artifacts without rebuilding.
-
-## Community and support
-
-- Submit feedback or bug reports through [GitHub Discussions](https://github.com/deepseek-ai/deepseek-harness/discussions).
-- Add the [`dsh-plugin`](https://github.com/topics/dsh-plugin) topic to your plugin repository for discoverability.
-- Join <a href="https://discord.gg/Ycq5dCaS4">DeepSeek Harness Discord community</a>.
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md).
-
-## Development
-
-Start with the [development guide](docs/development.md) and [architecture documentation](docs/architecture.md).
-
-`pnpm run dev:web` builds, serves, and rebuilds client bundles on source edits in one terminal, and `make help` lists the matching Make targets for Web and Desktop; the guide's application commands section owns the full table.
-
-For agents, follow [AGENTS.md](AGENTS.md).
-
-## Citation
-
-```bibtex
-@misc{deepseek-harness2026,
-  title={DeepSeek Harness: Everything is a Plugin},
-  author={DeepSeek-AI},
-  year={2026},
-  publisher={GitHub},
-  howpublished={\url{https://github.com/deepseek-ai/deepseek-harness}},
-}
-```
-
-## License
-
-[MIT](LICENSE)
-
-Third-party dependencies and their licenses are disclosed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+1. 默认直接进入内网工作区，关闭官方账户欢迎、登录、账户设置和联系我们入口。
+2. 关闭 DeepSeek 官方模型适配器及 API Key 配置引导，默认模型留空，未配置时显示“请选择模型”。
+3. 桌面数据默认保存到独立的 `~/.dsh-desktop`，隔离配置和会话。
+4. 新增内网 Mac ARM64、Windows x64 ZIP 交付路径，包含运行依赖，关闭该交付路径的自动更新。
+5. 补充原生 Office 文件的解包规则，确保转换所需的原生目录和文件可被直接访问。
+6. GUI 启动时补齐终端 PATH，为插件安装统一传递代理、证书和 npm 环境设置。
+7. 桌面应用图标统一为黑色鲸鱼。
+8. 内联代码 URL 检测先用 `URL.canParse` 判断，减少流式渲染时捕获解析异常的开销。
+9. CSS 构建标识改用仓库相对路径，避免构建机绝对路径进入产物。
+10. 支持无 Git 元数据的源码包重建，保留功能所需生成步骤，移除普通文档与历史说明。
+11. 使用 `delivery.json` 统一版本，输出桌面包、同版本源码包及校验清单，过滤个人配置、依赖缓存和旧产物。

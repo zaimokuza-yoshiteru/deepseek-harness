@@ -10,12 +10,10 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { githubSlug } from './verify-md-links.ts'
 import {
-  annotateSurface, collectEventEnvelopeTypes, collectLogEvents, collectSurfaceEventTypes,
+  annotateSurface, collectLogEvents, collectSurfaceEventTypes,
   type AnnotatedLogEventEntry, type EventEnvelopeTypeEntry,
 } from './persistence-catalog-source.ts'
-import { extractPersistenceSchema } from './persistence-schema.ts'
 import { persistenceCatalogText, type PersistenceCatalogLocale } from './persistence-catalog-text.ts'
-import { renderPersistencePair, type PersistenceArtifact } from './persistence-artifacts.ts'
 
 export { annotateSurface, collectEventEnvelopeTypes, collectLogEvents, collectSurfaceEventTypes } from './persistence-catalog-source.ts'
 export type { AnnotatedLogEventEntry, EventEnvelopeTypeEntry, LogEventEntry } from './persistence-catalog-source.ts'
@@ -23,9 +21,7 @@ import type { PersistenceSchemaInventory } from './persistence-schema-model.ts'
 import { renderPersistenceSchemaDefinitions, renderPersistenceSchemaIndex } from './render-persistence-schema.ts'
 
 const root = resolve(import.meta.dirname, '..')
-const OUT = 'docs/persistence-catalog.md'
 const OUT_RUNTIME_TYPES = 'packages/core/session/src/known-event-types.ts'
-const OUT_SCHEMA = 'docs/persistence-schema.json'
 
 /** The fenced-block info string for generated declaration blocks (skipped by
  * doc-typecheck, since their imported types are not standalone-compilable). */
@@ -166,28 +162,12 @@ export function renderKnownEventTypes(events: AnnotatedLogEventEntry[]): string 
   ].join('\n')
 }
 
-/**
- * Render the complete generated persistence reference from one extracted inventory.
- * @param scanRoot - checkout whose source event declarations supply JSDoc.
- * @param schema - already extracted source schemas; shared with record validation.
- * @returns both catalog languages, pairing metadata, runtime names and machine schemas.
- */
-export function persistenceCatalogArtifacts(scanRoot: string, schema: PersistenceSchemaInventory): PersistenceArtifact[] {
-  const events = annotateSurface(collectLogEvents(scanRoot), collectSurfaceEventTypes(scanRoot))
-  const envelope = collectEventEnvelopeTypes(scanRoot)
-  return [
-    ...renderPersistencePair(scanRoot, OUT, render(events, envelope, schema), render(events, envelope, schema, 'zh')),
-    { path: OUT_RUNTIME_TYPES, content: renderKnownEventTypes(events) },
-    { path: OUT_SCHEMA, content: `${JSON.stringify(schema, null, 2)}\n` },
-  ]
-}
-
 /** CLI entry: default writes the artifacts, `--check` fails if a committed copy
  * is stale. Guarded behind an entry-point check so importing this module for
  * tests neither regenerates the committed files nor calls process.exit. */
 function main(): void {
-  const schema = extractPersistenceSchema(root)
-  const artifacts = persistenceCatalogArtifacts(root, schema)
+  const events = annotateSurface(collectLogEvents(root), collectSurfaceEventTypes(root))
+  const artifacts = [{ path: OUT_RUNTIME_TYPES, content: renderKnownEventTypes(events) }]
   if (process.argv.includes('--check')) {
     const stale = artifacts.filter((artifact) => {
       let committed: string | null = null

@@ -33,10 +33,14 @@ it('requires an explicit package file list before packing a local directory', as
     .rejects.toThrow('explicit files')
 })
 
-it('refuses a local bundle that would replace a pinned registry plugin', async () => {
+it('refuses duplicate source plugin inputs', async () => {
   const f = directories()
-  writeFileSync(join(f.plugin, 'package.json'), JSON.stringify({ name: '@zaimokuza/dsh-acp-adapter', version: '1.0.0', files: ['lib'], dsh: { bundle: { patch: 'bundle.yml' } } }))
-  vi.stubEnv('DSH_DESKTOP_LOCAL_PLUGINS', JSON.stringify([f.plugin]))
+  const packageRoot = join(f.plugin, 'package')
+  mkdirSync(packageRoot)
+  writeFileSync(join(packageRoot, 'package.json'), JSON.stringify({ name: '@zaimokuza/dsh-acp-adapter', version: '1.0.0', files: ['lib'], dsh: { bundle: { patch: 'bundle.yml' } } }))
+  const archive = join(f.root, 'plugin.tgz')
+  await createTar({ file: archive, cwd: f.plugin, gzip: true }, ['package'])
+  vi.stubEnv('DSH_DESKTOP_LOCAL_PLUGINS', JSON.stringify([archive, archive]))
   await expect(preparePluginSeed(f.seed, process.execPath, 'unused', '0.1.7-rc.2'))
     .rejects.toThrow('duplicate desktop plugin')
 })

@@ -1,0 +1,90 @@
+{
+  "schemaVersion": 1,
+  "dshBaseline": {
+    "version": "0.1.7-rc.2",
+    "commit": "477b4f420553e8a52c2fbccc464d7561b239c443"
+  },
+  "packages": [
+    {
+      "directory": "vendor/cosmokit",
+      "npmName": "@deepseek-ai/cosmokit",
+      "upstreamName": "cosmokit",
+      "version": "1.8.1",
+      "upstream": "https://github.com/deepseek-harness/cosmokit",
+      "repositoryPath": "",
+      "commit": "16f6fc058ade66e8ac5da0033d35a8d0f279f544"
+    },
+    {
+      "directory": "vendor/schemastery",
+      "npmName": "@deepseek-ai/schemastery",
+      "upstreamName": "schemastery",
+      "version": "3.18.0",
+      "upstream": "https://github.com/deepseek-harness/schemastery",
+      "repositoryPath": "packages/core",
+      "commit": "e67cee00ad725bd1534aee930a979ea3eec6f698"
+    },
+    {
+      "directory": "vendor/cordis",
+      "npmName": "@deepseek-ai/cordis",
+      "upstreamName": "cordis",
+      "version": "4.0.0-rc.7",
+      "upstream": "https://github.com/cordiverse/cordis",
+      "repositoryPath": "packages/core",
+      "commit": "56b3d4f725681cf4556c1a8695a709cc3b6eed74"
+    },
+    {
+      "directory": "vendor/loader",
+      "npmName": "@deepseek-ai/cordis-plugin-loader",
+      "upstreamName": "@cordisjs/plugin-loader",
+      "version": "1.0.0-rc.5",
+      "upstream": "https://github.com/cordiverse/cordis",
+      "repositoryPath": "packages/loader",
+      "commit": "56b3d4f725681cf4556c1a8695a709cc3b6eed74"
+    },
+    {
+      "directory": "vendor/include",
+      "npmName": "@deepseek-ai/cordis-plugin-include",
+      "upstreamName": "@cordisjs/plugin-include",
+      "version": "1.0.4",
+      "upstream": "https://github.com/deepseek-harness/cordis",
+      "repositoryPath": "packages/include",
+      "commit": "abb0a307cb1d3b0947f455d590cf5ba922d4caa4"
+    },
+    {
+      "directory": "vendor/group",
+      "npmName": "@deepseek-ai/cordis-plugin-group",
+      "upstreamName": "@cordisjs/plugin-group",
+      "version": "1.0.0",
+      "upstream": "https://github.com/deepseek-harness/cordis",
+      "repositoryPath": "packages/group",
+      "commit": "abb0a307cb1d3b0947f455d590cf5ba922d4caa4"
+    },
+    {
+      "directory": "vendor/timer",
+      "npmName": "@deepseek-ai/cordis-plugin-timer",
+      "upstreamName": "@cordisjs/plugin-timer",
+      "version": "1.1.2",
+      "upstream": "https://github.com/deepseek-harness/cordis",
+      "repositoryPath": "packages/timer",
+      "commit": "abb0a307cb1d3b0947f455d590cf5ba922d4caa4"
+    },
+    {
+      "directory": "vendor/hmr",
+      "npmName": "@deepseek-ai/cordis-plugin-hmr",
+      "upstreamName": "@cordisjs/plugin-hmr",
+      "version": "1.0.15",
+      "upstream": "https://github.com/deepseek-harness/cordis",
+      "repositoryPath": "packages/hmr",
+      "commit": "abb0a307cb1d3b0947f455d590cf5ba922d4caa4"
+    },
+    {
+      "directory": "vendor/logger-console",
+      "npmName": "@deepseek-ai/cordis-plugin-logger-console",
+      "upstreamName": "@cordisjs/plugin-logger-console",
+      "version": "1.0.0",
+      "upstream": "https://github.com/deepseek-harness/cordis",
+      "repositoryPath": "packages/logger-console",
+      "commit": "abb0a307cb1d3b0947f455d590cf5ba922d4caa4"
+    }
+  ]
+}

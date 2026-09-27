@@ -1,11 +1,10 @@
 /**
  * Generate `THIRD_PARTY_NOTICES.md` from the workspace manifests: every
  * external dependency named by a workspace `package.json`, the vendored-package
- * manifest in `vendor/README.md`, the Python `pyproject.toml` files, the shared
+ * manifest in `vendor/sources.json`, the Python `pyproject.toml` files, the shared
  * Python distribution lock, and the pnpm patch list. npm metadata comes from the installed
  * store, so the tree must be installed. `--check` verifies the committed
- * artifact. Tier policy and ownership live in
- * `.agents/notes/implemented/process/2026-07-30-generated-third-party-notices.md`.
+ * artifact.
  */
 
 import { existsSync, globSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -434,40 +433,41 @@ export function tierExternalDeps(
   return tiers
 }
 
-/** A vendored package row parsed out of the `vendor/README.md` manifest table. */
+/** Source attribution for one vendored package. */
 export interface VendoredRow {
   npmName: string
-  /** The name this package carries upstream; MIT attribution names the fork's origin, not our scope. */
   upstreamName: string
   upstream: string
 }
 
-/**
- * Parse the vendored-package manifest table out of `vendor/README.md`.
- * @param text - the complete `vendor/README.md` contents.
- * @returns one row per manifest-table entry, in table order.
- */
+/** Read the machine-readable source manifest independently of the README. */
 export function parseVendoredRows(text: string): VendoredRow[] {
-  const rows: VendoredRow[] = []
-  for (const line of text.split('\n')) {
-    const match = new RegExp(String.raw`^\| \x60\S+\/\x60 \| \x60([^\x60]+)\x60 \| \x60([^\x60]+)\x60 \| \S+ \| `
-      + String.raw`(https:\/\/\S+?)(?: \([^)]*\))? \| \x60[0-9a-f]+\x60 \|$`).exec(line)
-    if (match === null) continue
-    const [, npmName, upstreamName, upstream] = match
-    if (npmName === undefined || upstreamName === undefined || upstream === undefined) continue
-    rows.push({ npmName, upstreamName, upstream })
+  const manifest: unknown = JSON.parse(text)
+  if (manifest === null || typeof manifest !== 'object' || !('packages' in manifest)
+    || !Array.isArray(manifest.packages) || manifest.packages.length === 0) {
+    throw new Error('gen-third-party-notices: invalid vendor/sources.json packages')
   }
-  return rows
+  const names = new Set<string>()
+  return manifest.packages.map((row: unknown) => {
+    if (row === null || typeof row !== 'object'
+      || !('npmName' in row) || typeof row.npmName !== 'string' || !row.npmName
+      || !('upstreamName' in row) || typeof row.upstreamName !== 'string' || !row.upstreamName
+      || !('upstream' in row) || typeof row.upstream !== 'string' || !/^https:\/\/\S+$/.test(row.upstream)
+      || !('commit' in row) || typeof row.commit !== 'string' || !/^[0-9a-f]{40}$/.test(row.commit)) {
+      throw new Error('gen-third-party-notices: invalid vendor/sources.json package')
+    }
+    if (names.has(row.npmName)) throw new Error(`gen-third-party-notices: duplicate vendored package ${row.npmName}`)
+    names.add(row.npmName)
+    return { npmName: row.npmName, upstreamName: row.upstreamName, upstream: row.upstream }
+  })
 }
 
 /**
- * Parse the vendored manifest table and confirm it accounts for every vendored
- * directory. The `vendor/` tree — not the table — is the set that must be
- * disclosed, so a row that stops matching the table format is a hard error
- * rather than a package that quietly vanishes from the notices.
+ * Read the vendored source manifest and confirm it accounts for every vendored
+ * directory. Missing packages fail generation rather than disappearing from the notices.
  */
 function collectVendored(): (VendoredRow & { sourceDirectory: string })[] {
-  const rows = parseVendoredRows(readFileSync(resolve(root, 'vendor/README.md'), 'utf8'))
+  const rows = parseVendoredRows(readFileSync(resolve(root, 'vendor/sources.json'), 'utf8'))
   const onDisk = new Map<string, string>()
   for (const entry of readdirSync(resolve(root, 'vendor'), { withFileTypes: true })) {
     if (!entry.isDirectory()) continue
@@ -478,11 +478,11 @@ function collectVendored(): (VendoredRow & { sourceDirectory: string })[] {
   const parsed = new Set(rows.map(row => row.npmName))
   const missing = [...onDisk.keys()].filter(name => !parsed.has(name))
   if (missing.length > 0) {
-    throw new Error(`gen-third-party-notices: vendor/README.md has no manifest-table row for ${missing.join(', ')}; its table format changed or the sync is incomplete.`)
+    throw new Error(`gen-third-party-notices: vendor/sources.json is missing ${missing.join(', ')}.`)
   }
   return rows.map((row) => {
     const dir = onDisk.get(row.npmName)
-    if (dir === undefined) throw new Error(`gen-third-party-notices: vendored package ${row.npmName} from vendor/README.md has no vendor/ directory.`)
+    if (dir === undefined) throw new Error(`gen-third-party-notices: vendored package ${row.npmName} from vendor/sources.json has no vendor/ directory.`)
     const license = readManifest(`vendor/${dir}/package.json`).license
     if (license !== 'MIT') {
       throw new Error(`gen-third-party-notices: vendored ${row.npmName} declares license ${JSON.stringify(license)}; the vendored section assumes MIT throughout.`)
@@ -778,7 +778,7 @@ The complete npm transitive closure, including the Landlock launcher workspace, 
 
 ## Vendored source (\`vendor/\`)
 
-The Cordis framework and its foundation libraries are source-vendored into this repository rather than consumed from npm, and republished under the \`@deepseek-ai\` scope. All are MIT-licensed; each directory preserves its upstream \`LICENSE\` file. Exact upstream commits and local modifications are recorded in [\`vendor/README.md\`](vendor/README.md).
+The Cordis framework and its foundation libraries are source-vendored into this repository rather than consumed from npm, and republished under the \`@deepseek-ai\` scope. All are MIT-licensed; each directory preserves its upstream \`LICENSE\` file. Exact upstream commits and the DSH baseline are recorded in [\`vendor/sources.json\`](vendor/sources.json).
 
 | Package | Upstream name | Source | License |
 | --- | --- | --- | --- |
@@ -797,7 +797,7 @@ ${renderClaudeDistribution(claudeDistribution)}
 ${kitRuntime ? `
 ## LibreOffice conversion kit
 
-${[...LIBREOFFICE_PACKAGES].map(name => `\`${name}\``).join(', ')} declare MPL-2.0, which remains outside the permissive-license allowlist; the notices check accepts only these package identities at those terms. The [distribution decision](.agents/notes/implemented/architecture/2026-09-14-independent-libreoffice-kit.md) records the source obligations.
+${[...LIBREOFFICE_PACKAGES].map(name => `\`${name}\``).join(', ')} declare MPL-2.0, which remains outside the permissive-license allowlist; the notices check accepts only these package identities at those terms. Corresponding sources and notices must accompany redistribution as required by those licenses.
 
 The [kit repository](https://github.com/deepseek-harness/libreoffice-kit) supplies the corresponding LibreOffice source pin, modifications, build instructions, Node API, and artifact validation. Its engine packages retain their license and third-party notices; the Node API retains its MPL-2.0 declaration and NOTICE. Recipients must have access to those corresponding sources and notices.
 ` : ''}

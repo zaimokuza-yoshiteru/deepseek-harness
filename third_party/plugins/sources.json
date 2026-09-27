@@ -1,0 +1,137 @@
+{
+  "schemaVersion": 2,
+  "description": "Four editable plugin source copies built with the desktop repository. Origin commits identify import baselines; sourceSha256 identifies the imported and locally adjusted source bytes.",
+  "plugins": [
+    {
+      "name": "@zaimokuza/dsh-acp-adapter",
+      "version": "0.1.7-rc.2.3",
+      "source": "third_party/plugins/dsh-acp-adapter",
+      "origin": {
+        "commit": "98754d33b8eee21c6203bde948767ead1b6852c4",
+        "repository": "https://github.com/zaimokuza-yoshiteru/dsh-acp-adapter",
+        "changes": [
+          "Use the source assets/registry snapshot without a network refresh.",
+          "Remove ordinary documentation and README-only checks.",
+          "Use stable relative CSS module IDs and hashes.",
+          "Require explicit DSH_UPSTREAM_CHECKOUT for host integration tests.",
+          "Use pnpm 11.23.0, matching the desktop build toolchain.",
+          "Remove the unused test import left by README-only check removal."
+        ]
+      },
+      "sourceIncludesLocalChanges": true,
+      "sourceSha256": "a54d65b4be36852a3058e65f9d5288d9f155d70c7f6fb7cfe143236d42f52407",
+      "fileCount": 298,
+      "retainedDocuments": [
+        {
+          "path": "LICENSE",
+          "reason": "License or third-party attribution required with redistributed source."
+        }
+      ],
+      "excluded": [
+        "README and ordinary development/research/release documents",
+        ".git, .local, credentials, installed dependencies, generated build output, old plugin archives"
+      ]
+    },
+    {
+      "name": "@zaimokuza/dsh-agent-teams-office",
+      "version": "0.1.0-beta.8",
+      "source": "third_party/plugins/dsh-agent-teams-office",
+      "origin": {
+        "commit": "d2f3beab016039bb91d6068940099e002ecba0fc",
+        "repository": "https://github.com/zaimokuza-yoshiteru/dsh-agent-teams-office",
+        "changes": [
+          "Remove ordinary documentation and README pack assertions.",
+          "Enumerate source files for typecheck when Git metadata is absent.",
+          "Require explicit DSH_DESKTOP_REPO for desktop integration."
+        ]
+      },
+      "sourceIncludesLocalChanges": true,
+      "sourceSha256": "e212fbe2298f05041a154a6a9d44ad5979bcd4d67240369befedaa3cd5db1831",
+      "fileCount": 86,
+      "retainedDocuments": [
+        {
+          "path": "LICENSE",
+          "reason": "License or third-party attribution required with redistributed source."
+        },
+        {
+          "path": "THIRD_PARTY_NOTICES.md",
+          "reason": "License or third-party attribution required with redistributed source."
+        },
+        {
+          "path": "vendor/colord/LICENSE",
+          "reason": "License or third-party attribution required with redistributed source."
+        },
+        {
+          "path": "vendor/munder/LICENSE",
+          "reason": "License or third-party attribution required with redistributed source."
+        },
+        {
+          "path": "vendor/the-office/LICENSE",
+          "reason": "License or third-party attribution required with redistributed source."
+        },
+        {
+          "path": "vendor/three/LICENSE",
+          "reason": "License or third-party attribution required with redistributed source."
+        }
+      ],
+      "excluded": [
+        "README and ordinary development/research/release documents",
+        ".git, .local, credentials, installed dependencies, generated build output, old plugin archives"
+      ]
+    },
+    {
+      "name": "dsh-boot-ocbc",
+      "version": "0.1.7",
+      "source": "third_party/plugins/dsh-boot-ocbc",
+      "origin": {
+        "commit": null,
+        "repository": null,
+        "changes": [
+          "Import formal src, scripts and assets, excluding private .local research.",
+          "Use portable unit tests against formal source and separate optional host integration tests.",
+          "Add locked test dependencies and explicit DSH_HARNESS_ROOT integration entry.",
+          "Allow the retained tests directory in the prepack source-root validation.",
+          "Share animation frame IDs between the build and renderer, preserving the frame sequence.",
+          "Reject stale packages when source files are added or removed; retain source-free archive verification.",
+          "Format the renderer with equivalent emitted JavaScript.",
+          "Distribute letter streams across 24 regions with two separated lanes each; use website logo fill #e1251b without residual tracing tint; brighten only the scene layer and retain crisp text.",
+          "Match background black level to the portrait source (#030609) and remove added atmospheric haze and background glow spots."
+        ]
+      },
+      "sourceIncludesLocalChanges": true,
+      "sourceSha256": "2f8815c94ab3e9395b5c9f574ba9f52b90d68308b9283bdff3e1cd585e909322",
+      "fileCount": 157,
+      "retainedDocuments": [],
+      "excluded": [
+        "README and ordinary development/research/release documents",
+        ".git, .local, credentials, installed dependencies, generated build output, old plugin archives"
+      ]
+    },
+    {
+      "name": "dsh-atlassian-kanban",
+      "version": "0.1.0-alpha.8",
+      "source": "third_party/plugins/dsh-atlassian-kanban",
+      "origin": {
+        "commit": null,
+        "repository": null,
+        "changes": [
+          "Import formal sources and portable host/client unit tests.",
+          "Preserve HTTP and HTTPS rejectUnauthorized:false behavior.",
+          "Add package entry validation and independent test configuration and dependency lock.",
+          "Require explicit environment variables for private live-test fixture files.",
+          "Remove the unused aggregate settings writer and resource-cache variables; test the production settings writer.",
+          "Use host attachment interfaces instead of any without changing download or TLS behavior."
+        ]
+      },
+      "sourceIncludesLocalChanges": true,
+      "sourceSha256": "2b236b65098ac9fca34ba0d44e14698e34344d3a7c94c3516b07282446042605",
+      "fileCount": 59,
+      "retainedDocuments": [],
+      "excluded": [
+        "README and ordinary development/research/release documents",
+        ".git, .local, credentials, installed dependencies, generated build output, old plugin archives"
+      ]
+    }
+  ],
+  "sourceDigestAlgorithm": "scripts/build-plugins.mjs sourceDigest: sort all included POSIX relative file paths by codepoint, append UTF-8 byte length of path + colon + path + file byte length + colon + file bytes, SHA256 the concatenation. Excludes node_modules, lib, dist, .local, .git, .cache, .typert, .DS_Store and *.tsbuildinfo."
+}

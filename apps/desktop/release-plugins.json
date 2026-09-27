@@ -1,16 +1,20 @@
 {
   "plugins": [
     {
-      "name": "dsh-boot-ocbc",
-      "version": "0.1.3",
-      "asset": "dsh-boot-ocbc-0.1.3.tgz",
-      "sha256": "46b958e9f34571ee84e81c86440c1d0f8287e3ddac6a3caaade432e108a203a4"
+      "name": "@zaimokuza/dsh-acp-adapter",
+      "source": "third_party/plugins/dsh-acp-adapter"
     },
     {
-      "name": "@zaimokuza/dsh-atlassian-kanban",
-      "version": "0.1.0-alpha.1",
-      "asset": "zaimokuza-dsh-atlassian-kanban-0.1.0-alpha.1.tgz",
-      "sha256": "630acc438ec8ac4ff367647f7707e5cdb40036373b107d548905943cd6f4a366"
+      "name": "@zaimokuza/dsh-agent-teams-office",
+      "source": "third_party/plugins/dsh-agent-teams-office"
+    },
+    {
+      "name": "dsh-boot-ocbc",
+      "source": "third_party/plugins/dsh-boot-ocbc"
+    },
+    {
+      "name": "dsh-atlassian-kanban",
+      "source": "third_party/plugins/dsh-atlassian-kanban"
     }
   ]
 }

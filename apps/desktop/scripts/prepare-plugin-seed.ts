@@ -1,11 +1,10 @@
-/** Build the writable plugin template once; application startup never installs its dependencies. */
+/** Materialize dependencies for plugins built from the repository's source copies. */
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { cpSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { delimiter, dirname, join, resolve } from 'node:path'
-import { parse } from 'yaml'
 import { t as listTar } from 'tar'
-import { DESKTOP_PORTABLE_PLUGINS } from '../src/portable-plugins.ts'
+import { resolveNpmRegistry } from './desktop-release-environment.mjs'
 import { desktopProfileBundles } from '../src/profile-defaults.ts'
 
 /** Materialize pinned plugins without host peer copies or personal npm configuration.
@@ -28,11 +27,15 @@ export async function preparePluginSeed(root: string, node: string, pnpm: string
     PATH: `${dirname(node)}${delimiter}${process.env.PATH ?? ''}`,
   }
   const localPlugins: { name: string; spec: string }[] = []
-  const inputs: unknown = JSON.parse(process.env.DSH_DESKTOP_LOCAL_PLUGINS ?? '[]')
+  const buildRoot = resolve(import.meta.dirname, '../../../.artifacts/desktop-release-plugins')
+  const built = process.env.DSH_DESKTOP_LOCAL_PLUGINS === undefined
+    ? JSON.parse(readFileSync(join(buildRoot, 'manifest.json'), 'utf8')) as { plugins: { name: string; version: string; asset: string; sha256: string; sourceSha256: string }[] }
+    : undefined
+  const inputs: unknown = JSON.parse(process.env.DSH_DESKTOP_LOCAL_PLUGINS ?? readFileSync(join(buildRoot, 'inputs.json'), 'utf8'))
   if (!Array.isArray(inputs) || !inputs.every((value): value is string => typeof value === 'string')) {
     throw new Error('DSH_DESKTOP_LOCAL_PLUGINS must be a JSON array of package directories or archives')
   }
-  const names = new Set<string>(DESKTOP_PORTABLE_PLUGINS.map(plugin => plugin.name))
+  const names = new Set<string>()
   for (const input of inputs) {
     const directory = resolve(input)
     const archived = statSync(directory).isFile()
@@ -59,6 +62,13 @@ export async function preparePluginSeed(root: string, node: string, pnpm: string
     }
     if (names.has(manifest.name)) throw new Error(`duplicate desktop plugin: ${manifest.name}`)
     names.add(manifest.name)
+    if (built) {
+      const record = built.plugins.find(plugin => plugin.name === manifest.name)
+      if (!archived || record?.version !== manifest.version
+        || record.sha256 !== createHash('sha256').update(readFileSync(directory)).digest('hex')) {
+        throw new Error(`Plugin differs from this source build: ${manifest.name}`)
+      }
+    }
     const packages = join(root, 'desktop-local-plugins')
     mkdirSync(packages, { recursive: true })
     const file = `${manifest.name.replace(/^@/u, '').replace('/', '-')}-${manifest.version}.tgz`
@@ -74,10 +84,10 @@ export async function preparePluginSeed(root: string, node: string, pnpm: string
     }
     localPlugins.push({ name: manifest.name, spec: `file:./desktop-local-plugins/${file}` })
   }
-  const plugins = [
-    ...DESKTOP_PORTABLE_PLUGINS.map(plugin => ({ name: plugin.name, spec: plugin.version })),
-    ...localPlugins,
-  ]
+  const plugins = localPlugins
+  if (built && (plugins.length !== built.plugins.length || built.plugins.some(plugin => !names.has(plugin.name)))) {
+    throw new Error('Incomplete source plugin build')
+  }
   writeFileSync(join(root, 'package.json'), `${JSON.stringify({
     name: '@deepseek-ai/dsh-desktop-runtime', private: true, version: '0.0.0',
     dependencies: Object.fromEntries(plugins.map(plugin => [plugin.name, plugin.spec])),
@@ -87,19 +97,18 @@ export async function preparePluginSeed(root: string, node: string, pnpm: string
   }, null, 2)}\n`)
   writeFileSync(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - .\nnodeLinker: hoisted\nautoInstallPeers: false\nstrictDepBuilds: true\n')
   await new Promise<void>((accept, reject) => {
-    const child = spawn(node, ['--expose-internals', pnpm, '--config.registry=https://registry.npmjs.org/', `--config.userconfig=${config}`, 'install', '--prod', '--ignore-scripts'], {
+    const child = spawn(node, ['--expose-internals', pnpm, `--config.registry=${resolveNpmRegistry(process.env)}`, `--config.userconfig=${config}`, 'install', '--prod', '--ignore-scripts'], {
       cwd: root, stdio: 'inherit', env: environment,
     })
     child.once('error', reject)
     child.once('close', (code, signal) => code === 0 ? accept() : reject(new Error(`plugin seed installation failed: ${String(code ?? signal)}`)))
   })
-  const lock = parse(readFileSync(join(root, 'pnpm-lock.yaml'), 'utf8')) as { packages: Record<string, { resolution: { integrity?: string } }> }
   mkdirSync(join(root, 'notices'))
-  for (const plugin of DESKTOP_PORTABLE_PLUGINS) {
-    if (lock.packages[`${plugin.name}@${plugin.version}`]?.resolution.integrity !== plugin.integrity) throw new Error(`plugin seed: integrity mismatch for ${plugin.name}`)
-    const installed = join(root, 'node_modules', plugin.name)
-    cpSync(join(installed, 'LICENSE'), join(root, 'notices', plugin.notice))
+  for (const plugin of plugins) {
+    const license = join(root, 'node_modules', plugin.name, 'LICENSE')
+    if (existsSync(license)) cpSync(license, join(root, 'notices', plugin.name.replaceAll('/', '-').replace('@', '') + '-LICENSE'))
   }
+  if (built) writeFileSync(join(root, 'desktop-plugin-build.json'), JSON.stringify(built, null, 2) + '\n')
   for (const name of ['.modules.yaml', '.pnpm-workspace-state-v1.json', '.pnpm']) {
     rmSync(join(root, 'node_modules', name), { recursive: true, force: true })
   }

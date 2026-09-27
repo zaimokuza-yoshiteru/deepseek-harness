@@ -26,12 +26,9 @@ const PROBE_KEY = `process.env.${PROBE_NAME}`
 const originalProbe = process.env[PROBE_NAME]
 const roots: string[] = []
 const dshBuildWorkflows = [
-  'build-exe-for-python-sdk.yml',
-  'ci.yml',
-  'e2e.yml',
-  'release.yml',
-  'release-publish.yml',
-  'sandbox.yml',
+  'desktop-portable.yml',
+  'desktop-portable-smoke.yml',
+  'desktop-promote.yml',
 ]
 
 afterEach(() => {
@@ -78,6 +75,14 @@ function repositoryFixture(version = '1.2.3-rc.4'): string {
 }
 
 describe('client build environment', () => {
+  it('reads the recorded source revision when a delivery has no Git metadata', () => {
+    const fixtureRoot = mkdtempSync(join(tmpdir(), 'dsh-delivery-revision-'))
+    roots.push(fixtureRoot)
+    write(join(fixtureRoot, 'source-revision.json'), JSON.stringify({ commit: COMMIT_HASH }))
+    expect(repositoryCommitHash(fixtureRoot, {})).toBe(COMMIT_HASH.slice(0, 7))
+    write(join(fixtureRoot, 'source-revision.json'), JSON.stringify({ commit: 'invalid' }))
+    expect(() => repositoryCommitHash(fixtureRoot, {})).toThrow(/must be a Git commit hash/)
+  })
   it('requires an exact public environment for a named artifact profile', () => {
     const expected = {
       DSH_CLIENT_BUILD_PROFILE: 'official',

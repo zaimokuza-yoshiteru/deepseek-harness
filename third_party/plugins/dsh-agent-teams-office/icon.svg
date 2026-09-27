@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 36 36" fill="none">
+  <title>Office — miniature workspace</title>
+  <defs>
+    <linearGradient id="wall" x1="7" y1="7" x2="21" y2="25" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7CB7FF"/><stop offset="1" stop-color="#145AF3"/>
+    </linearGradient>
+    <linearGradient id="floor" x1="9" y1="21" x2="26" y2="30" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#A5D6FF"/><stop offset="1" stop-color="#5B94F6"/>
+    </linearGradient>
+  </defs>
+  <path d="M5 23.5V11.5a2 2 0 0 1 1-1.73L17 3.5a2 2 0 0 1 2 0l11 6.27a2 2 0 0 1 1 1.73v12L18 31 5 23.5Z" fill="url(#wall)"/>
+  <path d="m18 3.24 12 6.53a2 2 0 0 1 1 1.73v12L18 16V3.24Z" fill="#A9D5FF"/>
+  <path d="m5 23.5 13-7.5 13 7.5-12 6.92a2 2 0 0 1-2 0L5 23.5Z" fill="url(#floor)"/>
+  <path d="m9 14 5-2.9v4L9 18v-4Z" fill="#DBF0FF"/>
+  <path d="m21 10 6 3.45V17l-6-3.45V10Z" fill="#FFFFFF" fill-opacity=".72"/>
+  <path d="m10 22 7-4 8 4.6-7 4-8-4.6Z" fill="#FFFFFF"/>
+  <path d="M10 22v2.2l8 4.6v-2.2L10 22Z" fill="#C4DEFF"/>
+  <path d="m18 26.6 7-4v2.2l-7 4v-2.2Z" fill="#73A8F7"/>
+  <path d="m16 18.1 4 2.3v3.2l-4-2.3v-3.2Z" fill="#145AF3"/>
+  <circle cx="11.5" cy="22.3" r="2.1" fill="#F2AF63"/>
+  <path d="M8.9 26a2.6 2.6 0 0 1 5.2 0v.6l-2.6 1.5-2.6-1.5V26Z" fill="#F2AF63"/>
+  <circle cx="25.5" cy="19.5" r="2.1" fill="#45D9E7"/>
+  <path d="M23 23.2a2.5 2.5 0 0 1 5 0v.5l-2.5 1.45-2.5-1.45v-.5Z" fill="#45D9E7"/>
+</svg>

@@ -1,0 +1,13 @@
+import { sourceFiles } from './source-files.mjs';
+import {readFile,writeFile,readdir} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
+import {fileURLToPath} from 'node:url';
+import {dirname,resolve,join} from 'node:path';
+const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
+const pkg=JSON.parse(await readFile(join(root,'package.json'),'utf8'));
+const walk=async(dir,prefix)=>(await Promise.all((await readdir(dir,{withFileTypes:true})).map(e=>e.isDirectory()?walk(join(dir,e.name),prefix+e.name+'/'):[prefix+e.name]))).flat();
+const names=['package.json','asset-manifest.json','cordis.patch.yml','dsh.plugin.json',...await walk(join(root,'lib'),'lib/'),...await walk(join(root,'assets'),'assets/')].sort();
+const files={};for(const name of names)files[name]=createHash('sha256').update(await readFile(join(root,name))).digest('hex');
+const sourceNames=await sourceFiles(root);
+const sources={};for(const name of sourceNames)sources[name]=createHash('sha256').update(await readFile(join(root,name))).digest('hex');
+await writeFile(join(root,'release-manifest.json'),JSON.stringify({name:pkg.name,version:pkg.version,files,sources},null,2)+'\n');

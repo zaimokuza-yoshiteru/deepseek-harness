@@ -14,7 +14,7 @@ function fixture() {
   mkdirSync(profile); mkdirSync(seed)
   writeFileSync(join(profile, 'lock'), 'owned')
   writeFileSync(join(seed, 'desktop-plugin-seed.json'), '{"id":"new"}')
-  writeFileSync(join(seed, 'package.json'), JSON.stringify({ dependencies: Object.fromEntries(DESKTOP_PORTABLE_PLUGINS.map(p => [p.name, p.version])) }))
+  writeFileSync(join(seed, 'package.json'), JSON.stringify({ dependencies: Object.fromEntries(DESKTOP_PORTABLE_PLUGINS.map(p => [p.name, '1.0.0'])) }))
   const runtime = runtimeFixture(join(root, 'runtime'), '0.1.6-alpha.1')
   return { root, profile, seed, backup, runtime }
 }

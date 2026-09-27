@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto'
 import { createReadStream, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
+process.env.DSH_DESKTOP_DISTRIBUTION_VERSION ||= JSON.parse(readFileSync(new URL('../../../delivery.json', import.meta.url), 'utf8')).version
 const target = process.argv[2]
 const mode = process.argv[3] ?? 'build'
 if (!['build', 'startup'].includes(mode)) throw new Error('Expected build or startup mode')
@@ -45,7 +46,6 @@ run(['exec', 'vitest', 'run', ...[
 ...['plugin-compatibility', 'profile-compatibility', 'compatibility-preflight']
   .map(name => `packages/boot/app-boot/tests/${name}.spec.ts`),
 'packages/boot/plugin-manager/tests/operations.spec.ts'])
-process.env.DSH_DESKTOP_LOCAL_PLUGINS = readFileSync('.artifacts/desktop-release-plugins/inputs.json', 'utf8')
 run(['--dir', 'apps/desktop', 'run', target === 'mac-arm64' ? 'package:portable:mac:arm64' : 'package:portable:win:x64'])
 const directory = join('apps/desktop/.desktop-build/targets', target, 'artifacts')
 const archives = readdirSync(directory).filter(name => name.endsWith('.zip'))

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Atlassian Kanban",
+    "description": "Browse configured Jira issues, Bitbucket pull requests, and Confluence pages, and reference selected items from the composer."
+  }
+}

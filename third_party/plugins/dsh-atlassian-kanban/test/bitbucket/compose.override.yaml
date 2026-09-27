@@ -1,0 +1,5 @@
+services:
+  bitbucket:
+    environment:
+      JVM_SUPPORT_RECOMMENDED_ARGS: >-
+        -Dcom.atlassian.plugins.authentication.basic.auth.filter.force.allow=true

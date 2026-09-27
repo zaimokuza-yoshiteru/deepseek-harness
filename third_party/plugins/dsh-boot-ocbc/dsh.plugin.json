@@ -1,0 +1,13 @@
+{
+  "id": "dsh-external/dsh-boot-ocbc",
+  "version": "0.1.7",
+  "main": "./lib/index.js",
+  "description": "OCBC startup animation",
+  "engines": {
+    "dsh": ">=0.1.7-rc.2"
+  },
+  "contributes": {
+    "tools": [],
+    "skills": []
+  }
+}

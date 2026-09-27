@@ -1,0 +1,6 @@
+node_modules/
+lib/
+.typert/
+coverage/
+.local/
+reference/atlassian-server-mcp/

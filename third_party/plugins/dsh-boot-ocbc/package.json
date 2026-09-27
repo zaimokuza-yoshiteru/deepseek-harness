@@ -1,0 +1,54 @@
+{
+  "name": "dsh-boot-ocbc",
+  "version": "0.1.7",
+  "type": "module",
+  "description": "OCBC startup animation for DeepSeek Harness Web and Desktop",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "license": "UNLICENSED",
+  "files": [
+    "lib",
+    "assets",
+    "asset-manifest.json",
+    "cordis.patch.yml",
+    "dsh.plugin.json",
+    "release-manifest.json"
+  ],
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-plugin-manager",
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-primitives"
+      ]
+    },
+    "engines": {
+      "dsh": ">=0.1.7-rc.2"
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "vitest run --config tests/vitest.config.ts",
+    "test:integration": "node tests/run-integration.mjs",
+    "prepack": "node lib/verify-package.mjs",
+    "pack": "node scripts/pack.mjs"
+  },
+  "icon": "./assets/icon.svg",
+  "devDependencies": {
+    "@types/node": "22.20.0",
+    "esbuild": "0.25.12",
+    "typescript": "6.0.3",
+    "vitest": "4.1.8"
+  }
+}

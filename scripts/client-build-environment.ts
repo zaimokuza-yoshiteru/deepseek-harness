@@ -51,7 +51,12 @@ export type ClientBuildEnvironment = Readonly<Record<string, string>>
  */
 export function repositoryCommitHash(root: string, environment: NodeJS.ProcessEnv = process.env): string {
   const explicit = environment[CLIENT_COMMIT_HASH_VARIABLE]
-  const value = explicit ?? execFileSync('git', ['rev-parse', 'HEAD'], {
+  const snapshotPath = resolve(root, 'source-revision.json')
+  const snapshot: unknown = explicit === undefined && !existsSync(resolve(root, '.git')) && existsSync(snapshotPath)
+    ? JSON.parse(readFileSync(snapshotPath, 'utf8'))
+    : undefined
+  const snapshotCommit = isObject(snapshot) && typeof snapshot.commit === 'string' ? snapshot.commit : undefined
+  const value = explicit ?? snapshotCommit ?? execFileSync('git', ['rev-parse', 'HEAD'], {
     cwd: root,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'ignore'],

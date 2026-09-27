@@ -1,0 +1,4 @@
+- insert:
+    - id: dsh-agent-teams-office
+      name: '@zaimokuza/dsh-agent-teams-office'
+      config: {}

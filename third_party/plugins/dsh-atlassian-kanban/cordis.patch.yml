@@ -1,0 +1,4 @@
+- insert:
+    - id: dsh-atlassian-kanban
+      name: dsh-atlassian-kanban
+      config: {}

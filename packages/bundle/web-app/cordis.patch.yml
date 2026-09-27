@@ -130,9 +130,11 @@
     # reports an actionable error when its settings-domain provider is absent.
     - id: ui-settings-account
       name: '@deepseek-ai/dsh-client-ui-settings-account'
+      disabled: !!js "process.env.DSH_DESKTOP_INTRANET === '1'"
 
     - id: account-controller
       name: '@deepseek-ai/dsh-api-account-controller'
+      disabled: !!js "process.env.DSH_DESKTOP_INTRANET === '1'"
 
     - id: settings-controller
       name: '@deepseek-ai/dsh-api-settings-controller'
@@ -287,6 +289,8 @@
 
     - id: ui-settings-models
       name: '@deepseek-ai/dsh-client-ui-settings-models'
+      config:
+        credentialOnboarding: !!js "process.env.DSH_DESKTOP_INTRANET !== '1'"
 
     # Plugin management: the sidebar Plugins page installs, enables, disables,
     # and removes the profile's bundles through the `pluginManager` Remote.

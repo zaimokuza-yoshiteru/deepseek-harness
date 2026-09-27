@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "src/assets.d.ts",
+    "test/**/*.tsx",
+    "test/dsh-client.config.ts"
+  ],
+  "exclude": []
+}

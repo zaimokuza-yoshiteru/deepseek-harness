@@ -16,8 +16,10 @@ const target = process.argv[2]
 assert.ok(['mac-arm64', 'win-x64'].includes(target), 'Expected mac-arm64 or win-x64')
 const output = resolve('.artifacts/startup-timing')
 await mkdir(output, { recursive: true })
+const intranet = (process.env.DSH_DESKTOP_INTRANET ?? '1') === '1'
 const report = { target, archive: null, sha256: null, standardUser: process.env.DSH_STANDARD_USER_VERIFIED === '1',
-  measurement: 'Process launch through native welcome to a visible account menu and successful Settings dialog interaction; no model invocation.',
+  intranet,
+  measurement: 'Process launch through the configured startup flow to a visible Settings launcher and successful Settings dialog interaction; no model invocation.',
   limitations: 'Fresh CI machine, immediately after ZIP extraction; not an OS disk-cache cold boot or a user endpoint security reproduction. Extraction is excluded.',
   runs: [] }
 let executable = process.argv[3] && resolve(process.argv[3])
@@ -98,7 +100,12 @@ for (const kind of ['fresh-profile', 'same-profile-relaunch']) {
     firstScreenshot = page.screenshot({ path: join(output, `${kind}-first-window.png`), timeout: 15_000 }).catch(() => {})
     await page.waitForURL('dsh-app://app/**', { timeout: 300_000 })
     const accountMenu = page.getByRole('button', { name: /^(Account menu|账号菜单)$/u, exact: true })
-    await accountMenu.waitFor({ state: 'visible' })
+    const settingsLauncher = intranet ? page.getByRole('button', { name: /^(Settings|设置)$/u, exact: true }) : accountMenu
+    await settingsLauncher.waitFor({ state: 'visible' })
+    if (intranet) {
+      await expect(accountMenu).toHaveCount(0)
+      assert.equal(app.windows().some(window => window.url().includes('welcome.html')), false)
+    }
     mark('homeVisibleMs')
     const welcome = page.getByRole('button', { name: /^(Continue|继续)$/u, exact: true })
     // Native onboarding can advance asynchronously or skip the key step when a provider exists.
@@ -107,10 +114,10 @@ for (const kind of ['fresh-profile', 'same-profile-relaunch']) {
     await page.addLocatorHandler(configureLater, async () => { await configureLater.click(); mark('apiSetupDismissedMs') })
     await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()
       .some(window => window.webContents.getURL().startsWith('dsh-app://app/') && window.isVisible())),
-      { timeout: 300_000, message: 'The workspace must be visible after native welcome' }).toBe(true)
+      { timeout: 300_000, message: 'The workspace must be visible after startup' }).toBe(true)
     mark('workspaceVisibleMs')
-    await accountMenu.click()
-    await page.getByRole('menuitem', { name: /^(Settings|设置)$/u, exact: true }).click()
+    await settingsLauncher.click()
+    if (!intranet) await page.getByRole('menuitem', { name: /^(Settings|设置)$/u, exact: true }).click()
     await page.getByRole('dialog').getByRole('button', { name: /^(General|通用设置)$/u, exact: true }).waitFor({ state: 'visible' })
     mark('interactiveMs')
     run.renderer = await page.evaluate(() => ({

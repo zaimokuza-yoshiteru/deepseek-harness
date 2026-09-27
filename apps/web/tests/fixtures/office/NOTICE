@@ -1,0 +1,4 @@
+The preview.doc, preview.xls and preview.ppt fixtures originate from the
+LibreOffice Kit test fixtures: https://github.com/deepseek-harness/libreoffice-kit/tree/main/test/fixtures
+They were exported from Harness-authored OOXML using LibreOffice 26.8.0.3.
+The source documents retain the Harness MIT license (see the repository LICENSE).

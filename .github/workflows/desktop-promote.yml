@@ -45,10 +45,11 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$SOURCE_RUN" =~ ^[0-9]+$ ]]
-          [[ "$DESKTOP_TAG" =~ ^0\.1\.7\.rc\.2\.[1-9][0-9]*$ ]]
-          export SOURCE_SHA="$(git rev-parse "refs/tags/$DESKTOP_TAG^{commit}")"
+          [[ "$DESKTOP_TAG" =~ ^[0-9]+(\.[A-Za-z0-9-]+)+$ ]]
+          SOURCE_SHA="$(git rev-parse "refs/tags/$DESKTOP_TAG^{commit}")"
           git merge-base --is-ancestor "$SOURCE_SHA" origin/desktop
           gh api "repos/$GH_REPO/actions/runs/$SOURCE_RUN" > /tmp/source-run.json
+          export SOURCE_SHA
           python3 - <<'PY'
           import json, os
           run = json.load(open('/tmp/source-run.json'))
@@ -58,56 +59,145 @@ jobs:
           assert run['path'] == '.github/workflows/desktop-portable.yml'
           assert run['repository']['full_name'] == os.environ['GH_REPO']
           PY
+          printf 'SOURCE_SHA=%s\n' "$SOURCE_SHA" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
           github-token: ${{ github.token }}
           run-id: ${{ inputs.source_run }}
-          pattern: dsh-desktop-*
+          pattern: dsh-*
           path: artifacts
           merge-multiple: true
-      - name: Verify application metadata and prepare a draft Release
+      - name: Verify source, application metadata, and plugin digests; prepare a draft Release
         shell: bash
         run: |
           set -euo pipefail
           cd artifacts
           python3 - <<'PY'
-          import hashlib, json, os, pathlib, zipfile
+          import hashlib, io, json, os, pathlib, posixpath, re, tarfile, zipfile
+
           tag = os.environ['DESKTOP_TAG']
-          expected = {f'dsh-desktop-{tag}-{target}.zip' for target in ['mac-arm64', 'win-x64']}
-          assert {p.name for p in pathlib.Path('.').glob('*.zip')} == expected
-          for target in ['mac-arm64', 'win-x64']:
+          source_sha = os.environ['SOURCE_SHA']
+          source_archive = f'dsh-source-{tag}.tar.gz'
+          expected_zips = {f'dsh-desktop-{tag}-{target}.zip' for target in ['mac-arm64', 'win-x64']}
+          assert {p.name for p in pathlib.Path('.').glob('*.zip')} == expected_zips
+          assert pathlib.Path(source_archive).is_file()
+          sidecar = pathlib.Path(source_archive + '.sha256').read_text().split()
+          assert len(sidecar) == 2 and sidecar[1] == source_archive
+          assert hashlib.sha256(pathlib.Path(source_archive).read_bytes()).hexdigest() == sidecar[0]
+
+          with tarfile.open(source_archive, 'r:gz') as tar:
+              payload = {}
+              root = f'dsh-source-{tag}/'
+              tar_members = tar.getmembers()
+              for item in tar_members:
+                  name = item.name.removeprefix('./')
+                  if item.isdir() and name.rstrip('/') == root.rstrip('/'):
+                      continue
+                  assert name.startswith(root) and '..' not in pathlib.PurePosixPath(name).parts
+                  assert item.isfile() or item.isdir() or item.issym(), (name, item.type)
+                  relative = name[len(root):].rstrip('/')
+                  if item.isfile() or item.issym():
+                      payload[relative] = item
+              for relative, item in payload.items():
+                  if item.issym():
+                      assert not item.linkname.startswith('/')
+                      target = posixpath.normpath(posixpath.join(posixpath.dirname(relative), item.linkname))
+                      assert target != '..' and not target.startswith('../') and target in payload
+              def payload_bytes(path, visiting=()):
+                  assert path not in visiting, f'source symlink cycle: {path}'
+                  item = payload[path]
+                  if item.isfile():
+                      return tar.extractfile(item).read()
+                  target = posixpath.normpath(posixpath.join(posixpath.dirname(path), item.linkname))
+                  assert target in payload and not target.startswith('../')
+                  return payload_bytes(target, (*visiting, path))
+              members = {path: payload_bytes(path) for path in payload}
+          source_manifest_bytes = members['source-files.json']
+          assert source_manifest_bytes == pathlib.Path(source_archive + '.manifest.json').read_bytes()
+          source_manifest = json.loads(source_manifest_bytes)
+          assert source_manifest['commit'] == source_sha
+          assert source_manifest['distributionVersion'] == tag
+          assert source_manifest['testsIncluded'] is True
+          manifest_paths = {entry['path'] for entry in source_manifest['files']}
+          assert manifest_paths == set(members) - {'source-files.json'}
+          for entry in source_manifest['files']:
+              assert not pathlib.PurePosixPath(entry['path']).is_absolute() and '..' not in pathlib.PurePosixPath(entry['path']).parts
+              assert entry['path'] in members
+              assert hashlib.sha256(members[entry['path']]).hexdigest() == entry['sha256'], entry['path']
+
+          excluded = {'node_modules', 'lib', 'dist', '.local', '.git', '.cache', '.typert', '.DS_Store'}
+          def source_digest(source):
+              assert source.startswith('third_party/plugins/') and '..' not in pathlib.PurePosixPath(source).parts
+              prefix = source.rstrip('/') + '/'
+              files = []
+              for path, data in members.items():
+                  if path.startswith(prefix):
+                      relative = path[len(prefix):]
+                      parts = pathlib.PurePosixPath(relative).parts
+                      if any(part in excluded for part in parts) or relative.endswith('.tsbuildinfo'):
+                          continue
+                      files.append((relative, data))
+              assert files, source
+              digest = hashlib.sha256()
+              for path, data in sorted(files, key=lambda item: item[0]):
+                  digest.update(f'{len(path.encode())}:{path}{len(data)}:'.encode())
+                  digest.update(data)
+              return digest.hexdigest()
+
+          for archive_name in sorted(expected_zips):
+              target = 'mac-arm64' if 'mac-arm64' in archive_name else 'win-x64'
               evidence = json.load(open(f'standard-user-{target}.json'))
               assert evidence['target'] == target and evidence['version'] == tag
               assert evidence['standardUser'] is True and evidence['packagedSmoke'] == 'passed'
-              assert evidence['archive'] == f'dsh-desktop-{tag}-{target}.zip'
-              with open(evidence['archive'], 'rb') as source:
+              assert evidence['archive'] == archive_name
+              with open(archive_name, 'rb') as source:
                   assert hashlib.file_digest(source, 'sha256').hexdigest() == evidence['sha256']
-          plugins = json.load(open('../apps/desktop/release-plugins.json'))['plugins']
-          for name in sorted(expected):
-              with zipfile.ZipFile(name) as archive:
+              with zipfile.ZipFile(archive_name) as archive:
                   assert archive.testzip() is None
                   paths = archive.namelist()
-                  assert not any(pathlib.PurePosixPath(p).name in ['.npmrc', '.env', 'key.pem'] or '/.git/' in p for p in paths)
+                  assert not any(pathlib.PurePosixPath(p).name in ['.npmrc', '.env'] or re.search(r'\.(?:pem|key|p12|pfx)$', p, re.I) or '/.git/' in p for p in paths)
                   metadata = [p for p in paths if p.endswith('/plugin-seed/package.json')]
                   assert len(metadata) == 1
-                  manifest = json.loads(archive.read(metadata[0]))
                   prefix = metadata[0][:-len('package.json')]
+                  manifest = json.loads(archive.read(metadata[0]))
+                  plugin_manifest_path = prefix + 'desktop-plugin-build.json'
+                  plugin_manifest = json.loads(archive.read(plugin_manifest_path))
+                  plugins = plugin_manifest['plugins']
+                  assert plugins
+                  configured = {plugin['name']: plugin['source'] for plugin in json.load(open('../apps/desktop/release-plugins.json'))['plugins']}
+                  assert len(configured) == 4
+                  assert {plugin['name'] for plugin in plugins} == set(configured)
+                  names = set()
                   for plugin in plugins:
+                      for field in ['name', 'version', 'source', 'asset', 'sha256', 'sourceSha256']:
+                          assert isinstance(plugin.get(field), str) and plugin[field], (field, plugin)
+                      assert re.fullmatch(r'[0-9a-f]{64}', plugin['sha256'])
+                      assert re.fullmatch(r'[0-9a-f]{64}', plugin['sourceSha256'])
+                      assert plugin['name'] not in names
+                      assert plugin['source'] == configured[plugin['name']]
+                      names.add(plugin['name'])
                       packed = archive.read(prefix + 'desktop-local-plugins/' + plugin['asset'])
                       assert hashlib.sha256(packed).hexdigest() == plugin['sha256'], plugin['name']
-                  assert manifest['dependencies']['@zaimokuza/dsh-acp-adapter'] == '0.1.7-rc.2.0'
-                  assert manifest['dependencies']['dsh-boot-ocbc'] == 'file:./desktop-local-plugins/dsh-boot-ocbc-0.1.3.tgz'
-                  assert manifest['dependencies']['@zaimokuza/dsh-atlassian-kanban'] == 'file:./desktop-local-plugins/zaimokuza-dsh-atlassian-kanban-0.1.0-alpha.1.tgz'
+                      with tarfile.open(fileobj=io.BytesIO(packed), mode='r:gz') as plugin_tar:
+                          package_manifest = json.load(plugin_tar.extractfile('package/package.json'))
+                      assert package_manifest['name'] == plugin['name']
+                      assert package_manifest['version'] == plugin['version']
+                      assert source_digest(plugin['source']) == plugin['sourceSha256'], plugin['name']
+                      assert manifest['dependencies'][plugin['name']] == 'file:./desktop-local-plugins/' + plugin['asset']
+                  assert set(manifest['dependencies']) == names
                   assert '@zaimokuza/dsh-plugin-hub' not in manifest['dependencies']
-                  assert manifest['dependencies']['@zaimokuza/dsh-agent-teams-office'] == '0.1.0-beta.6'
                   assert '@deepseek-ai/dsh-experimental-agent-team-profile' in manifest['dsh']['profile']['bundles']
                   assert '@deepseek-ai/dsh-experimental-agent-team-web-profile' not in manifest['dsh']['profile']['bundles']
-              print('Verified', name)
+              print('Verified', archive_name)
           PY
-          sha256sum ./*.zip > SHA256SUMS.txt
+          sha256sum ./*.zip ./*.tar.gz ./*.manifest.json ./*.sha256 > SHA256SUMS.txt
           if gh release view "$DESKTOP_TAG" --json isDraft > /tmp/release.json 2>/dev/null; then
             python3 -c 'import json; assert json.load(open("/tmp/release.json"))["isDraft"] is True'
           else
-            gh release create "$DESKTOP_TAG" --verify-tag --draft --prerelease --title "DSH Desktop $DESKTOP_TAG" --notes "Verified application artifacts; release review pending."
+            gh release create "$DESKTOP_TAG" --verify-tag --draft --prerelease --title "DSH Desktop $DESKTOP_TAG" --notes "Verified source and application artifacts; release review pending."
           fi
-          gh release upload "$DESKTOP_TAG" ./*.zip SHA256SUMS.txt --clobber
+          gh release upload "$DESKTOP_TAG" ./*.zip ./*.tar.gz ./*.manifest.json ./*.sha256 SHA256SUMS.txt --clobber

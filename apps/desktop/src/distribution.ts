@@ -11,5 +11,6 @@ import { join } from 'node:path'
 export function configureDesktopDistribution(env: NodeJS.ProcessEnv = process.env, home = homedir()): string {
   env.DSH_HOME ||= join(home, '.dsh-desktop')
   env.DSH_TELEMETRY_MODE ??= 'DISABLED'
+  env.DSH_DESKTOP_INTRANET ??= '1'
   return join(env.DSH_HOME, 'electron-user-data')
 }

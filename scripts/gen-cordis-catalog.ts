@@ -1,35 +1,13 @@
-/**
- * Generate the per-subsystem Cordis service/event reference regions from the
- * Typert catalog projection. Every harness `ctx.<key>` service and event scope
- * maps to exactly one `docs/subsystems/` page through the curated tables below;
- * the generator injects each page's Cordis API reference between its GENERATED markers —
- * into both language sides of the pair, localizing paired document paths for
- * the Chinese side while retaining every other byte — and re-records a pair's
- * `.i18n.yaml` only when nothing outside the region changed. The
- * projection enforces event modes, JSDoc parameter/return completeness, and
- * signature type-link coverage; the inherited (vendor) tier renders to
- * `docs/cordis-api/inherited.md`. `--check` verifies every generated artifact.
- *
- * Generated regions embed `file:line` source pointers, so inserting lines ABOVE a
- * recorded symbol makes the committed output stale even though nothing about the
- * symbol changed. Regenerate after editing any file this projection records — the
- * failure otherwise surfaces as the "reproduces every committed catalog artifact
- * byte for byte" test failing, which reads like a snapshot regression rather than
- * a missing regeneration.
- */
+/** Generate the Cordis API catalog consumed by the runtime inspector. */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import {
   projectCordisCatalog,
-  renderInheritedPage,
-  renderPageRegion,
   REGION_BEGIN,
   REGION_END,
 } from '@deepseek-ai/dsh-typert-generator'
 import type { CordisCatalogPolicy } from '@deepseek-ai/dsh-typert-generator'
-import { renderCordisCoreApiPages } from './cordis-core-api.ts'
-import { contextKeyMap, contextMergeFiles, eventNameList } from './cordis-walk.ts'
 import {
   parseTranslationPairingManifest,
   translationPairSourcePredicate,
@@ -37,8 +15,6 @@ import {
 import { rewriteTranslationLinkLocales } from './translation-links.ts'
 
 const root = resolve(import.meta.dirname, '..')
-const SUBSYSTEMS_DIR = 'docs/subsystems'
-const OUT_INHERITED = 'docs/cordis-api/inherited.md'
 const OUT_RUNTIME_API = 'packages/extensions/tool-cordis/src/api-catalog.ts'
 
 export { REGION_BEGIN, REGION_END }
@@ -1147,78 +1123,15 @@ export function walkPartitionProblems(input: WalkPartitionInput, maps: WalkParti
  */
 export function computeOutputs(): [string, string][] {
   const { projector, model } = projectCordisCatalog(root, CORDIS_CATALOG_POLICY)
-  const services = [...model.services]
-  const events = [...model.events]
-
-  const declaredKeys = new Map<string, string>()
-  const declaredEvents = new Map<string, string>()
-  for (const { rel, sf, body } of contextMergeFiles(root, ['packages/*/*/src/**/*.ts', 'packages/*/*/src/**/*.tsx'])) {
-    for (const key of contextKeyMap(body, sf).keys()) {
-      if (!declaredKeys.has(key)) declaredKeys.set(key, rel)
-    }
-    for (const name of eventNameList(body, sf)) {
-      if (!declaredEvents.has(name)) declaredEvents.set(name, rel)
-    }
-  }
-  const problems = walkPartitionProblems({
-    renderedKeys: new Map(services.map(s => [s.key, s.source])),
-    renderedScopes: new Set(events.map(e => e.scope)),
-    renderedEventNames: new Set(events.map(e => e.name)),
-    declaredKeys,
-    declaredEvents,
-  }, {
-    servicePage: SERVICE_PAGE,
-    serviceWalkExemptions: SERVICE_WALK_EXEMPTIONS,
-    eventScopePage: EVENT_SCOPE_PAGE,
-    eventWalkExemptions: EVENT_WALK_EXEMPTIONS,
-  })
-  if (problems.length > 0) throw new Error(`gen-cordis-catalog: ${problems.length} partition violation(s):\n${problems.map(p => `  ${p}`).join('\n')}`)
-
-  const pages = [...new Set([...Object.values(SERVICE_PAGE), ...Object.values(EVENT_SCOPE_PAGE)])].sort()
-  const outputs: [string, string][] = [
-    [OUT_INHERITED, renderInheritedPage(CORDIS_CATALOG_POLICY)],
-    [OUT_RUNTIME_API, projector.renderRuntimeApi(model)],
-  ]
-  for (const page of pages) {
-    const region = renderPageRegion(
-      page,
-      services.filter(s => SERVICE_PAGE[s.key] === page),
-      events.filter(e => EVENT_SCOPE_PAGE[e.scope] === page),
-      CORDIS_CATALOG_POLICY,
-    )
-    for (const side of [page, page.replace(/\.md$/, '.zh.md')]) {
-      const rel = `${SUBSYSTEMS_DIR}/${side}`
-      const localizedRegion = localizePageRegion(region, rel)
-      let current: string
-      try {
-        current = readFileSync(resolve(root, rel), 'utf8')
-      } catch {
-        // Both pair sides must exist before a region can be injected; the
-        // pairing gate owns pair completeness, this generator names the miss.
-        problems.push(`${rel}: mapped subsystems page does not exist.`)
-        continue
-      }
-      try {
-        outputs.push([rel, spliceRegion(current, localizedRegion)])
-      } catch (error) {
-        problems.push(`${rel}: ${error instanceof Error ? error.message : String(error)}`)
-      }
-    }
-  }
-  if (problems.length > 0) throw new Error(`gen-cordis-catalog: ${problems.length} page violation(s):\n${problems.map(p => `  ${p}`).join('\n')}`)
-  return outputs
+  return [[OUT_RUNTIME_API, projector.renderRuntimeApi(model)]]
 }
-
 /** CLI entry: default regenerates every artifact, `--check` fails if any is
  * stale. Guarded behind an entry-point check so importing this module for
  * tests neither regenerates the committed files nor calls process.exit.
  * @returns nothing; writes files or reports freshness through the process.
  */
 export function main(): void {
-  const outputs: [string, string][] = [
-    ...computeOutputs(),
-    ...renderCordisCoreApiPages(),
-  ]
+  const outputs = computeOutputs()
   if (process.argv.includes('--check')) {
     const stale: string[] = []
     for (const [out, content] of outputs) {

@@ -12,6 +12,7 @@
     "builtin": true
   },
   "ignorePatterns": [
+    "third_party/**", // Independent plugin source snapshots keep their own tooling.
     "**/lib/**",
     "**/node_modules/**",
     "**/.sessions/**",

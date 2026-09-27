@@ -1,0 +1,191 @@
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, symlinkSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { collectSourceFiles, collectSourceInventory, exportSource, includeSource } from '../../scripts/export-source.mjs'
+import { packageSource } from '../../scripts/package-source.mjs'
+import { sourceDigest } from '../../scripts/build-plugins.mjs'
+
+test('source policy restricts origins and rejects local state, credentials, builds and docs', () => {
+  assert.equal(includeSource('native/system/packages/darwin-arm64/bin/system.node', true), false)
+  assert.equal(includeSource('python/sdk-runtime/src/deepseek_harness_runtime/runtime/node', true), false)
+  for (const path of ['.local/profile/token.json', '.artifacts/bundle.zip', '.desktop-build/app', '.git/config', 'packages/a/node_modules/x', 'packages/a/dist/x.js', 'packages/a/.cache/x', 'packages/a/.caches/x', 'packages/a/credentials.json', 'apps/a/src/tls.key', 'apps/a/src/tls.pem', 'apps/a/profilesauth.json', 'AGENTS.md', 'docs/guide.md', 'apps/desktop/tests/boot.spec.ts']) assert.equal(includeSource(path), false, path)
+  for (const path of ['README.md', 'architecture.svg', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'packages/skill/office/SKILL.md', 'vendor/cordis/LICENSE', 'scripts/build.ts', 'third_party/plugins/example/src/index.ts', 'packages/a/src/tls.pem.example']) assert.equal(includeSource(path), true, path)
+  for (const path of ['packages/credentials/foo/src/index.ts', 'packages/a/cache/index.ts']) assert.equal(includeSource(path), true, path)
+  assert.equal(includeSource('apps/desktop/tests/fixture.pem', true), false)
+  assert.equal(includeSource('apps/desktop/tests/fixtures/fixture.pem', true), true)
+  assert.equal(includeSource('apps/desktop/tests/boot.spec.ts', true), true)
+  assert.equal(includeSource('.maintenance/tests/export-source.test.mjs', true), true)
+  assert.equal(includeSource('.github/workflows/desktop-portable.yml', true), true)
+})
+
+test('collects from allowlisted source roots without git and keeps scripts as build tooling', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'dsh-source-collect-'))
+  try {
+    mkdirSync(join(tmp, 'apps/a/src'), { recursive: true })
+    mkdirSync(join(tmp, 'scripts'), { recursive: true })
+    mkdirSync(join(tmp, 'docs'), { recursive: true })
+    mkdirSync(join(tmp, 'random'), { recursive: true })
+    writeFileSync(join(tmp, 'apps/a/src/main.ts'), 'main')
+    writeFileSync(join(tmp, 'scripts/build.ts'), 'build')
+    writeFileSync(join(tmp, 'scripts/benchmark-npm-resolution.ts'), 'process.env.npm_config_verify_deps_before_run')
+    writeFileSync(join(tmp, 'scripts/benchmark-npm-resolution.spec.ts'), 'const option = "skip-install"')
+    writeFileSync(join(tmp, 'docs/guide.md'), 'guide')
+    writeFileSync(join(tmp, 'random/secret.txt'), 'secret')
+    writeFileSync(join(tmp, 'package.json'), '{}')
+    mkdirSync(join(tmp, 'packages/credentials/foo/src'), { recursive: true })
+    writeFileSync(join(tmp, 'packages/credentials/foo/src/index.ts'), 'credential module')
+    mkdirSync(join(tmp, 'packages/a/.cache'), { recursive: true })
+    writeFileSync(join(tmp, 'packages/a/.cache/runtime.json'), 'runtime cache')
+    mkdirSync(join(tmp, 'packages/a/tests/fixtures'), { recursive: true })
+    writeFileSync(join(tmp, 'packages/a/tests/fixtures/fake-token.test.ts'), 'const fixture = "' + 'ghp_' + '123456789012345678901234567890' + '"')
+    writeFileSync(join(tmp, 'packages/a/credentials.json'), '{"token":"omitted"}')
+    mkdirSync(join(tmp, '.github/workflows'), { recursive: true })
+    writeFileSync(join(tmp, '.github/workflows/ci.yml'), 'workflow')
+    mkdirSync(join(tmp, 'benchmarks'), { recursive: true })
+    writeFileSync(join(tmp, 'benchmarks/run.ts'), 'benchmark')
+    mkdirSync(join(tmp, '.maintenance/tests'), { recursive: true })
+    writeFileSync(join(tmp, '.maintenance/tests/ci.test.mjs'), 'test')
+    assert.deepEqual(collectSourceFiles(tmp), ['apps/a/src/main.ts', 'package.json', 'packages/credentials/foo/src/index.ts', 'scripts/benchmark-npm-resolution.ts', 'scripts/build.ts'])
+    const withTests = collectSourceFiles(tmp, true)
+    assert.ok(withTests.includes('.github/workflows/ci.yml'))
+    assert.ok(withTests.includes('.maintenance/tests/ci.test.mjs'))
+    assert.ok(withTests.includes('benchmarks/run.ts'))
+    assert.ok(withTests.includes('packages/credentials/foo/src/index.ts'))
+    assert.ok(withTests.includes('packages/a/tests/fixtures/fake-token.test.ts'))
+    assert.ok(withTests.includes('scripts/benchmark-npm-resolution.spec.ts'))
+    assert.ok(withTests.includes('scripts/benchmark-npm-resolution.ts'))
+    assert.ok(!withTests.includes('packages/a/.cache/runtime.json'))
+    const inventory = collectSourceInventory(tmp)
+    assert.deepEqual(inventory.excludedSensitiveFiles, [{ path: 'packages/a/credentials.json', reason: 'sensitive filename or file type' }])
+    writeFileSync(join(tmp, 'apps/a/src/leaked.ts'), 'const token = "' + 'ghp_' + '123456789012345678901234567890' + '"')
+    assert.throws(() => collectSourceFiles(tmp), /Sensitive content found in source files; inspect and remove or move test fixtures: apps\/a\/src\/leaked\.ts/)
+  } finally { rmSync(tmp, { recursive: true, force: true }) }
+})
+
+test('packages an independently rebuildable source archive with an adjacent manifest and checksum', () => {
+  const tmp = mkdtempSync(join(process.cwd(), '.artifacts', 'dsh-source-tar-'))
+  try {
+    const root = join(tmp, 'checkout')
+    mkdirSync(join(root, 'scripts'), { recursive: true })
+    mkdirSync(join(root, 'packages/a/src'), { recursive: true })
+    mkdirSync(join(root, 'packages/a/tests/fixtures'), { recursive: true })
+    writeFileSync(join(root, 'scripts/export-source.mjs'), 'tooling')
+    writeFileSync(join(root, 'packages/a/src/index.ts'), 'export const ok = true')
+    writeFileSync(join(root, 'packages/a/tests/fixtures/cert.pem'), '-----BEGIN ' + 'PRIVATE KEY-----\nTEST FIXTURE MATERIAL\n-----END ' + 'PRIVATE KEY-----\n')
+    writeFileSync(join(root, 'packages/a/credentials.json'), '{"token":"never exported"}')
+    writeFileSync(join(root, 'delivery.json'), JSON.stringify({ version: '1.2.3' }))
+    writeFileSync(join(root, 'source-revision.json'), JSON.stringify({ commit: 'source-checkout-revision' }))
+    const output = join(tmp, 'out/dsh-source-1.2.3.tar.gz')
+    const result = packageSource({ root, output })
+    const entries = execFileSync('tar', ['-tzf', result.archive], { encoding: 'utf8' })
+    assert.ok(entries.trim().split('\n').every(path => path.startsWith('dsh-source-1.2.3/')))
+    assert.ok(!entries.includes('/._'), 'source archives must not contain macOS resource metadata')
+    assert.match(entries, /dsh-source-1\.2\.3\/packages\/a\/src\/index\.ts/)
+    assert.match(entries, /dsh-source-1\.2\.3\/packages\/a\/tests\/fixtures\/cert\.pem/)
+    const manifest = JSON.parse(readFileSync(result.manifest, 'utf8'))
+    assert.equal(manifest.testsIncluded, true)
+    assert.equal(manifest.commit, 'source-checkout-revision')
+    assert.deepEqual(manifest.excludedSensitiveFiles, [{ path: 'packages/a/credentials.json', reason: 'sensitive filename or file type' }])
+    assert.ok(manifest.files.some(file => file.path === 'packages/a/src/index.ts' && /^[a-f0-9]{64}$/.test(file.sha256)))
+    assert.match(readFileSync(result.checksum, 'utf8'), /^[a-f0-9]{64}  dsh-source-1\.2\.3\.tar\.gz\n$/)
+  } finally { rmSync(tmp, { recursive: true, force: true }) }
+})
+
+test('version override survives source extraction and a Gitless repack without changing the checkout', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-source-version-'))
+  try {
+    const original = JSON.stringify({ version: '1.2.3', dshVersion: '1.2.0', targets: ['mac-arm64'] })
+    writeFileSync(join(root, 'delivery.json'), original)
+    const packed = packageSource({ root, version: '1.2.4' })
+    const extract = join(root, '.artifacts', 'extracted')
+    mkdirSync(extract)
+    execFileSync('tar', ['-xzf', packed.archive, '-C', extract])
+    const source = join(extract, 'dsh-source-1.2.4')
+    const config = readFileSync(join(source, 'delivery.json'))
+    assert.deepEqual(JSON.parse(config), { version: '1.2.4', dshVersion: '1.2.0', targets: ['mac-arm64'] })
+    assert.equal(readFileSync(join(root, 'delivery.json'), 'utf8'), original)
+    const manifest = JSON.parse(readFileSync(packed.manifest, 'utf8'))
+    assert.equal(manifest.files.find(file => file.path === 'delivery.json').sha256, createHash('sha256').update(config).digest('hex'))
+    assert.equal(manifest.distributionVersion, '1.2.4')
+    const repacked = packageSource({ root: source })
+    assert.ok(repacked.archive.endsWith('dsh-source-1.2.4.tar.gz'))
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('with-tests export preserves plugin source digest inputs and omits plugin build caches', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'dsh-plugin-source-digest-'))
+  try {
+    const root = join(tmp, 'checkout')
+    const plugin = join(root, 'third_party/plugins/fixture')
+    mkdirSync(join(plugin, 'src'), { recursive: true })
+    mkdirSync(join(plugin, 'tests'), { recursive: true })
+    mkdirSync(join(plugin, '.cache'), { recursive: true })
+    mkdirSync(join(plugin, 'lib'), { recursive: true })
+    writeFileSync(join(plugin, 'package.json'), '{"name":"fixture"}\n')
+    writeFileSync(join(plugin, 'src/index.ts'), 'export const plugin = true\n')
+    writeFileSync(join(plugin, 'README.md'), 'plugin build notes\n')
+    writeFileSync(join(plugin, 'tests/index.test.ts'), 'test\n')
+    writeFileSync(join(plugin, '.cache/state.json'), 'cache\n')
+    writeFileSync(join(plugin, 'lib/index.js'), 'generated\n')
+    writeFileSync(join(plugin, 'index.tsbuildinfo'), 'generated\n')
+    const originalDigest = sourceDigest(plugin)
+    const output = join(tmp, 'export')
+    exportSource(root, output, collectSourceFiles(root, true), true)
+    assert.equal(sourceDigest(join(output, 'third_party/plugins/fixture')), originalDigest)
+    assert.equal(existsSync(join(output, 'third_party/plugins/fixture/.cache/state.json')), false)
+    assert.equal(existsSync(join(output, 'third_party/plugins/fixture/lib/index.js')), false)
+  } finally { rmSync(tmp, { recursive: true, force: true }) }
+})
+
+test('filters missing tests and their scripts while preserving production build commands', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'dsh-source-export-'))
+  try {
+    const source = join(tmp, 'source')
+    mkdirSync(join(source, 'scripts'), { recursive: true })
+    mkdirSync(join(source, 'packages/a/src'), { recursive: true })
+    mkdirSync(join(source, 'packages/a/tests'), { recursive: true })
+    mkdirSync(join(source, 'packages/a/tests/fixtures'), { recursive: true })
+    writeFileSync(join(source, 'package.json'), JSON.stringify({ scripts: { build: 'tsx scripts/build.ts', test: 'vitest run', 'test:maintenance': 'node .maintenance/test.mjs', 'test:legacy': 'node tests/run.mjs', postinstall: 'node scripts/install.mjs' } }))
+    writeFileSync(join(source, 'scripts/build.ts'), 'build')
+    writeFileSync(join(source, 'scripts/install.mjs'), 'install')
+    writeFileSync(join(source, 'packages/a/src/main.ts'), 'main')
+    writeFileSync(join(source, 'packages/a/tests/only.test.ts'), 'fixture cert')
+    writeFileSync(join(source, 'packages/a/tests/fixtures/test.pem'), 'public test certificate')
+    const output = join(tmp, 'output')
+    exportSource(source, output, collectSourceFiles(source))
+    const scripts = JSON.parse(readFileSync(join(output, 'package.json'))).scripts
+    assert.deepEqual(scripts, { build: 'tsx scripts/build.ts', postinstall: 'node scripts/install.mjs' })
+    assert.equal(existsSync(join(output, 'packages/a/tests/only.test.ts')), false)
+    assert.equal(existsSync(join(output, 'packages/a/tests/fixtures/test.pem')), false)
+    assert.equal(existsSync(join(output, 'scripts/build.ts')), true)
+    const testOutput = join(tmp, 'with-tests')
+    exportSource(source, testOutput, collectSourceFiles(source, true), true)
+    assert.equal(existsSync(join(testOutput, 'packages/a/tests/only.test.ts')), true)
+    assert.equal(existsSync(join(testOutput, 'packages/a/tests/fixtures/test.pem')), true)
+    assert.ok(JSON.parse(readFileSync(join(testOutput, 'package.json'))).scripts.test)
+  } finally { rmSync(tmp, { recursive: true, force: true }) }
+})
+
+test('filters tsconfig entries and refuses overwrite or symlink escape before output creation', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'dsh-source-config-'))
+  try {
+    const source = join(tmp, 'source')
+    mkdirSync(join(source, 'scripts'), { recursive: true })
+    writeFileSync(join(source, 'tsconfig.json'), '{ // delivery config\n "files": ["scripts/build.ts", "tests/example.spec.ts"], "include": ["scripts/**/*.ts", "tests/**"], "references": [{"path":"./scripts"},{"path":"./tests"}] }')
+    writeFileSync(join(source, 'scripts/build.ts'), 'build')
+    exportSource(source, join(tmp, 'output'), ['tsconfig.json', 'scripts/build.ts'])
+    const config = JSON.parse(readFileSync(join(tmp, 'output/tsconfig.json')))
+    assert.deepEqual(config.files, ['scripts/build.ts'])
+    assert.deepEqual(config.include, ['scripts/**/*.ts'])
+    assert.deepEqual(config.references, [{ path: './scripts' }])
+    assert.throws(() => exportSource(source, join(tmp, 'output'), ['scripts/build.ts']), /new directory/)
+    symlinkSync('../../outside', join(source, 'scripts/escape.ts'))
+    writeFileSync(join(tmp, 'outside'), 'private')
+    assert.throws(() => exportSource(source, join(tmp, 'bad'), ['scripts/escape.ts']), /Symlink escapes/)
+    assert.equal(existsSync(join(tmp, 'bad')), false)
+  } finally { rmSync(tmp, { recursive: true, force: true }) }
+})

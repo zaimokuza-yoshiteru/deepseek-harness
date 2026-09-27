@@ -60,6 +60,7 @@ import { DesktopTray } from './tray.ts'
 import { DesktopBackgroundNotice } from './background-notice.ts'
 
 app.setPath('userData', configureDesktopDistribution())
+const intranet = process.env.DSH_DESKTOP_INTRANET === '1'
 
 let focusPrimaryWindow = (): void => {}
 let stopForRecovery = async (): Promise<void> => {}
@@ -433,6 +434,8 @@ async function main(): Promise<void> {
         injections = ready.injections
         welcomeBackend = await connectDesktopWelcome(ready.url, (input, init) => net.fetch(input, init), async () => (await session.defaultSession.cookies.get({ url: ready.url })).map(cookie => `${cookie.name}=${cookie.value}`).join('; '))
         stopAccount?.()
+        stopAccount = undefined
+        if (intranet) return
         const accountBackend = welcomeBackend.account
         stopAccount = accountBackend.watch((state) => {
           if (quitting) return
@@ -748,7 +751,7 @@ async function main(): Promise<void> {
   })
   ipcMain.handle(DESKTOP_IPC.onboardingApiKey, async (event) => {
     assertProductSender(event)
-    return (await readWelcomeState()).hasApiKey
+    return !intranet && (await readWelcomeState()).hasApiKey
   })
   ipcMain.on(DESKTOP_IPC.onboardingActive, (event, active: unknown) => {
     const window = mainWindow
@@ -1163,6 +1166,16 @@ async function main(): Promise<void> {
   }
   const openInitialWindow = async (): Promise<void> => {
     if (quitting || recovery.active) return
+    if (intranet) {
+      if (welcomeBackend === undefined) throw new Error('desktop startup: backend unavailable')
+      const preference = await welcomeBackend.readLocalePreference()
+      if (isQuitting() || backend.state.phase !== 'ready') return
+      locale = resolveDesktopStartupLocale(preference, systemLanguages)
+      windowsLanguage = locale.id
+      refreshApplicationMenu()
+      await enterWorkspace()
+      return
+    }
     const state = await readWelcomeState()
     if (isQuitting() || backend.state.phase !== 'ready') return
     locale = resolveDesktopStartupLocale(state.localePreference, systemLanguages)

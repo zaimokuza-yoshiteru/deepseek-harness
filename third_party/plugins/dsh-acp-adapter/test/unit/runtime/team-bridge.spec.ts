@@ -1,0 +1,348 @@
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { Context } from '@deepseek-ai/cordis'
+import type { RequestPermissionRequest, CreateElicitationRequest } from '@agentclientprotocol/sdk'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { createTeamBridge, teamBridgeKey } from '../../../src/host/teams/bridge.ts'
+
+const cleanup: Array<() => Promise<unknown>> = []
+afterEach(async () => { await Promise.allSettled(cleanup.splice(0).reverse().map(close => close())) })
+
+async function setup(wireProfile?: string, registeredTools: readonly string[] = [], hasTeams = true, role: 'lead' | 'teammate' = 'lead') {
+  const agent = { id: 'lead', inbox: { nextStep: [] }, steer: vi.fn() }
+  const names = [...registeredTools, ...(hasTeams ? [
+    'spawn_teammate', 'send_message', 'list_agents', 'wait_agent', 'interrupt_agent',
+    'team_task_create', 'team_task_list', 'team_task_get', 'team_task_update',
+  ] : [])]
+  const definitions = new Map<string, any>(names.map(name => [name, {
+    name, description: name, parameters: { type: 'object', properties: {} },
+  }]))
+  const hidden = new Set<string>()
+  const membership = { current: { role, id: 'member-1', root: agent } }
+  const execute = vi.fn(async (input) => ({ content: [{ type: 'text', text: input.name }], isError: false }))
+  const services: Record<string, unknown> = {
+    agentTeams: { tryMembership: () => membership.current },
+    agents: { get: (id: string) => id === 'lead' ? agent : undefined },
+    tools: {
+      schemas: (scope: unknown) => scope === agent ? [...definitions.values()].filter(definition => !hidden.has(definition.name)) : [],
+      get: (name: string, scope: unknown) => scope === agent && !hidden.has(name) ? definitions.get(name) : undefined,
+      execute,
+    },
+  }
+  const listeners = new Map<string, (...args: any[]) => void>()
+  if (!hasTeams) delete services.agentTeams
+  const ctx = { get: (name: string) => services[name], on: (name: string, listener: (...args: any[]) => void) => {
+    listeners.set(name, listener)
+    return () => listeners.delete(name)
+  } } as unknown as Context
+  const lease = (await createTeamBridge(ctx, 'lead', { mcpCapabilities: { http: true } }, wireProfile))!
+  cleanup.push(() => lease.close())
+  const server = lease.servers[0]!
+  if (!('url' in server)) throw new Error('Expected HTTP')
+  const client = new Client({ name: 'fixture', version: '1' })
+  await client.connect(new StreamableHTTPClientTransport(new URL(server.url)) as Parameters<Client['connect']>[0])
+  cleanup.push(() => client.close())
+  const tools = (await client.listTools()).tools
+  const name = (tools.find(tool => tool.name === 'list_agents') ?? tools[0])!.name
+  const permission = (toolName?: string): RequestPermissionRequest => ({
+    sessionId: 'acp', toolCall: { toolCallId: 'permission', ...(toolName === undefined ? {} : { name: toolName.startsWith('mcp__') ? toolName : `mcp__${server.name}__${toolName}` }) },
+    options: [{ optionId: 'yes', kind: 'allow_once', name: 'Allow once' }],
+  })
+  return { ctx, services, execute, definitions, agent, lease, server, client, tools, name, permission, listeners, hidden, membership }
+}
+
+describe('session-owned native Teams MCP bridge', () => {
+  it('automatically discovers scoped plugin tools without Teams and leaves their Agent approval intact', async () => {
+    const { ctx, client, lease, name, permission, tools, execute, definitions } = await setup(undefined, ['project_lookup'], false)
+    expect(tools).toHaveLength(1)
+    expect(name).toBe('project_lookup')
+    lease.beginPrompt(new AbortController().signal)
+    expect(lease.permission(permission(name))).toBeUndefined()
+    await client.callTool({ name, arguments: { query: 'test' } })
+    expect(execute).toHaveBeenCalledWith(expect.objectContaining({ name: 'project_lookup', arguments: { query: 'test' } }))
+    expect((await client.callTool({ name: 'bash' })).isError).toBe(true)
+    const key = teamBridgeKey(ctx, 'lead')
+    expect(teamBridgeKey(ctx, 'lead')).toBe(key)
+    definitions.set('project_lookup', { name: 'project_lookup' })
+    expect(teamBridgeKey(ctx, 'lead')).not.toBe(key)
+    await expect(client.callTool({ name })).rejects.toThrow()
+  })
+  it('discovers added tools on reconnection and revokes a removed or restricted capability', async () => {
+    const { ctx, lease, client, name, hidden, definitions, listeners } = await setup(undefined, ['present'], false)
+    const before = teamBridgeKey(ctx, 'lead')
+    definitions.set('new_plugin', { name: 'new_plugin', description: 'New plugin', parameters: { type: 'object' } })
+    expect(teamBridgeKey(ctx, 'lead')).not.toBe(before)
+    // New tools join the next connection; the current advertised capability stays stable.
+    expect((await client.listTools()).tools).toHaveLength(1)
+    const next = (await createTeamBridge(ctx, 'lead', { mcpCapabilities: { http: true } }))!
+    cleanup.push(() => next.close())
+    const nextServer = next.servers[0]!
+    if (!('url' in nextServer)) throw new Error('Expected HTTP')
+    const nextClient = new Client({ name: 'next', version: '1' })
+    await nextClient.connect(new StreamableHTTPClientTransport(new URL(nextServer.url)) as Parameters<Client['connect']>[0])
+    cleanup.push(() => nextClient.close())
+    expect((await nextClient.listTools()).tools.map(tool => tool.name)).toEqual(['new_plugin', 'present'])
+    hidden.add('present')
+    listeners.get('tools/change')!()
+    expect(next.signal.aborted).toBe(true)
+    lease.beginPrompt(new AbortController().signal)
+    await expect(client.callTool({ name })).rejects.toThrow()
+  })
+
+  it('does not expose global tools hidden from this agent or team tools to non-members', async () => {
+    const { ctx, definitions, hidden, services } = await setup(undefined, ['present', 'spawn_teammate'], false)
+    hidden.add('present')
+    expect(await createTeamBridge(ctx, 'lead', {})).toBeUndefined()
+    expect(definitions.has('present')).toBe(true)
+    expect((services.tools as { schemas(scope?: unknown): unknown[] }).schemas()).toEqual([])
+  })
+
+  it('does not auto-answer Codex approvals for automatically exposed non-Team tools', async () => {
+    const { lease, name, server } = await setup('codex', ['project_lookup'], false)
+    lease.beginPrompt(new AbortController().signal)
+    const call = { toolCallId: 'custom', rawInput: { server: server.name, tool: name }, _meta: { is_mcp_tool_call: true } }
+    expect(lease.elicitation!({ sessionId: 'acp', mode: 'form', message: 'Approve', toolCallId: 'custom', requestedSchema: { type: 'object', properties: {} }, _meta: { codex_approval_kind: 'mcp_tool_call' } } as CreateElicitationRequest, call)).toBeUndefined()
+  })
+  it('stays absent without a tool runtime or a live session', async () => {
+    const ctx = { get: () => undefined } as unknown as Context
+    expect(await createTeamBridge(ctx, 'lead', {})).toBeUndefined()
+    const fixture = await setup()
+    expect(await createTeamBridge(fixture.ctx, 'another', {})).toBeUndefined()
+  })
+  it('exports nine upstream schemas, dispatches exact identity, and rejects fork and unadvertised tool names', async () => {
+    const { lease, client, tools, name, execute, agent } = await setup()
+    expect(tools).toHaveLength(9)
+    expect((await client.callTool({ name })).isError).toBe(true)
+    lease.beginPrompt(new AbortController().signal)
+    expect((await client.callTool({ name })).content).toEqual([{ type: 'text', text: 'list_agents' }])
+    expect(execute.mock.calls[0]![0].agent).toBe(agent)
+    expect((await client.callTool({ name: 'bash', arguments: { command: 'echo no' } })).isError).toBe(true)
+    const spawn = tools.find(tool => tool.name === 'spawn_teammate')!
+    expect((await client.callTool({ name: spawn.name, arguments: { context: 'fork' } })).isError).toBe(true)
+    for (const override of [{ model: 'other' }, { provider: 'acp-other' }, { agent: 'other' }, { reasoningEffort: 'high' }]) {
+      expect((await client.callTool({ name: spawn.name, arguments: { context: 'fresh', ...override } })).isError).toBe(true)
+    }
+    expect(execute).toHaveBeenCalledTimes(1)
+  })
+  it('only suppresses approval for this live bridge identity; titles and old connections do not grant permission', async () => {
+    const { lease, server, name, permission } = await setup()
+    expect(lease.permission(permission(name))).toBeUndefined()
+    lease.beginPrompt(new AbortController().signal)
+    expect(lease.permission(permission(`mcp__${server.name}__${name}`))?.outcome).toEqual({ outcome: 'selected', optionId: 'yes' })
+    expect(lease.permission({ ...permission(), toolCall: { toolCallId: 'devin', _meta: { 'cognition.ai/toolName': `mcp__${server.name}__${name}` } } })?.outcome).toEqual({ outcome: 'selected', optionId: 'yes' })
+    expect(lease.permission({ ...permission(), toolCall: {toolCallId:'bare',name:'list_agents'} })).toBeUndefined()
+    const raw = { toolCallId: 'display', name: `mcp__${server.name}__${name}`, title: name }
+    expect(lease.presentTool!(raw).title).toBe('list_agents')
+    expect(raw.title).toBe(name)
+    expect(lease.presentTool!({ toolCallId: 'display', title: 'Updated transport label' }).title).toBe('list_agents')
+    expect(lease.permission({ ...permission(), toolCall: { toolCallId: 'fake', title: name, rawInput: { command: name } } })).toBeUndefined()
+    const other = await setup()
+    expect(other.lease.permission(permission(name))).toBeUndefined()
+    lease.endPrompt()
+    expect(lease.permission(permission(name))).toBeUndefined()
+  })
+  it('uses identical native names while binding each connection to its own caller', async () => {
+    const one = await setup('devin'), two = await setup('devin')
+    expect(one.server.name).toBe('dsh')
+    expect(two.server.name).toBe('dsh')
+    expect(one.name).toBe('list_agents')
+    expect(two.name).toBe(one.name)
+    for (const fixture of [one, two]) {
+      fixture.lease.beginPrompt(new AbortController().signal)
+      expect(fixture.lease.permission(fixture.permission('send_message'))?.outcome.outcome).toBe('selected')
+      await fixture.client.callTool({name:'send_message',arguments:{target:'lead',message:'hello'}})
+      expect(fixture.execute.mock.calls[0]![0].agent).toBe(fixture.agent)
+    }
+    expect(one.agent).not.toBe(two.agent)
+    await one.lease.close()
+    expect(one.lease.permission(one.permission('send_message'))).toBeUndefined()
+    expect((await two.client.callTool({name:'send_message',arguments:{target:'lead',message:'still alive'}})).isError).toBe(false)
+  })
+  it('reports only a successful nonempty teammate message to its own lead during the same prompt', async () => {
+    const { lease, client, execute } = await setup('devin', [], true, 'teammate')
+    const report = vi.fn()
+    lease.beginPrompt(new AbortController().signal, report)
+    await client.callTool({ name: 'send_message', arguments: { target: 'lead', message: 'Done' } })
+    expect(report).toHaveBeenCalledTimes(1)
+    await client.callTool({ name: 'send_message', arguments: { target: 'peer', message: 'Done' } })
+    await client.callTool({ name: 'send_message', arguments: { target: 'lead', message: '   ' } })
+    execute.mockResolvedValueOnce({ content: [{ type: 'text', text: 'failed' }], isError: true })
+    await client.callTool({ name: 'send_message', arguments: { target: 'lead', message: 'Not queued' } })
+    expect(report).toHaveBeenCalledTimes(1)
+
+    const lead = await setup('devin')
+    const leadReport = vi.fn()
+    lead.lease.beginPrompt(new AbortController().signal, leadReport)
+    await lead.client.callTool({ name: 'send_message', arguments: { target: 'lead', message: 'Done' } })
+    expect(leadReport).not.toHaveBeenCalled()
+
+    const changing = await setup('devin', [], true, 'teammate')
+    const changingReport = vi.fn()
+    changing.lease.beginPrompt(new AbortController().signal, changingReport)
+    changing.execute.mockImplementationOnce(async () => {
+      changing.membership.current.role = 'lead'
+      return { content: [{ type: 'text', text: 'queued' }], isError: false }
+    })
+    await changing.client.callTool({ name: 'send_message', arguments: { target: 'lead', message: 'Done' } })
+    expect(changingReport).not.toHaveBeenCalled()
+
+    let release!: (result: { content: Array<{ type: 'text'; text: string }>; isError: boolean }) => void
+    let started!: () => void
+    const executionStarted = new Promise<void>(resolve => { started = resolve })
+    execute.mockImplementationOnce(() => new Promise(resolve => { release = resolve; started() }))
+    const prompt = new AbortController()
+    const oldPromptReport = vi.fn()
+    lease.endPrompt()
+    lease.beginPrompt(prompt.signal, oldPromptReport)
+    const late = client.callTool({ name: 'send_message', arguments: { target: 'lead', message: 'Late completion' } })
+    await executionStarted
+    lease.endPrompt()
+    const nextReport = vi.fn()
+    lease.beginPrompt(prompt.signal, nextReport)
+    release({ content: [{ type: 'text', text: 'queued' }], isError: false })
+    await late.catch(() => undefined)
+    expect(oldPromptReport).not.toHaveBeenCalled()
+    expect(nextReport).not.toHaveBeenCalled()
+  })
+  it('recognizes exact Devin MCP labels but never repairs malformed tool names into approval authority', async () => {
+    const { lease, tools, permission, client, execute } = await setup('devin', ['bash'])
+    lease.beginPrompt(new AbortController().signal)
+    const wait = tools.find(tool => tool.name === 'wait_agent')!.name
+    const shell = tools.find(tool => tool.name === 'bash')!.name
+    const request = (title: string) => ({ ...permission(), toolCall: { toolCallId: title, title } })
+    expect(lease.permission(request(`Calling ${wait} from dsh`))?.outcome).toEqual({ outcome: 'selected', optionId: 'yes' })
+    expect(lease.permission(request(`Calling ${shell} from dsh`))).toBeUndefined()
+    expect(lease.inspectPermission!(request(`Calling ${wait} from dsh`))).toMatchObject({ reason: 'auto-approved', toolName: 'wait_agent', identitySource: 'devin-title' })
+    expect(lease.inspectPermission!(request(`Calling ${shell} from dsh`))).toMatchObject({ reason: 'not-coordination', toolName: 'bash' })
+    const masked: RequestPermissionRequest = request(`Calling ${wait} from dsh`)
+    masked.toolCall.name = 'unmatched-structured-name'
+    expect(lease.inspectPermission!(masked)).toMatchObject({ reason: 'identity-unmatched', identitySource: 'name', structuredIdentityPresent: true, titleMatchesCurrentTool: true })
+    expect(lease.permission(masked)).toBeUndefined()
+    expect(lease.inspectPermission!({ ...request(`Calling ${wait} from dsh`), options: [] })).toMatchObject({ reason: 'allow-once-unavailable' })
+    const raw = { toolCallId: 'bash', title: `Calling ${shell} from dsh`, rawInput: { command: 'sleep 20', description: 'Wait for teammates' } }
+    expect(lease.presentTool!(raw)).toEqual({ ...raw, title: 'bash', name: 'bash', kind: 'execute' })
+    expect(raw.title).toContain(shell)
+    const malformed = `${wait}<arg_key>arguments</arg_key><arg_value>{"timeout_ms": 60000}`
+    expect(lease.permission(request(`Calling ${malformed} from dsh`))).toEqual({ outcome: { outcome: 'cancelled' } })
+    expect((await client.callTool({ name: malformed, arguments: {} })).isError).toBe(true)
+    expect(execute).not.toHaveBeenCalled()
+    for (const title of [`Calling ${wait} from other`, `Calling ${wait} from dsh\nextra`]) {
+      expect(lease.permission(request(title))).toBeUndefined()
+    }
+    const other = await setup('codex')
+    other.lease.beginPrompt(new AbortController().signal)
+    expect(other.lease.permission(request(`Calling ${wait} from dsh`))).toBeUndefined()
+    lease.endPrompt()
+    expect(lease.permission(request(`Calling ${wait} from dsh`))).toBeUndefined()
+  })
+  it('rejects invalid Devin names owned by this connection without executing or repairing them', async () => {
+    const { lease, tools, permission, execute } = await setup('devin', ['bash'])
+    lease.beginPrompt(new AbortController().signal)
+    const wait = tools.find(tool => tool.name === 'wait_agent')!.name
+    const malformed = `${wait}<arg_key>arguments</arg_key><arg_value>{"timeout_ms":60000}`
+    const options: RequestPermissionRequest['options'] = [
+      { optionId: 'persist-reject', kind: 'reject_always', name: 'Reject always' },
+      { optionId: 'no', kind: 'reject_once', name: 'Reject once' },
+      ...permission().options,
+    ]
+    for (const toolCall of [
+      { toolCallId: 'meta', _meta: { 'cognition.ai/toolName': `mcp__dsh__${malformed}` }, rawInput: {} },
+      { toolCallId: 'name', name: `mcp__dsh__${malformed}` },
+      { toolCallId: 'title', title: `Calling ${malformed} from dsh` },
+      { toolCallId: 'unknown', name: 'mcp__dsh__nonexistent' },
+    ]) {
+      const request = { ...permission(), toolCall, options }
+      expect(lease.inspectPermission!(request)).toMatchObject({ reason: 'invalid-tool-name' })
+      expect(lease.permission(request)).toEqual({ outcome: { outcome: 'selected', optionId: 'no' } })
+      expect(lease.permission({ ...request, options: [options[0]!, options[2]!] })).toEqual({ outcome: { outcome: 'cancelled' } })
+    }
+    expect(execute).not.toHaveBeenCalled()
+    expect(lease.permission({ ...permission(wait), options })).toEqual({ outcome: { outcome: 'selected', optionId: 'yes' } })
+    expect(lease.permission(permission(tools.find(tool => tool.name === 'bash')!.name))).toBeUndefined()
+  })
+  it('does not classify another connection or conflicting structured identity as its own invalid tool', async () => {
+    const one = await setup('devin'), two = await setup('codex'), generic = await setup()
+    for (const item of [one, two, generic]) item.lease.beginPrompt(new AbortController().signal)
+    const invalid = `${one.name}<arg_key>arguments</arg_key>`
+    expect(two.lease.permission(one.permission(invalid))).toBeUndefined()
+    expect(one.lease.permission(one.permission(`mcp__other__${invalid}`))).toBeUndefined()
+    expect(one.lease.permission({ ...one.permission('unknown'), toolCall: {
+      toolCallId: 'conflict', name: 'unknown', title: `Calling ${invalid} from dsh`,
+    } })).toBeUndefined()
+    expect(generic.lease.inspectPermission!(generic.permission(`${generic.name}<arg_key>`))).toMatchObject({reason:'invalid-tool-name'})
+    one.lease.endPrompt()
+    expect(one.lease.permission(one.permission(invalid))).toBeUndefined()
+  })
+  it('rejects hostile origins and capabilities after feature removal or tool replacement', async () => {
+    const { lease, server, definitions, name, client, services } = await setup()
+    lease.beginPrompt(new AbortController().signal)
+    expect((await fetch(server.url, { headers: { Origin: 'https://example.com' } })).status).toBe(403)
+    definitions.set('list_agents', {})
+    await expect(client.callTool({ name })).rejects.toThrow()
+    delete services.agentTeams
+    expect((await fetch(server.url)).status).toBe(403)
+  })
+  it('propagates prompt cancellation to native execution and revokes coordination permission', async () => {
+    const { lease, execute, client, name, permission } = await setup()
+    const abort = new AbortController()
+    lease.beginPrompt(abort.signal)
+    execute.mockImplementationOnce(async input => await new Promise(resolve => {
+      input.signal.addEventListener('abort', () => resolve({ content: [{ type: 'text', text: 'cancelled' }], isError: false }), { once: true })
+    }))
+    const pending = client.callTool({ name })
+    await vi.waitFor(() => expect(execute).toHaveBeenCalled())
+    abort.abort()
+    expect((await pending).content).toEqual([{ type: 'text', text: 'cancelled' }])
+    expect(lease.permission(permission(name))).toBeUndefined()
+  })
+  it('releases the capability immediately when its native member is disposed or Teams is disabled', async () => {
+    const first = await setup()
+    first.listeners.get('agent/disposed')!({ agent: first.agent })
+    expect(first.lease.signal.aborted).toBe(true)
+    await first.lease.close()
+    await expect(fetch(first.server.url)).rejects.toThrow()
+    const second = await setup()
+    delete second.services.agentTeams
+    second.listeners.get('internal/service')!('agentTeams')
+    expect(second.lease.signal.aborted).toBe(true)
+    expect(second.listeners.size).toBe(0)
+  })
+  it('recognizes Kimi’s exact qualified title only on its runtime and current capability', async () => {
+    const { lease, server, name, permission } = await setup('kimi')
+    lease.beginPrompt(new AbortController().signal)
+    expect(lease.permission({ ...permission(), toolCall: { toolCallId: 'kimi', title: `mcp__${server.name}__${name}` } })?.outcome).toEqual({ outcome: 'selected', optionId: 'yes' })
+    expect(lease.permission({ ...permission(), toolCall: { toolCallId: 'kimi', title: 'spawn_teammate' } })).toBeUndefined()
+  })
+  it('answers only a correlated Codex MCP approval with once scope, never other forms or servers', async () => {
+    const { lease, server, name } = await setup('codex')
+    const request: CreateElicitationRequest = { sessionId: 'acp', toolCallId: 'call', mode: 'form', message: 'not used as authority', _meta: { codex_approval_kind: 'mcp_tool_call' }, requestedSchema: { type: 'object', properties: { persist: { type: 'string', enum: ['once', 'session', 'always'] } }, required: ['persist'] } }
+    const toolCall = { toolCallId: 'call', _meta: { is_mcp_tool_call: true }, rawInput: { server: server.name, tool: name, arguments: {} } }
+    expect(lease.elicitation!(request, toolCall)).toBeUndefined()
+    lease.beginPrompt(new AbortController().signal)
+    expect(lease.elicitation!(request, toolCall)).toEqual({ action: 'accept', content: { persist: 'once' } })
+    expect(lease.elicitation!(request, undefined)).toBeUndefined()
+    expect(lease.elicitation!({ ...request, _meta: {} }, toolCall)).toBeUndefined()
+    expect(lease.elicitation!(request, { ...toolCall, rawInput: { server: 'other', tool: name } })).toBeUndefined()
+    expect(lease.elicitation!({ ...request, requestedSchema: { type: 'object', properties: { answer: { type: 'string' } } } }, toolCall)).toBeUndefined()
+    lease.endPrompt()
+    expect(lease.elicitation!(request, toolCall)).toBeUndefined()
+  })
+  it('presents a verified host tool name without granting approval or losing extra request context', async () => {
+    const { lease, name, server, definitions } = await setup('codex', ['glob'], false)
+    const call = { toolCallId: 'display', rawInput: { server: server.name, tool: name }, _meta: { is_mcp_tool_call: true } }
+    const request: CreateElicitationRequest = { sessionId: 'acp', toolCallId: 'display', mode: 'form',
+      message: `Allow the ${server.name} MCP server to run tool "${name}"?`, _meta: { codex_approval_kind: 'mcp_tool_call' },
+      requestedSchema: { type: 'object', properties: { persist: { type: 'string', enum: ['once', 'session', 'always'] } } } }
+    expect(lease.elicitationToolName!(request, call)).toBeUndefined()
+    lease.beginPrompt(new AbortController().signal)
+    expect(lease.elicitationToolName!(request, call)).toBe('glob')
+    expect(lease.elicitation!(request, call)).toBeUndefined()
+    expect(lease.elicitationToolName!({ ...request, message: request.message + ' Additional scope!' }, call)).toBeUndefined()
+    expect(lease.elicitationToolName!(request, { ...call, toolCallId: 'other' })).toBeUndefined()
+    expect(lease.elicitationToolName!(request, { ...call, rawInput: { server: 'other', tool: name } })).toBeUndefined()
+    expect(lease.elicitationToolName!({ ...request, _meta: {} }, call)).toBeUndefined()
+    definitions.delete('glob')
+    expect(lease.elicitationToolName!(request, call)).toBeUndefined()
+  })
+
+})

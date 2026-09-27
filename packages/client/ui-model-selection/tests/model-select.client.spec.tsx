@@ -159,6 +159,15 @@ describe('ModelSelect reasoning effort', () => {
     expect(directory.getSnapshot().current).toEqual(state().current)
   })
 
+  it('asks for a model when the deployment has no default or provider', () => {
+    render(<ModelSelect locked={false} available
+      directory={createSnapshotStore(state({ current: { provider: '', model: '' }, routable: false, groups: [] }))}
+      load={vi.fn()} select={vi.fn()} t={t} />)
+    expect(screen.getByRole('button', { name: '请选择模型' }).textContent).toMatchInlineSnapshot('"请选择模型"')
+    fireEvent.click(screen.getByRole('button', { name: '请选择模型' }))
+    expect(screen.getByText('没有可用的模型。')).toBeTruthy()
+  })
+
   it('shows loading until the catalog and Session projection are both ready', async () => {
     const directory = createSnapshotStore<ModelDirectoryState>(state({
       current: null,

@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="955" viewBox="0 0 1120 955" role="img" aria-labelledby="title desc">
+<title id="title">DSH 内网桌面端架构</title><desc id="desc">桌面壳承载 Web 界面和 DSH 服务；dsh-acp-adapter 接入智能体，dsh-agent-teams-office 展示团队状态，dsh-boot-ocbc 提供启动动画，dsh-atlassian-kanban 接入 Jira、Bitbucket 和 Confluence。Office 文档生成与预览由 DSH 本体提供。</desc>
+<defs><pattern id="paper" width="24" height="24" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r=".7" fill="#d8d4c9"/></pattern><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="4" orient="auto"><path d="M1 1 L8 4 L1 7" fill="none" stroke="#4b555a" stroke-width="1.6"/></marker></defs>
+<rect width="1120" height="955" fill="#faf8f1"/><rect width="1120" height="955" fill="url(#paper)"/>
+<style>text{font-family:'Kaiti SC','STKaiti','KaiTi','PingFang SC',sans-serif;fill:#27343a}.title{font-size:28px;font-weight:600}.label{font-size:22px;font-weight:600}.body{font-size:18px}.path{font-family:ui-monospace,monospace;font-size:15px;fill:#626d72}.line{fill:none;stroke:#4b555a;stroke-width:2;stroke-linecap:round;marker-end:url(#arrow)}</style>
+<text x="54" y="51" class="title">DSH 内网桌面端 · 项目架构</text>
+<path d="M58 85 Q560.0 81 1062 85 L1066 174 Q560.0 179 55 176 Z" fill="#e5edf1" stroke="#455257" stroke-width="1.8"/>
+<path d="M56 88 L1064 83 L1063 177" fill="none" stroke="#455257" stroke-width=".6" opacity=".38"/>
+<text x="77" y="116" class="label">Electron 桌面壳</text>
+<text x="77" y="145" class="body">apps/desktop/  ·  应用窗口、启动、桌面与系统集成</text>
+<path d="M58 230 Q285.0 226 512 230 L516 376 Q285.0 381 55 378 Z" fill="#e5edf1" stroke="#455257" stroke-width="1.8"/>
+<path d="M56 233 L514 228 L513 379" fill="none" stroke="#455257" stroke-width=".6" opacity=".38"/>
+<text x="77" y="261" class="label">Web 界面</text>
+<text x="77" y="290" class="path">apps/web/ + packages/client/</text>
+<text x="77" y="316" class="body">会话、模型设置、插件界面</text>
+<text x="77" y="342" class="body">Word / Excel / PPT 等文件预览</text>
+<path d="M608 230 Q835.0 226 1062 230 L1066 376 Q835.0 381 605 378 Z" fill="#eaf0e4" stroke="#455257" stroke-width="1.8"/>
+<path d="M606 233 L1064 228 L1063 379" fill="none" stroke="#455257" stroke-width=".6" opacity=".38"/>
+<text x="627" y="261" class="label">DSH 服务与核心</text>
+<text x="627" y="290" class="path">apps/desktop-host/ + apps/cli/ + packages/</text>
+<text x="627" y="316" class="body">模型调用、会话、工具、Agent Teams</text>
+<text x="627" y="342" class="body">办公文档生成工具与转换服务</text>
+<path class="line" d="M280 182 Q276 201 280 216"/>
+<path class="line" d="M838 182 Q842 201 838 216"/>
+<path class="line" d="M520 304 Q555 300 594 304"/>
+<path d="M280 385 L280 407 L839 407 L839 385 M560 407 L560 431" fill="none" stroke="#77827f" stroke-width="1.7"/>
+<text x="55" y="452" class="label">插件扩展：前端界面 + 后端服务</text><text x="690" y="452" class="path">third_party/plugins/</text>
+<path d="M58 480 Q300.0 476 542 480 L546 620 Q300.0 625 55 622 Z" fill="#f5e5df" stroke="#455257" stroke-width="1.8"/>
+<path d="M56 483 L544 478 L543 623" fill="none" stroke="#455257" stroke-width=".6" opacity=".38"/>
+<text x="77" y="511" class="label">dsh-acp-adapter</text>
+<text x="77" y="540" class="path">dsh-acp-adapter/</text>
+<text x="77" y="566" class="body">将支持 ACP 协议的智能体接入 DSH 会话</text>
+<text x="77" y="592" class="body">统一模型选择、权限确认与团队协作</text>
+<path d="M578 480 Q820.0 476 1062 480 L1066 620 Q820.0 625 575 622 Z" fill="#f5e5df" stroke="#455257" stroke-width="1.8"/>
+<path d="M576 483 L1064 478 L1063 623" fill="none" stroke="#455257" stroke-width=".6" opacity=".38"/>
+<text x="597" y="511" class="label">dsh-agent-teams-office</text>
+<text x="597" y="540" class="path">dsh-agent-teams-office/</text>
+<text x="597" y="566" class="body">以 3D 办公室呈现 Agent Teams</text>
+<text x="597" y="592" class="body">展示成员状态、任务活动和消息交接</text>
+<path d="M58 652 Q300.0 648 542 652 L546 792 Q300.0 797 55 794 Z" fill="#f5e5df" stroke="#455257" stroke-width="1.8"/>
+<path d="M56 655 L544 650 L543 795" fill="none" stroke="#455257" stroke-width=".6" opacity=".38"/>
+<text x="77" y="683" class="label">dsh-boot-ocbc</text>
+<text x="77" y="712" class="path">dsh-boot-ocbc/</text>
+<text x="77" y="738" class="body">启动动画</text>
+<path d="M578 652 Q820.0 648 1062 652 L1066 792 Q820.0 797 575 794 Z" fill="#f5e5df" stroke="#455257" stroke-width="1.8"/>
+<path d="M576 655 L1064 650 L1063 795" fill="none" stroke="#455257" stroke-width=".6" opacity=".38"/>
+<text x="597" y="683" class="label">dsh-atlassian-kanban</text>
+<text x="597" y="712" class="path">dsh-atlassian-kanban/</text>
+<text x="597" y="738" class="body">浏览 Jira 工单、Bitbucket PR、Confluence 页面</text>
+<text x="597" y="764" class="body">将所选条目引用到会话中</text>
+<path d="M55 834 Q555 837 1065 834" fill="none" stroke="#869091" stroke-dasharray="6 7"/>
+<text x="55" y="871" class="label">基础依赖</text><text x="220" y="871" class="body">vendor/ · native/ · patches/ · python/</text>
+<text x="55" y="915" class="label">构建入口</text><text x="220" y="915" class="body">scripts/ + delivery.json → 桌面应用与配套源码</text></svg>

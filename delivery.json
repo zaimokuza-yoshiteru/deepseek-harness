@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "version": "0.1.7.rc.2.3",
+  "dshVersion": "0.1.7-rc.2",
+  "targets": ["mac-arm64", "win-x64"]
+}

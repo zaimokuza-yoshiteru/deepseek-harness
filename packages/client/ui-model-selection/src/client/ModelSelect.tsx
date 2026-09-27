@@ -198,8 +198,8 @@ export function ModelSelect(
 
   const show = (): void => {
     triggerRef.current?.focus()
-    if (state.current === null) paneFocus.current = 'drill'
-    setPane(state.current === null ? 'model' : 'root')
+    if (unselected) paneFocus.current = 'drill'
+    setPane(unselected ? 'model' : 'root')
     setOpen(true)
     reload()
   }
@@ -330,14 +330,16 @@ export function ModelSelect(
   }
 
   const waiting = state.current === null && state.status === 'loading'
+  const current = state.current
+  const unselected = current === null || (current.provider === '' && current.model === '')
   const modelLabel = waiting
     ? t('trigger.loading')
     : currentChoice?.model.name
-      ?? (state.current === null ? t('trigger.fallback') : `${state.current.provider}/${state.current.model}`)
+      ?? (unselected ? t('trigger.fallback') : `${current.provider}/${current.model}`)
   const triggerLabel = effortLabel === undefined ? modelLabel : `${modelLabel} · ${effortLabel}`
   const triggerAria = waiting
     ? t('trigger.loading')
-    : state.current === null
+    : unselected
       ? t('trigger.selectAria')
       : effortLabel === undefined
         ? t('trigger.aria', { model: modelLabel })

@@ -4,8 +4,10 @@ import { join, relative, sep } from 'node:path'
 import { officePackageDirectories } from '../../scripts/libreoffice-packages.mjs'
 import { prepareWindowsAsarUnpack, verifyWindowsAsarUnpack } from './scripts/windows-asar-unpack.mjs'
 import { fileURLToPath } from 'node:url'
+import { readFileSync } from 'node:fs'
 
-const tag = process.env.DSH_DESKTOP_DISTRIBUTION_VERSION ?? '0.1.7.rc.2.2'
+const delivery = JSON.parse(readFileSync(new URL('../../delivery.json', import.meta.url), 'utf8'))
+const tag = process.env.DSH_DESKTOP_DISTRIBUTION_VERSION ?? delivery.version
 const version = tag.replace('0.1.7.rc.', '0.1.7-rc.')
 if (!/^0\.1\.7-rc\.2\.[1-9][0-9]*$/u.test(version)) {
   throw new Error('desktop portable: expected distribution version 0.1.7.rc.2.<positive integer>')

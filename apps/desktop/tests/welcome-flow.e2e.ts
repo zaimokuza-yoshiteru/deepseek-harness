@@ -1,6 +1,6 @@
 /** Built Desktop Host acceptance; run after the repository build, without provider credentials. */
 
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -70,7 +70,10 @@ async function mockPlatform() {
       res.end(JSON.stringify({ code: 0, data: { biz_code: 0, biz_data: value } }))
     })
   })
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', () => { server.off('error', reject); resolve() })
+  })
   const address = server.address()
   if (address === null || typeof address === 'string') throw new Error('missing mock listener')
   origin = `http://127.0.0.1:${String(address.port)}`
@@ -83,8 +86,9 @@ async function mockPlatform() {
 }
 
 describe.skipIf(!existsSync(builtHost))('built Desktop welcome flow', () => {
-  it('persists explicit API keys and browser account login independently across Host restarts', async () => {
+  it('retains credentials and custom models across account and intranet Host restarts', async () => {
     vi.stubEnv('DSH_CLIENT_VERSION', '1.2.3')
+    vi.stubEnv('DSH_DESKTOP_INTRANET', '0')
     const root = mkdtempSync(join(tmpdir(), 'dsh-desktop-welcome-'))
     let host: DesktopHostProcess | undefined
     const platform = await mockPlatform()
@@ -124,6 +128,7 @@ describe.skipIf(!existsSync(builtHost))('built Desktop welcome flow', () => {
       writeFileSync(join(paths.profile, 'cordis.patch.yml'), `- id: webserver\n  config:\n    host: 127.0.0.1\n    port: 0\n- id: deepseek-account\n  config:\n${process.platform === 'linux' ? '    desktopPlatform: darwin\n' : ''}    platformOrigin: ${platform.origin}\n    allowLoopbackHttp: true\n    requestHeaders:\n      Cookie: test_gate=synthetic\n`)
       let backend: DesktopWelcomeBackend
       let hostOrigin = ''
+      let rpc: (method: string) => Promise<unknown>
       const restart = async (): Promise<void> => {
         await host?.stop()
         host = new DesktopHostProcess(process.execPath, project, paths.profile)
@@ -140,6 +145,16 @@ describe.skipIf(!existsSync(builtHost))('built Desktop welcome flow', () => {
           return fetch(new URL(response.headers.get('location')!, url), { headers: { cookie } })
         }
         backend = await connectDesktopWelcome(url, send, () => Promise.resolve(cookie))
+        rpc = async (method) => {
+          const response = await send(new URL(`/api/${method}`, hostOrigin), {
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ type: 'client-request', rpcId: randomUUID(), method, payload: { args: {} } }),
+          })
+          expect(response.ok).toBe(true)
+          const envelope = await response.json() as { result: { ok: boolean; value: unknown } }
+          expect(envelope.result.ok).toBe(true)
+          return envelope.result.value
+        }
       }
       const status = async () => backend.read()
       const fingerprint = (): string => createHash('sha256')
@@ -184,6 +199,41 @@ describe.skipIf(!existsSync(builtHost))('built Desktop welcome flow', () => {
       await backend!.account.cancel(waiting.attempt!.id)
       expect((await fetch(late, { redirect: 'manual' })).status).not.toBe(302)
       expect(await status()).toMatchObject({ loggedIn: false })
+      const savedCredentials = fingerprint()
+      vi.stubEnv('DSH_DESKTOP_INTRANET', '1')
+      await restart()
+      expect(await backend!.readLocalePreference()).toBe('zh')
+      await expect(backend!.account.state()).rejects.toThrow()
+      expect(await rpc!('llm/listConfigurableProviders')).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ provider: 'deepseek-official' }),
+      ]))
+      expect(await rpc!('session/modelCatalog')).toEqual({
+        default: { provider: '', model: '' }, groups: [], routableProviders: [], failures: [],
+      })
+      expect(fingerprint()).toBe(savedCredentials)
+      await host!.stop()
+      const patch = join(paths.profile, 'cordis.patch.yml')
+      writeFileSync(patch, readFileSync(patch, 'utf8') + `- id: llm-pi-ai
+  config:
+    providers:
+      internal:
+        api: openai-completions
+        baseURL: http://intranet-model.invalid/v1
+        apiKeyEnv: INTERNAL_TEST_KEY
+        models:
+          - id: internal-chat
+- id: agent-default-model
+  config:
+    provider: internal
+    model: internal-chat
+`)
+      await restart()
+      expect(await rpc!('session/modelCatalog')).toMatchObject({
+        default: { provider: 'internal', model: 'internal-chat' },
+        groups: [{ id: 'internal', models: [{ id: 'internal-chat' }] }],
+        routableProviders: ['internal'], failures: [],
+      })
+      expect(fingerprint()).toBe(savedCredentials)
     } finally {
       await host?.stop()
       await platform.close()

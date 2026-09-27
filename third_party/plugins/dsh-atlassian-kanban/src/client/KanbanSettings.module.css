@@ -1,0 +1,26 @@
+.settings { box-sizing: border-box; display: grid; gap: 20px; width: min(100%, 900px); max-width: 100%; min-width: 0; color: var(--dsw-alias-label-primary); font: var(--dsw-font-s-14); }
+.product { display: grid; gap: 12px; min-width: 0; padding: 0 0 20px; border-bottom: 0.5px solid var(--dsw-alias-border-l2); }
+.sectionTitle { margin: 0; font: var(--dsw-font-m-18); }
+.toggleRow { display: flex; align-items: center; justify-content: space-between; gap: 16px; color: var(--dsw-alias-label-primary); font: var(--dsw-font-xs-13); }
+.toggleRow strong { font: var(--dsw-font-xs-strong-13); }
+.hint { margin: 4px 0 0; color: var(--dsw-alias-label-secondary); font: var(--dsw-font-xs-13); }
+.editor { box-sizing: border-box; display: grid; gap: 10px; min-width: 0; margin: 0; padding: 14px; border: 0.5px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md); }
+.editor legend { padding: 0 4px; color: var(--dsw-alias-label-secondary); font: var(--dsw-font-xs-13); }
+.grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) auto; gap: 10px; align-items: center; min-width: 0; }
+.editor .grid > div + div { border-top: 0; }
+.repoGrid { grid-template-columns: repeat(2, minmax(0, 1fr)) auto; }
+.grid > button, .editor > button { justify-self: start; }
+.productActions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+.feedback { display: flex; align-items: flex-start; gap: 9px; min-width: 0; padding: 10px 12px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; background: var(--dsw-alias-settings-card-fill); font: var(--dsw-font-xs-13); }
+.feedback > svg, .feedback > span { flex: 0 0 auto; margin-top: 5px; }
+.feedbackSuccess { color: var(--dsw-alias-state-success-primary); }
+.feedbackError { color: var(--dsw-alias-state-error-primary); }
+.feedbackContent { min-width: 0; flex: 1; }
+.feedbackMessage { font: var(--dsw-font-xs-13); overflow-wrap: anywhere; }
+.feedbackDetails { margin-top: 3px; color: var(--dsw-alias-label-secondary); font: var(--dsw-font-xxs-12); }
+.feedbackDetails summary { width: fit-content; cursor: pointer; }
+.feedbackDetails pre { max-height: 140px; margin: 6px 0 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--dsw-alias-label-secondary); font: var(--dsw-font-xxs-12); }
+.conflict, .loading { margin: 0; font: var(--dsw-font-xxs-12); }
+.conflict { color: var(--dsw-alias-state-error-primary); }
+.loading { color: var(--dsw-alias-label-secondary); }
+@media (max-width: 640px) { .grid { grid-template-columns: minmax(0, 1fr); } }

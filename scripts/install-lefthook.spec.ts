@@ -208,6 +208,18 @@ function runInstaller(
 // Rationale and the paired hook budget are in
 // .agents/notes/archived/testing/2026-08-29-windows-lane-hook-and-lefthook-budget.md.
 describe('worktree-local Lefthook installer', { timeout: 90_000 }, () => {
+  it('does not install parent hooks from a nested source export without Git metadata', async () => {
+    const fixture = createFixture()
+    const exported = join(fixture.main, 'source-export')
+    mkdirSync(exported)
+    write(join(exported, 'lefthook.yml'), 'pre-commit: {}\n')
+    const before = readFileSync(join(commonDirectory(fixture), 'config'), 'utf8')
+    const result = await runInstaller(fixture, exported)
+    expect(result.status, result.stderr).toBe(0)
+    expect(readFileSync(join(commonDirectory(fixture), 'config'), 'utf8')).toBe(before)
+    expect(existsSync(hooksPath(fixture, fixture.main))).toBe(false)
+  })
+
   for (const [label, extraEnv] of [
     ['CI', { CI: 'true' }],
     ['GitHub Actions', { GITHUB_ACTIONS: 'true' }],

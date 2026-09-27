@@ -5,6 +5,7 @@
     "typeAware": false
   },
   "ignorePatterns": [
+    "third_party/**",
     "**/lib/**",
     "**/node_modules/**",
     "**/.sessions/**",
