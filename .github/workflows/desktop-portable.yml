@@ -50,11 +50,8 @@ jobs:
           package-manager-cache: false
       - name: Verify tag and source branch
         run: node apps/desktop/scripts/verify-portable-tag.mjs
-      - name: Fetch audited local plugin packages
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: node apps/desktop/scripts/fetch-release-plugins.mjs
+      - name: Verify and extract audited local plugins
+        run: node apps/desktop/scripts/prepare-release-plugins.mjs
       - uses: pnpm/action-setup@v4
       - name: Build and test as a standard Windows user
         if: runner.os == 'Windows'

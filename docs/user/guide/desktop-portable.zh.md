@@ -86,4 +86,4 @@ Windows 构建命令为 `pnpm --dir apps/desktop run package:portable:win:x64`�
 
 参见[便携发行与原生插件管理决策](../../../.agents/notes/implemented/architecture/2026-09-10-desktop-portable-distribution.zh.md)。运行时与用户插件依赖图保持分离，渲染进程不启用 Node integration。
 
-CI 从当前 Release 草稿下载经过审计的 OCBC 启动画面和 Atlassian 看板插件包，按 `apps/desktop/release-plugins.json` 校验 SHA256 后构建两个平台。插件发布包排除本地配置、测试数据、内部实施与验证记录；前端样式虚拟模块使用相对路径，避免构建注释泄露本机目录。
+CI 使用 `apps/desktop/release-plugins/` 下纳入版本控制的 OCBC 启动画面和 Atlassian 看板插件包，按 `apps/desktop/release-plugins.json` 校验 SHA256 后解包并构建两个平台。准备这些输入无需网络或凭证。插件发布包排除本地配置、测试数据、内部实施与验证记录；前端样式虚拟模块使用相对路径，避免构建注释泄露本机目录。

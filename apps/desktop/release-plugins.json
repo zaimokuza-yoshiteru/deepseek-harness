@@ -1,5 +1,4 @@
 {
-  "tag": "0.1.7.rc.2.2",
   "plugins": [
     {
       "name": "dsh-boot-ocbc",
