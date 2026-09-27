@@ -15,11 +15,12 @@
           "Use stable relative CSS module IDs and hashes.",
           "Require explicit DSH_UPSTREAM_CHECKOUT for host integration tests.",
           "Use pnpm 11.23.0, matching the desktop build toolchain.",
-          "Remove the unused test import left by README-only check removal."
+          "Remove the unused test import left by README-only check removal.",
+          "Declare pnpm 11 dependency build permissions for clean installs."
         ]
       },
       "sourceIncludesLocalChanges": true,
-      "sourceSha256": "a54d65b4be36852a3058e65f9d5288d9f155d70c7f6fb7cfe143236d42f52407",
+      "sourceSha256": "0ce8710fd38a53369bb5807a64342f5526f52286a722991b12fef44dcc83fae0",
       "fileCount": 298,
       "retainedDocuments": [
         {
@@ -99,7 +100,7 @@
         ]
       },
       "sourceIncludesLocalChanges": true,
-      "sourceSha256": "2f8815c94ab3e9395b5c9f574ba9f52b90d68308b9283bdff3e1cd585e909322",
+      "sourceSha256": "833c07a57644a3c596acf5a7c7e1d13fdd9b4220538b989e9ede1f461e6ee02b",
       "fileCount": 157,
       "retainedDocuments": [],
       "excluded": [

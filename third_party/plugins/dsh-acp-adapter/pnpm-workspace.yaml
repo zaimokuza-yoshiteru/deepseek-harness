@@ -5,9 +5,11 @@ packages:
 # This workspace setting is not shipped; the adapter's host peers remain optional.
 autoInstallPeers: true
 
-onlyBuiltDependencies:
-  - esbuild
-  - koffi
-  - fs-ext
-  - node-pty
-  - '@deepseek-ai/dsh-subprocess-local'
+allowBuilds:
+  esbuild: true
+  koffi: true
+  fs-ext: true
+  node-pty: true
+  '@deepseek-ai/dsh-subprocess-local': true
+  '@google/genai': false
+  protobufjs: false

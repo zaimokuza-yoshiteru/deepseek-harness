@@ -39,7 +39,7 @@ function run(command, args, cwd, environment, capture = false) {
     const require = createRequire(join(ROOT, 'apps/desktop/package.json'))
     const entry = join(dirname(require.resolve('pnpm')), 'bin/pnpm.cjs')
     executable = process.execPath
-    arguments_ = [entry, '--ignore-workspace', ...args]
+    arguments_ = [entry, ...(existsSync(join(cwd, 'pnpm-workspace.yaml')) ? [] : ['--ignore-workspace']), ...args]
   } else if (command === 'npm') {
     const candidates = [join(dirname(process.execPath), 'node_modules/npm/bin/npm-cli.js'),
       resolve(dirname(process.execPath), '../lib/node_modules/npm/bin/npm-cli.js')]
@@ -112,7 +112,7 @@ export async function buildPlugins({ install = true, test = false } = {}) {
     const manager = existsSync(join(directory, 'pnpm-lock.yaml')) ? 'pnpm' : 'npm'
     if (!existsSync(join(directory, manager === 'pnpm' ? 'pnpm-lock.yaml' : 'package-lock.json'))) throw new Error(`Missing dependency lock: ${plugin.name}`)
     if (install) run(manager, manager === 'pnpm'
-      ? ['install', '--ignore-workspace', '--frozen-lockfile'] : ['ci', '--no-audit', '--no-fund'], directory, environment)
+      ? ['install', '--frozen-lockfile'] : ['ci', '--no-audit', '--no-fund'], directory, environment)
     run(manager, ['run', 'build'], directory, environment)
     if (test) run(manager, ['run', 'test'], directory, environment)
     const staging = mkdtempSync(join(tmpdir(), 'dsh-plugin-pack-'))

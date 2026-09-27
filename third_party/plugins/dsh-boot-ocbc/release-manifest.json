@@ -150,7 +150,7 @@
     "src/layer-paths.ts": "8a777df566eb887280783780f44a021ab9b191a734d11088ca27a2236f556a2c",
     "src/local-motion.ts": "342b0be13c1729f925edc00c00572cd5d8781e22279eb1b5b9662c056028ae00",
     "src/ocbc-logo-06.ts": "8e8db6d5b820aab8c0f1211a8b4a11ada847a055d0565e9c7f3ce7d7d6af663d",
-    "src/panel.ts": "008e16a3e03dd77377d21e88cfed81e1d840bd50d54a0f8ff0a145b0164cbc2e",
+    "src/panel.ts": "fe1535146c599802fcf5194354360d4cd57018343b9c8450ad3609ac719f232d",
     "src/renderer.ts": "fdea05c4ccf9c8483eb6473aebbf2b030ca16d69e7611d32a7530c8906a24626",
     "tsconfig.json": "93aec8e43ea37b27c4ea1ac8994a2bacfda8807a6bd442e0310b29328a918e0b"
   }
