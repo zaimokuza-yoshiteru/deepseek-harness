@@ -131,7 +131,8 @@
     "build:plugins": "node scripts/build-plugins.mjs",
     "test:plugins": "node scripts/build-plugins.mjs --skip-install --test",
     "package:source": "node scripts/package-source.mjs",
-    "package:delivery": "node scripts/deliver.mjs"
+    "package:delivery": "node scripts/deliver.mjs",
+    "test:kanban-ui": "node --test .maintenance/tests/kanban-table.browser.mjs"
   },
   "devDependencies": {
     "@deepseek-ai/dsh-agent": "workspace:*",

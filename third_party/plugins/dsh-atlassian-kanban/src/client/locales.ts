@@ -4,6 +4,7 @@ export const NS = 'atlassianKanban'
 
 export const zh = {
   panel: 'Atlassian 看板', atlassianGroup: 'Atlassian', jira: 'Jira', bitbucket: 'Bitbucket', confluence: 'Confluence',
+  resetColumnWidths: '恢复默认列宽', resizeColumn: '调整列宽',
   refresh: '刷新', refreshing: '正在更新…', loading: '正在加载…', loadMore: '加载更多', empty: '没有匹配的项目。',
   notConfigured: '请在插件配置中填写此产品的 Base URL、Bearer Token，并添加 JQL、仓库或 CQL。', configure: '打开插件配置', error: '加载失败', retry: '重试',
   type: '类型', key: 'Key', priority: '优先级', title: '标题', state: '状态', all: '全部', open: '开放', merged: '已合并',
@@ -32,6 +33,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 
 export const en = {
   panel: 'Atlassian Kanban', atlassianGroup: 'Atlassian', jira: 'Jira', bitbucket: 'Bitbucket', confluence: 'Confluence',
+  resetColumnWidths: 'Reset column widths', resizeColumn: 'Resize column',
   refresh: 'Refresh', refreshing: 'Updating…', loading: 'Loading…', loadMore: 'Load more', empty: 'No matching items.',
   notConfigured: 'In plugin settings, enter this product’s Base URL and Bearer Token, then add a JQL query, repository, or CQL query.', configure: 'Open plugin settings', error: 'Could not load results', retry: 'Retry',
   type: 'Type', key: 'Key', priority: 'Priority', title: 'Title', state: 'State', all: 'All', open: 'Open', merged: 'Merged',

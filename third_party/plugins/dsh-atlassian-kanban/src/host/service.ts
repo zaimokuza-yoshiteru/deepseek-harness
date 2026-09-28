@@ -240,7 +240,7 @@ export class AtlassianService {
       }))
     } catch (error) {
       const payload = typeof error === 'object' && error !== null ? Reflect.get(error, 'toolErrorPayload') : undefined
-      if (typeof payload === 'object' && payload !== null && Reflect.get(payload, 'code') === 'ATLASSIAN_RESPONSE_TOO_LARGE') return { complete: false, serverTruncated: null, outputLimited: true, paged: false, path: options.path ?? null, ...(options.srcPath === undefined ? {} : { srcPath: options.srcPath }), ...(options.contextLines === undefined ? {} : { contextLines: options.contextLines }), nextAction: 'The diff response exceeded the local 256 KiB output budget. Request a per-file diff or inspect the affected file at its immutable commit with bitbucket_get_review_file.' }
+      if (typeof payload === 'object' && payload !== null && Reflect.get(payload, 'code') === 'ATLASSIAN_RESPONSE_TOO_LARGE') return { complete: false, serverTruncated: null, outputLimited: true, paged: false, path: options.path ?? null, ...(options.srcPath === undefined ? {} : { srcPath: options.srcPath }), ...(options.contextLines === undefined ? {} : { contextLines: options.contextLines }), nextAction: 'The diff response exceeded the local 256 KiB output budget. Request a per-file diff or inspect the affected file at its immutable commit with kanban_bitbucket_get_review_file.' }
       throw error
     }
     const serverTruncated = hasTruncatedFlag(response.data)
@@ -249,7 +249,7 @@ export class AtlassianService {
     if (Buffer.byteLength(JSON.stringify(response.data), 'utf8') > 64 * 1024) return {
       complete: false, serverTruncated: knownStructured ? serverTruncated : null, outputLimited: true, paged: false,
       path: options.path ?? null, ...(options.srcPath === undefined ? {} : { srcPath: options.srcPath }), ...(options.contextLines === undefined ? {} : { contextLines: options.contextLines }),
-      nextAction: 'The diff exceeded the 64 KiB model-output budget. Request a per-file diff with fewer context lines, or inspect the affected file at its immutable commit with bitbucket_get_review_file.',
+      nextAction: 'The diff exceeded the 64 KiB model-output budget. Request a per-file diff with fewer context lines, or inspect the affected file at its immutable commit with kanban_bitbucket_get_review_file.',
     }
     return {
       complete,
@@ -259,7 +259,7 @@ export class AtlassianService {
       ...(options.srcPath === undefined ? {} : { srcPath: options.srcPath }),
       ...(options.contextLines === undefined ? {} : { contextLines: options.contextLines }),
       nextAction: complete
-        ? 'Diff endpoint is not paged. If the response omits a file or looks too large, list changes and request a per-file diff; if that file is truncated, inspect its fixed commit with bitbucket_get_review_file.'
+        ? 'Diff endpoint is not paged. If the response omits a file or looks too large, list changes and request a per-file diff; if that file is truncated, inspect its fixed commit with kanban_bitbucket_get_review_file.'
         : 'Diff was truncated or returned without a structured completeness flag. This endpoint cannot return a later diff page. List changes, request each per-file diff with srcPath for renamed files, and inspect fixed-commit file content if a per-file diff is also truncated.',
       diff: response.data,
     }
@@ -365,8 +365,8 @@ export class AtlassianService {
     const { attachment, bytes, mediaType, cacheKey } = await this.jiraAttachmentContent(id, ATTACHMENT_MAX_BYTES, signal)
     const filename = field(attachment.filename), ext = filename.split('.').at(-1)?.toLowerCase() ?? ''
     if (bytes > ATTACHMENT_MAX_BYTES) throw new Error(`Atlassian response exceeded the configured ${ATTACHMENT_MAX_BYTES} byte safety limit`)
-    if (mediaType && mediaType !== 'application/octet-stream' && !ATTACHMENT_TEXT_TYPES.has(mediaType)) return { supported: false, attachmentId: id, filename, mediaType, reason: 'The attachment response is not a supported UTF-8 text media type.', nextAction: 'Use jira_download_attachment with a compatible document reader.' }
-    if (!(ATTACHMENT_TEXT_TYPES.has(mediaType) || mediaType === 'application/octet-stream' && ATTACHMENT_TEXT_EXTENSIONS.has(ext) || !mediaType && ATTACHMENT_TEXT_EXTENSIONS.has(ext))) return { supported: false, attachmentId: id, filename, mediaType: mediaType || null, reason: 'Attachment is not a supported UTF-8 text format.', nextAction: 'Use jira_download_attachment with a compatible document reader.' }
+    if (mediaType && mediaType !== 'application/octet-stream' && !ATTACHMENT_TEXT_TYPES.has(mediaType)) return { supported: false, attachmentId: id, filename, mediaType, reason: 'The attachment response is not a supported UTF-8 text media type.', nextAction: 'Use kanban_jira_download_attachment with a compatible document reader.' }
+    if (!(ATTACHMENT_TEXT_TYPES.has(mediaType) || mediaType === 'application/octet-stream' && ATTACHMENT_TEXT_EXTENSIONS.has(ext) || !mediaType && ATTACHMENT_TEXT_EXTENSIONS.has(ext))) return { supported: false, attachmentId: id, filename, mediaType: mediaType || null, reason: 'Attachment is not a supported UTF-8 text format.', nextAction: 'Use kanban_jira_download_attachment with a compatible document reader.' }
     try {
       let verifiedBytes = bytes
       const page = await this.resourceCache.withFile(cacheKey, (path, actualBytes, actualType) => {
@@ -378,7 +378,7 @@ export class AtlassianService {
       return { supported: true, attachmentId: id, filename, offset, totalCharacters: page.totalCharacters, nextOffset: page.nextOffset, text: page.text, downloadedBytes: verifiedBytes, maxAttachmentBytes: ATTACHMENT_MAX_BYTES, nextAction: page.nextOffset === null ? null : `Continue with attachmentId=${id} and offset=${page.nextOffset}.` }
     } catch (error) {
       const message = error instanceof Error ? error.message : ''
-      if (error instanceof UnsupportedTextFileError) return { supported: false, attachmentId: id, filename, reason: message, nextAction: 'Use jira_download_attachment with a compatible document reader.' }
+      if (error instanceof UnsupportedTextFileError) return { supported: false, attachmentId: id, filename, reason: message, nextAction: 'Use kanban_jira_download_attachment with a compatible document reader.' }
       throw error
     }
     })
@@ -463,7 +463,7 @@ export class AtlassianService {
     if (actualType && actualType !== 'application/octet-stream' && !ATTACHMENT_TEXT_TYPES.has(actualType)) return {
       supported: false, attachmentId, filename: title || null, version: Number.isSafeInteger(version) ? version : null, mediaType: actualType,
       reason: 'The attachment response is not a supported UTF-8 text media type.',
-      nextAction: 'Use confluence_download_attachment and a compatible document reader; this tool did not return its binary content as text.',
+      nextAction: 'Use kanban_confluence_download_attachment and a compatible document reader; this tool did not return its binary content as text.',
     }
     let page: Awaited<ReturnType<typeof readUtf8TextPage>>
     try { page = await this.resourceCache.withFile(cacheKey, (path, actualBytes, actualType) => {
@@ -472,7 +472,7 @@ export class AtlassianService {
       return readUtf8TextPage(path, offset, maxChars, signal)
     }) }
     catch (error) {
-      if (error instanceof UnsupportedTextFileError) return { supported: false, attachmentId, filename: title || null, version: Number.isSafeInteger(version) ? version : null, mediaType: actualType || mediaType || null, reason: error.message, nextAction: 'Use confluence_download_attachment and a compatible binary/document reader.' }
+      if (error instanceof UnsupportedTextFileError) return { supported: false, attachmentId, filename: title || null, version: Number.isSafeInteger(version) ? version : null, mediaType: actualType || mediaType || null, reason: error.message, nextAction: 'Use kanban_confluence_download_attachment and a compatible binary/document reader.' }
       throw error
     }
     return {

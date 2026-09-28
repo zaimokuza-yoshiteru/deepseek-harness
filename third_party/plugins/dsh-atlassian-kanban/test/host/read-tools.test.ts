@@ -98,7 +98,7 @@ describe('bounded review and Confluence read tools', () => {
   }
 
   it('marks nested Bitbucket diff truncation and routes renamed-file context through supported parameters', async () => {
-    const result = await run('bitbucket_get_pull_request_diff', { projectKey: 'ENG', repositorySlug: 'site', pullRequestId: 7, path: 'src/new name.txt', srcPath: 'src/old name.txt', contextLines: 0 }) as Record<string, any>
+    const result = await run('kanban_bitbucket_get_pull_request_diff', { projectKey: 'ENG', repositorySlug: 'site', pullRequestId: 7, path: 'src/new name.txt', srcPath: 'src/old name.txt', contextLines: 0 }) as Record<string, any>
     expect(result).toMatchObject({ complete: false, serverTruncated: true, paged: false, path: 'src/new name.txt', srcPath: 'src/old name.txt', contextLines: 0 })
     expect(result.nextAction).toContain('cannot return a later diff page')
     const request = new URL(seen[0].replace(/^GET /, ''), baseUrl)
@@ -108,26 +108,26 @@ describe('bounded review and Confluence read tools', () => {
   })
 
   it('continues Bitbucket even when comment filtering returns an empty values array', async () => {
-    const result = await run('bitbucket_list_pull_request_comments', { projectKey: 'ENG', repositorySlug: 'site', pullRequestId: 7, cursor: '20', limit: 9 }) as Record<string, any>
+    const result = await run('kanban_bitbucket_list_pull_request_comments', { projectKey: 'ENG', repositorySlug: 'site', pullRequestId: 7, cursor: '20', limit: 9 }) as Record<string, any>
     expect(result).toMatchObject({ complete: false, nextPageStart: 29, values: [] })
     expect(result.nextAction).toContain('Continue from nextPageStart=29')
-    await expect(run('bitbucket_list_pull_request_activities', { projectKey: 'ENG', repositorySlug: 'site', pullRequestId: 7, cursor: '-1' })).rejects.toThrow('non-negative integer')
-    await expect(run('bitbucket_list_pull_request_activities', { projectKey: 'ENG', repositorySlug: 'site', pullRequestId: 7, limit: 0 })).rejects.toThrow('integer from 1 to 100')
+    await expect(run('kanban_bitbucket_list_pull_request_activities', { projectKey: 'ENG', repositorySlug: 'site', pullRequestId: 7, cursor: '-1' })).rejects.toThrow('non-negative integer')
+    await expect(run('kanban_bitbucket_list_pull_request_activities', { projectKey: 'ENG', repositorySlug: 'site', pullRequestId: 7, limit: 0 })).rejects.toThrow('integer from 1 to 100')
   })
 
   it('pages a pinned UTF-8 Bitbucket file as line objects while preserving the browse envelope', async () => {
     const sha = 'a'.repeat(40)
-    const first = await run('bitbucket_get_review_file', { projectKey: 'ENG', repositorySlug: 'site', path: 'src/file.txt', at: sha, start: 0, limit: 2 }) as Record<string, any>
+    const first = await run('kanban_bitbucket_get_review_file', { projectKey: 'ENG', repositorySlug: 'site', path: 'src/file.txt', at: sha, start: 0, limit: 2 }) as Record<string, any>
     expect(first).toMatchObject({ path: 'src/file.txt', revision: sha, complete: false, pageComplete: true, nextStart: 2, size: 10, linePage: { start: 0, totalLines: 3, isLastPage: false } })
     expect(first.lines).toEqual([{ text: 'α😀', line: 1, charOffset: 0 }, { text: 'second', line: 2, charOffset: 0 }])
-    const second = await run('bitbucket_get_review_file', { projectKey: 'ENG', repositorySlug: 'site', path: 'src/file.txt', at: sha, start: 2, limit: 2 }) as Record<string, any>
+    const second = await run('kanban_bitbucket_get_review_file', { projectKey: 'ENG', repositorySlug: 'site', path: 'src/file.txt', at: sha, start: 2, limit: 2 }) as Record<string, any>
     expect(second).toMatchObject({ complete: true, nextStart: null, linePage: { start: 2, totalLines: 3, isLastPage: true } })
     expect(second.lines).toEqual([{ text: 'third', line: 3, charOffset: 0 }])
     expect(seen.filter(item => item.includes('/raw/src/file.txt')).every(item => item.includes(`at=${sha}`))).toBe(true)
   })
 
   it('uses Data Center ancestor CQL and preserves continuation even for an empty result page', async () => {
-    const result = await run('confluence_list_descendants', { pageId: '42', start: 0, limit: 25 }) as Record<string, any>
+    const result = await run('kanban_confluence_list_descendants', { pageId: '42', start: 0, limit: 25 }) as Record<string, any>
     expect(result).toMatchObject({ complete: false, nextStart: 25, results: [] })
     expect(result.nextAction).toContain('Continue with start=25')
     const request = new URL(seen[0].replace(/^GET /, ''), baseUrl)
@@ -136,36 +136,36 @@ describe('bounded review and Confluence read tools', () => {
   })
 
   it('reads bounded attachment text with Unicode codepoint offsets and passes only whitelisted server link query values', async () => {
-    const result = await run('confluence_read_attachment', { attachmentId: '99', offset: 1, maxChars: 1 }) as Record<string, any>
+    const result = await run('kanban_confluence_read_attachment', { attachmentId: '99', offset: 1, maxChars: 1 }) as Record<string, any>
     expect(result).toMatchObject({ supported: true, offset: 1, totalCharacters: 3, text: '😀', nextOffset: 2 })
     expect(seen.at(-1)).toBe('GET /conf/download/attachments/99/readme.txt?version=3&modificationDate=2&api=v2')
   })
 
   it('lists Jira attachment metadata and reads content only through the matching Jira attachment route', async () => {
-    const listed = await run('jira_list_attachments', { issueKey: 'APP-1' }) as Record<string, any>
+    const listed = await run('kanban_jira_list_attachments', { issueKey: 'APP-1' }) as Record<string, any>
     expect(listed.attachments).toEqual([{ id: '501', filename: 'hello.txt', size: 6, mimeType: 'text/plain', created: undefined, author: { displayName: null, key: null } }])
-    const page = await run('jira_read_attachment', { attachmentId: '501', offset: 1, maxChars: 1 }) as Record<string, any>
+    const page = await run('kanban_jira_read_attachment', { attachmentId: '501', offset: 1, maxChars: 1 }) as Record<string, any>
     expect(page).toMatchObject({ supported: true, text: '😀', offset: 1, nextOffset: 2 })
     jiraAttachmentType = 'application/pdf'
-    const spoofed = await run('jira_read_attachment', { attachmentId: '501' }) as Record<string, any>
+    const spoofed = await run('kanban_jira_read_attachment', { attachmentId: '501' }) as Record<string, any>
     expect(spoofed).toMatchObject({ supported: false, mediaType: 'application/pdf' })
     expect(seen.slice(-2)).toEqual(['GET /rest/api/2/attachment/501', 'GET /secure/attachment/501/hello.txt'])
   })
 
   it('does not fetch a cross-origin link or claim a PDF is read when disguised with a text filename', async () => {
-    await expect(run('confluence_read_attachment', { attachmentId: '100' })).rejects.toThrow('same-origin')
+    await expect(run('kanban_confluence_read_attachment', { attachmentId: '100' })).rejects.toThrow('same-origin')
     expect(seen.some(item => item.includes('evil.invalid'))).toBe(false)
-    const pdf = await run('confluence_read_attachment', { attachmentId: '101' }) as Record<string, any>
+    const pdf = await run('kanban_confluence_read_attachment', { attachmentId: '101' }) as Record<string, any>
     expect(pdf).toMatchObject({ supported: false, filename: 'manual.pdf', mediaType: 'application/pdf' })
     attachmentType = 'application/pdf'
     attachmentText = '%PDF-1.4'
     // Metadata remains a .txt, but an authoritative non-text response MIME wins.
-    const spoof = await run('confluence_read_attachment', { attachmentId: '99' }) as Record<string, any>
+    const spoof = await run('kanban_confluence_read_attachment', { attachmentId: '99' }) as Record<string, any>
     expect(spoof).toMatchObject({ supported: false, mediaType: 'application/pdf' })
   })
 
   it('throws structured sanitized HTTP errors so MCP marks the operation as failed', async () => {
-    await expect(run('bitbucket_get_pull_request', { projectKey: 'ENG', repositorySlug: 'site', pullRequestId: 404 })).rejects.toSatisfy((error: Error) => {
+    await expect(run('kanban_bitbucket_get_pull_request', { projectKey: 'ENG', repositorySlug: 'site', pullRequestId: 404 })).rejects.toSatisfy((error: Error) => {
       expect(() => JSON.parse(error.message)).not.toThrow()
       const parsed = JSON.parse(error.message)
       expect(parsed).toMatchObject({ code: 'ATLASSIAN_HTTP_403', httpStatus: 403, retryable: false })
@@ -173,7 +173,7 @@ describe('bounded review and Confluence read tools', () => {
       expect(parsed.message).not.toContain('secret-token-should-not-appear')
       return true
     })
-    await expect(run('bitbucket_get_pull_request', { projectKey: 'ENG', repositorySlug: 'site', pullRequestId: 400 })).rejects.toSatisfy((error: Error) => {
+    await expect(run('kanban_bitbucket_get_pull_request', { projectKey: 'ENG', repositorySlug: 'site', pullRequestId: 400 })).rejects.toSatisfy((error: Error) => {
       const parsed = JSON.parse(error.message)
       expect(parsed.httpStatus).toBe(400)
       expect(parsed.message).toContain('fields: summary')
@@ -185,20 +185,20 @@ describe('bounded review and Confluence read tools', () => {
   })
 
   it('downloads through the optional native provider and reports provider failures safely', async () => {
-    const unavailable = await run('confluence_download_attachment', { attachmentId: '99' }) as Record<string, any>
+    const unavailable = await run('kanban_confluence_download_attachment', { attachmentId: '99' }) as Record<string, any>
     expect(unavailable).toMatchObject({ available: false })
     const stored: { data?: Uint8Array; name?: string } = {}
     const provider = {
       async saveFile(input: { data: Uint8Array; name?: string }) { stored.data = input.data; stored.name = input.name; return { attachmentId: 'file-ref', name: input.name ?? 'file', bytes: input.data.byteLength } },
       fileHostPath() { return '/provider-owned/file-ref' },
     }
-    const result = await run('confluence_download_attachment', { attachmentId: '99' }, provider) as Record<string, any>
+    const result = await run('kanban_confluence_download_attachment', { attachmentId: '99' }, provider) as Record<string, any>
     expect(result).toMatchObject({ available: true, attachmentId: '99', filename: 'readme.txt', version: 3, bytes: 6, hostPath: '/provider-owned/file-ref' })
     expect(Buffer.from(stored.data!).toString()).toBe('A😀B')
     expect(stored.name).toBe('readme.txt')
     const broken = { async saveFile() { throw new Error('save failed conf-secret /private/path') }, fileHostPath() { return '/private/path' } }
-    await expect(run('confluence_download_attachment', { attachmentId: '99' }, broken)).rejects.toThrow('could not be stored')
-    await expect(run('confluence_read_attachment', { attachmentId: '102' })).rejects.toThrow('path is invalid')
+    await expect(run('kanban_confluence_download_attachment', { attachmentId: '99' }, broken)).rejects.toThrow('could not be stored')
+    await expect(run('kanban_confluence_read_attachment', { attachmentId: '102' })).rejects.toThrow('path is invalid')
     expect(seen.some(item => item.includes('/rest/api/user/current'))).toBe(false)
   })
 })

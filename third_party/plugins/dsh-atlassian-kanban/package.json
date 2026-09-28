@@ -1,6 +1,6 @@
 {
   "name": "dsh-atlassian-kanban",
-  "version": "0.1.0-alpha.8",
+  "version": "0.1.0-alpha.9",
   "private": true,
   "description": "Read-first Jira, Bitbucket and Confluence integration for DeepSeek Harness.",
   "icon": "./assets/icon.svg",
@@ -66,6 +66,7 @@
     "@deepseek-ai/dsh-tools": "0.1.7-rc.2",
     "@deepseek-ai/dsh-typert-generator": "0.1.7-rc.2",
     "@deepseek-ai/dsh-typert-protocol": "0.1.7-rc.2",
+    "@modelcontextprotocol/sdk": "1.29.0",
     "@types/node": "22.20.0",
     "@types/react": "18.3.28",
     "lightningcss": "1.32.0",

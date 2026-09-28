@@ -4,6 +4,7 @@ import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots
 import type { AtlassianKanbanRemote } from '../shared/remote.ts'
 import type { KanbanController, KanbanSnapshot, KanbanView, PullRequestState } from './kanban-state.ts'
 import type { KanbanLocaleKey } from './locales.ts'
+import { ResizableTable } from './ResizableTable.tsx'
 import css from './KanbanPage.module.css'
 
 export interface KanbanPageInjected {
@@ -88,24 +89,20 @@ function ResultList({ state, controller, t }: { readonly state: KanbanSnapshot; 
   if (items.length === 0 && state.status === 'ready') return <p className={css.status}>{t('empty')}</p>
   const rows = items.map((item, index) => ({ item, id: scalar(item.id ?? item.key ?? index) }))
   return <>
-    {state.product === 'jira' && <table className={`${css.table} ${css.jiraTable}`}>
-      <thead><tr><th>{t('type')}</th><th>{t('key')}</th><th>{t('title')}</th><th>{t('state')}</th><th>{t('priority')}</th></tr></thead>
-      <tbody>{rows.map(({ item, id }) => <tr key={id}>
+    {state.product === 'jira' && <ResizableTable key="jira" product="jira" t={t}>{rows.map(({ item, id }) => <tr key={id}>
         <td><JiraCell url={item.typeIcon} label={scalar(item.type ?? item.issueType)} /></td>
-        <td><External url={item.url} label={scalar(item.key)} /></td>
+        <td><LongExternal url={item.url} label={scalar(item.key)} multiline={false} /></td>
         <td><LongExternal url={item.url} label={scalar(item.title ?? item.summary)} multiline={false} /></td>
         <td><StatusTag value={scalar(item.status)} category={scalar(item.statusCategory)} /></td>
         <td><JiraCell url={item.priorityIcon} label={scalar(item.priority)} /></td>
-      </tr>)}</tbody>
-    </table>}
-    {state.product === 'bitbucket' && <table className={`${css.table} ${css.prTable}`}>
-      <thead><tr><th>{t('key')}</th><th>{t('title')}</th><th>{t('state')}</th></tr></thead>
-      <tbody>{rows.map(({ item, id }) => <tr key={id}>
-        <td><External url={item.url} label={`#${scalar(item.id)}`} /></td>
+      </tr>)}
+    </ResizableTable>}
+    {state.product === 'bitbucket' && <ResizableTable key="bitbucket" product="bitbucket" t={t}>{rows.map(({ item, id }) => <tr key={id}>
+        <td><LongExternal url={item.url} label={`#${scalar(item.id)}`} multiline={false} /></td>
         <td><LongExternal url={item.url} label={scalar(item.title ?? item.name)} multiline={false} /></td>
         <td><StatusTag value={pullRequestStateLabel(scalar(item.state ?? item.status), t)} category={scalar(item.state ?? item.status)} /></td>
-      </tr>)}</tbody>
-    </table>}
+      </tr>)}
+    </ResizableTable>}
     {state.product === 'confluence' && <div className={css.cards}>
       {rows.map(({ item, id }) => <article className={css.card} key={id}>
         <h2 className={css.cardTitle}><LongExternal url={item.url} label={scalar(item.title ?? item.name)} multiline /></h2>
@@ -126,7 +123,7 @@ function ResultList({ state, controller, t }: { readonly state: KanbanSnapshot; 
 
 function JiraCell({ url, label }: { readonly url: unknown; readonly label: string }) {
   const src = dataImage(url)
-  return <Tooltip label={label} side="bottom" maxWidth={520}>
+  return <Tooltip label={label} side="bottom" maxWidth={520} portal>
     <span className={css.jiraCell} aria-label={label}>
       {src === null ? null : <img className={css.jiraIcon} src={src} alt="" />}
       <span className={css.compactText}>{label}</span>
@@ -139,21 +136,16 @@ function StatusTag({ value, category }: { readonly value: string; readonly categ
   const tone: TagTone = /done|closed|merged|complete|resolved/.test(normalized) ? 'success'
     : /declin|reject|error/.test(normalized) ? 'danger'
       : /open|progress|review|new|indeterminate/.test(normalized) ? 'info' : 'neutral'
-  return <Tooltip label={value} side="bottom"><span className={css.statusTooltipAnchor}><Tag tone={tone} className={css.statusTag}>{value}</Tag></span></Tooltip>
+  return <Tooltip label={value} side="bottom" portal><span className={css.statusTooltipAnchor}><Tag tone={tone} className={css.statusTag}>{value}</Tag></span></Tooltip>
 }
 
 function LongExternal({ url, label, multiline }: { readonly url: unknown; readonly label: string; readonly multiline: boolean }) {
   const href = safeHttpUrl(url)
   const content = <span className={multiline ? css.longText : `${css.longText} ${css.singleLine}`}>{label}</span>
-  return <Tooltip label={label} side="bottom" maxWidth={520}>
+  return <Tooltip label={label} side="bottom" maxWidth={520} portal>
     {href === undefined ? <span className={`${css.longText} ${multiline ? '' : css.singleLine}`} aria-label={label}>{label}</span>
       : <a className={`${css.link} ${css.longLink}`} href={href} target="_blank" rel="noopener noreferrer" aria-label={label}>{content}</a>}
   </Tooltip>
-}
-
-function External({ url, label }: { readonly url: unknown; readonly label: string }) {
-  const href = safeHttpUrl(url)
-  return href === undefined ? label : <a className={css.link} href={href} target="_blank" rel="noopener noreferrer">{label}</a>
 }
 
 function safeHttpUrl(value: unknown): string | undefined {

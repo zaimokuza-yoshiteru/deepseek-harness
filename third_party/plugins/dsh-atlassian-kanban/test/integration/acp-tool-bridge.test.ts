@@ -77,18 +77,22 @@ describe('Atlassian tools over the native ACP MCP bridge', () => {
     await client.connect(new StreamableHTTPClientTransport(new URL(server.url)) as Parameters<Client['connect']>[0])
     closers.push(() => client.close())
     const discovered = await client.listTools()
+    const kanbanTools = discovered.tools.filter(tool => tool.name.startsWith('kanban_'))
+    expect(kanbanTools).toHaveLength(69)
+    expect(new Set(kanbanTools.map(tool => tool.name)).size).toBe(69)
+    expect(discovered.tools.some(tool => /^(atlassian|jira|bitbucket|confluence)_/.test(tool.name))).toBe(false)
     const configurationTools = [
-      'atlassian_get_settings', 'atlassian_update_connections', 'atlassian_set_preferences',
-      'atlassian_upsert_queries', 'atlassian_delete_queries', 'atlassian_upsert_repositories',
-      'atlassian_delete_repositories', 'atlassian_validate_repositories',
+      'kanban_get_settings', 'kanban_update_connections', 'kanban_set_preferences',
+      'kanban_upsert_queries', 'kanban_delete_queries', 'kanban_upsert_repositories',
+      'kanban_delete_repositories', 'kanban_validate_repositories',
     ]
     for (const name of configurationTools) expect(discovered.tools.some(tool => tool.name === name), `MCP tools/list contains ${name}`).toBe(true)
-    const jiraSearch = discovered.tools.find(tool => tool.name === 'jira_search_issues')
+    const jiraSearch = discovered.tools.find(tool => tool.name === 'kanban_jira_search_issues')
     expect(jiraSearch).toBeDefined()
     expect(jiraSearch?.inputSchema).toMatchObject({ type: 'object', properties: { jqlId: { type: 'string' } } })
 
     lease.beginPrompt(new AbortController().signal)
-    const settingsResult = await client.callTool({ name: 'atlassian_get_settings', arguments: {} })
+    const settingsResult = await client.callTool({ name: 'kanban_get_settings', arguments: {} })
     expect(settingsResult.isError).not.toBe(true)
     const settingsText = settingsResult.content.filter(item => item.type === 'text').map(item => item.text).join('\n')
     const settings = JSON.parse(settingsText)
@@ -102,7 +106,7 @@ describe('Atlassian tools over the native ACP MCP bridge', () => {
     expect(JSON.stringify(settings)).not.toContain('integration-secret')
     expect(settings.jira).not.toHaveProperty('bearerToken')
 
-    const result = await client.callTool({ name: 'jira_search_issues', arguments: { jqlId: 'assigned' } })
+    const result = await client.callTool({ name: 'kanban_jira_search_issues', arguments: { jqlId: 'assigned' } })
     expect(result.isError).not.toBe(true)
     expect(result.content).toEqual([expect.objectContaining({ type: 'text', text: expect.stringContaining('KAN-44') })])
     expect(result.content).toEqual([expect.objectContaining({ type: 'text', text: expect.stringContaining('Bridge integration issue') })])
@@ -112,7 +116,7 @@ describe('Atlassian tools over the native ACP MCP bridge', () => {
     expect(JSON.stringify(discovered.tools)).not.toContain('integration-secret')
 
     const toolError = async (issueKey: string) => {
-      const failed = await client.callTool({ name: 'jira_get_issue', arguments: { issueKey } })
+      const failed = await client.callTool({ name: 'kanban_jira_get_issue', arguments: { issueKey } })
       expect(failed.isError).toBe(true)
       const errorText = failed.content.filter(item => item.type === 'text').map(item => item.text).join('\n')
       expect(errorText.length).toBeLessThan(2_000)

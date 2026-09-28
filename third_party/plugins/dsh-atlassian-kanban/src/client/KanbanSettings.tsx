@@ -151,7 +151,7 @@ export function KanbanSettings(props: KanbanSettingsProps) {
     setBusyProduct(product); setProductNotice(product, null)
     try {
       const result = await remote.testConnection(product, connectionDraftFor(value.baseUrl, draft.token, draft.clearToken))
-      setProductNotice(product, result.ok ? { key: 'connected', ...(result.displayName ? { detail: result.displayName } : {}) } : { key: 'failedConnection', detail: result.message })
+      setProductNotice(product, result.ok ? { key: 'connected' } : { key: 'failedConnection', detail: result.message })
     } catch { setProductNotice(product, { key: 'failedConnection' }) }
     finally { setBusyProduct(null) }
   }
@@ -212,7 +212,7 @@ function Feedback({ notice, t }: { readonly notice: Exclude<Notice, null>; reado
   return <div className={`${styles.feedback} ${success ? styles.feedbackSuccess : styles.feedbackError}`} role={success ? 'status' : 'alert'} aria-live={success ? 'polite' : 'assertive'}>
     <StateDot state={success ? 'done' : 'error'} size={10} />
     <div className={styles.feedbackContent}>
-      <div className={styles.feedbackMessage}>{t(notice.key)}{success && notice.detail ? ` · ${notice.detail}` : ''}</div>
+      <div className={styles.feedbackMessage}>{t(notice.key)}</div>
       {!success && notice.detail !== undefined && notice.detail !== '' && <details className={styles.feedbackDetails}>
         <summary>{t('technicalDetails')}</summary>
         <pre>{notice.detail}</pre>

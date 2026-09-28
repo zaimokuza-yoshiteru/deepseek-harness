@@ -154,10 +154,10 @@ active('Bitbucket 10.4.1 plugin tools through the live MCP bridge', () => {
 
     const discovered = await client.listTools()
     const expectedTools = [
-      'bitbucket_list_repositories', 'bitbucket_get_repository', 'bitbucket_list_pull_requests',
-      'bitbucket_get_pull_request', 'bitbucket_get_pull_request_diff', 'bitbucket_list_pull_request_comments',
-      'bitbucket_get_pull_request_comment', 'bitbucket_add_pull_request_comment', 'bitbucket_approve_pull_request', 'bitbucket_unapprove_pull_request',
-      'bitbucket_needs_work_pull_request', 'bitbucket_decline_pull_request',
+      'kanban_bitbucket_list_repositories', 'kanban_bitbucket_get_repository', 'kanban_bitbucket_list_pull_requests',
+      'kanban_bitbucket_get_pull_request', 'kanban_bitbucket_get_pull_request_diff', 'kanban_bitbucket_list_pull_request_comments',
+      'kanban_bitbucket_get_pull_request_comment', 'kanban_bitbucket_add_pull_request_comment', 'kanban_bitbucket_approve_pull_request', 'kanban_bitbucket_unapprove_pull_request',
+      'kanban_bitbucket_needs_work_pull_request', 'kanban_bitbucket_decline_pull_request',
     ]
     for (const name of expectedTools) expect(discovered.tools.some(tool => tool.name === name), `MCP tools/list contains ${name}`).toBe(true)
     lease.beginPrompt(new AbortController().signal)
@@ -165,60 +165,60 @@ active('Bitbucket 10.4.1 plugin tools through the live MCP bridge', () => {
     const call = async (name: string, args: Record<string, unknown> = {}) => findText(await callRaw(name, args))
     const common = { projectKey, repositorySlug }
 
-    expect(await call('bitbucket_list_repositories')).toContain(repositorySlug)
-    expect(await call('bitbucket_get_repository', common)).toContain(repositorySlug)
-    expect(await call('bitbucket_list_pull_requests', { ...common, state: 'open' })).toContain(`DSH Kanban live test ${marker}`)
-    expect(await call('bitbucket_get_pull_request', { ...common, pullRequestId })).toContain(`DSH Kanban live test ${marker}`)
-    expect(await call('bitbucket_get_pull_request_diff', { ...common, pullRequestId })).toContain(`${marker} pull request diff marker`)
-    const beforeComment = JSON.parse(await call('bitbucket_list_pull_request_comments', { ...common, pullRequestId }))
+    expect(await call('kanban_bitbucket_list_repositories')).toContain(repositorySlug)
+    expect(await call('kanban_bitbucket_get_repository', common)).toContain(repositorySlug)
+    expect(await call('kanban_bitbucket_list_pull_requests', { ...common, state: 'open' })).toContain(`DSH Kanban live test ${marker}`)
+    expect(await call('kanban_bitbucket_get_pull_request', { ...common, pullRequestId })).toContain(`DSH Kanban live test ${marker}`)
+    expect(await call('kanban_bitbucket_get_pull_request_diff', { ...common, pullRequestId })).toContain(`${marker} pull request diff marker`)
+    const beforeComment = JSON.parse(await call('kanban_bitbucket_list_pull_request_comments', { ...common, pullRequestId }))
     expect(Array.isArray(beforeComment.values)).toBe(true)
-    await call('bitbucket_add_pull_request_comment', { ...common, pullRequestId, text: `live plugin comment ${marker}` })
-    const createdComments = JSON.parse(await call('bitbucket_list_pull_request_comments', { ...common, pullRequestId }))
+    await call('kanban_bitbucket_add_pull_request_comment', { ...common, pullRequestId, text: `live plugin comment ${marker}` })
+    const createdComments = JSON.parse(await call('kanban_bitbucket_list_pull_request_comments', { ...common, pullRequestId }))
     const createdActivity = createdComments.values.find((row: any) => row.comment?.text === `live plugin comment ${marker}`)
     expect(createdActivity?.comment).toBeDefined()
     const commentId = Number(createdActivity.comment.id)
     const createdCommentVersion = Number(createdActivity.comment.version)
     expect(Number.isSafeInteger(commentId)).toBe(true)
     expect(Number.isSafeInteger(createdCommentVersion)).toBe(true)
-    const getComment = () => call('bitbucket_get_pull_request_comment', { ...common, pullRequestId, commentId })
+    const getComment = () => call('kanban_bitbucket_get_pull_request_comment', { ...common, pullRequestId, commentId })
     const freshComment = JSON.parse(await getComment())
     expect(Number(freshComment.id)).toBe(commentId)
     expect(freshComment.text).toBe(`live plugin comment ${marker}`)
     const editedText = `edited plugin comment ${marker}`
-    await call('bitbucket_edit_pull_request_comment', { ...common, pullRequestId, commentId: String(commentId), text: editedText, version: Number(freshComment.version) })
-    const editedComments = JSON.parse(await call('bitbucket_list_pull_request_comments', { ...common, pullRequestId }))
+    await call('kanban_bitbucket_edit_pull_request_comment', { ...common, pullRequestId, commentId: String(commentId), text: editedText, version: Number(freshComment.version) })
+    const editedComments = JSON.parse(await call('kanban_bitbucket_list_pull_request_comments', { ...common, pullRequestId }))
     expect(editedComments.values.some((row: any) => String(row.comment?.id) === String(commentId))).toBe(true)
     const editedComment = JSON.parse(await getComment())
     expect(Number(editedComment.id)).toBe(commentId)
     expect(editedComment.text).toBe(editedText)
     expect(Number(editedComment.version)).toBeGreaterThan(Number(freshComment.version))
-    await call('bitbucket_delete_pull_request_comment', { ...common, pullRequestId, commentId: String(commentId), version: Number(editedComment.version) })
-    expect((await callRaw('bitbucket_get_pull_request_comment', { ...common, pullRequestId, commentId })).isError).toBe(true)
-    const afterDelete = JSON.parse(await call('bitbucket_list_pull_request_comments', { ...common, pullRequestId }))
+    await call('kanban_bitbucket_delete_pull_request_comment', { ...common, pullRequestId, commentId: String(commentId), version: Number(editedComment.version) })
+    expect((await callRaw('kanban_bitbucket_get_pull_request_comment', { ...common, pullRequestId, commentId })).isError).toBe(true)
+    const afterDelete = JSON.parse(await call('kanban_bitbucket_list_pull_request_comments', { ...common, pullRequestId }))
     expect(afterDelete.values.some((row: any) => String(row.comment?.id) === String(commentId))).toBe(false)
     expect(JSON.stringify(afterDelete)).not.toContain(editedText)
 
     const currentPull = async () => {
-      const pull = JSON.parse(await call('bitbucket_get_pull_request', { ...common, pullRequestId }))
+      const pull = JSON.parse(await call('kanban_bitbucket_get_pull_request', { ...common, pullRequestId }))
       expect(typeof pull.version).toBe('number')
       return pull as { version: number }
     }
     const currentParticipants = async () => request(`${repoPath}/pull-requests/${pullRequestId}/participants`, { authorization: adminAuth, expected: [200] })
     const rows = (response: any) => Array.isArray(response) ? response : Array.isArray(response?.values) ? response.values : []
-    await call('bitbucket_approve_pull_request', { ...common, pullRequestId, version: (await currentPull()).version })
+    await call('kanban_bitbucket_approve_pull_request', { ...common, pullRequestId, version: (await currentPull()).version })
     const approved = rows(await currentParticipants())
     if (!approved.some((row: any) => row.user?.slug === adminSlug && (row.approved === true || row.status === 'APPROVED'))) {
       throw new Error(`Approval participant state: ${JSON.stringify(approved.map((row: any) => ({ slug: row.user?.slug, approved: row.approved, status: row.status })))}`)
     }
-    await call('bitbucket_unapprove_pull_request', { ...common, pullRequestId, version: (await currentPull()).version })
+    await call('kanban_bitbucket_unapprove_pull_request', { ...common, pullRequestId, version: (await currentPull()).version })
     const unapproved = rows(await currentParticipants())
     expect(unapproved.some((row: any) => row.user?.slug === adminSlug && row.approved === false)).toBe(true)
-    await call('bitbucket_needs_work_pull_request', { ...common, pullRequestId, userSlug: adminSlug, version: (await currentPull()).version })
+    await call('kanban_bitbucket_needs_work_pull_request', { ...common, pullRequestId, userSlug: adminSlug, version: (await currentPull()).version })
     const needsWork = rows(await currentParticipants())
     expect(needsWork.some((row: any) => row.user?.slug === adminSlug && row.status === 'NEEDS_WORK')).toBe(true)
-    await call('bitbucket_decline_pull_request', { ...common, pullRequestId, version: (await currentPull()).version, comment: `declined by live plugin test ${marker}` })
+    await call('kanban_bitbucket_decline_pull_request', { ...common, pullRequestId, version: (await currentPull()).version, comment: `declined by live plugin test ${marker}` })
 
-    const finalPull = await call('bitbucket_get_pull_request', { ...common, pullRequestId })
+    const finalPull = await call('kanban_bitbucket_get_pull_request', { ...common, pullRequestId })
     expect(finalPull).toContain('DECLINED')
     expect(JSON.stringify(discovered.tools)).not.toContain(token.token)
     expect(JSON.stringify(discovered.tools)).not.toContain(password)

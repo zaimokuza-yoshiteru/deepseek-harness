@@ -69,24 +69,24 @@ describe('Confluence child parent validation', () => {
 
   it('rejects a grandparent for update and delete before any PUT or DELETE', async () => {
     const update = { parentId: 'grandparent', childId: 'child', spaceKey: 'DOC', title: 'Updated', body: '<p>Updated</p>', version: 1 }
-    await expect(run('confluence_update_child', update)).rejects.toThrow('does not belong to the supplied parent')
-    await expect(run('confluence_delete_child', { parentId: 'grandparent', childId: 'child' })).rejects.toThrow('does not belong to the supplied parent')
+    await expect(run('kanban_confluence_update_child', update)).rejects.toThrow('does not belong to the supplied parent')
+    await expect(run('kanban_confluence_delete_child', { parentId: 'grandparent', childId: 'child' })).rejects.toThrow('does not belong to the supplied parent')
     expect(writes).toEqual([])
   })
 
   it('accepts the direct parent for update and delete', async () => {
     const update = { parentId: 'parent', childId: 'child', spaceKey: 'DOC', title: 'Updated', body: '<p>Updated</p>', version: 1 }
-    await run('confluence_update_child', update)
-    await run('confluence_delete_child', { parentId: 'parent', childId: 'child' })
+    await run('kanban_confluence_update_child', update)
+    await run('kanban_confluence_delete_child', { parentId: 'parent', childId: 'child' })
     expect(writes.map(item => item.split(' ')[0])).toEqual(['PUT', 'DELETE'])
   })
 
   it('requests all comment depths and follows the server cursor across root comments and replies', async () => {
-    const first = await run('confluence_list_comments', { pageId: '42', start: 0, limit: 1 }) as Record<string, any>
+    const first = await run('kanban_confluence_list_comments', { pageId: '42', start: 0, limit: 1 }) as Record<string, any>
     expect(first.results).toEqual([{ id: 'root-comment' }])
     expect(first.complete).toBe(false)
     expect(first.nextStart).toBe(1)
-    const second = await run('confluence_list_comments', { pageId: '42', start: first.nextStart, limit: 1 }) as Record<string, any>
+    const second = await run('kanban_confluence_list_comments', { pageId: '42', start: first.nextStart, limit: 1 }) as Record<string, any>
     expect(second.results).toEqual([{ id: 'reply-comment', parentId: 'root-comment' }])
     expect(second.complete).toBe(true)
     expect(commentRequests).toHaveLength(2)

@@ -136,11 +136,11 @@ describe('Jira native clone and metadata contracts', () => {
         if (!tool) throw new Error(`Missing registered tool: ${name}`)
         return tool.execute(args, { name, callId: `test-${name}`, rootCallId: `test-${name}`, signal, deferContext() {}, concludeTurn() {} } as ToolRunContext)
       }
-      await run('jira_get_create_metadata', { projectKey: 'APP', issueTypeId: '10002' })
-      await run('jira_list_custom_field_options', { fieldId: 'customfield_10110', projectId: '10100', issueTypeId: '10002', page: 1, maxResults: 10 })
-      await run('jira_list_transitions', { issueKey: 'APP-1' })
-      await run('jira_delete_issue', { issueKey: 'APP-1' })
-      await run('jira_delete_issue', { issueKey: 'APP-1', deleteSubtasks: true })
+      await run('kanban_jira_get_create_metadata', { projectKey: 'APP', issueTypeId: '10002' })
+      await run('kanban_jira_list_custom_field_options', { fieldId: 'customfield_10110', projectId: '10100', issueTypeId: '10002', page: 1, maxResults: 10 })
+      await run('kanban_jira_list_transitions', { issueKey: 'APP-1' })
+      await run('kanban_jira_delete_issue', { issueKey: 'APP-1' })
+      await run('kanban_jira_delete_issue', { issueKey: 'APP-1', deleteSubtasks: true })
       expect(deletedIssues).toEqual([
         '/jira/rest/api/2/issue/APP-1',
         '/jira/rest/api/2/issue/APP-1?deleteSubtasks=true',

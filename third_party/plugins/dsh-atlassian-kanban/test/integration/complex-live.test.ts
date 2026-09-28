@@ -203,12 +203,12 @@ onlyBitbucket('Bitbucket complex fixture through the real DSH registry and ACP b
       confluence: { baseUrl: '', bearerToken: '', cql: [] },
     }
     await withBridge(config, [
-      'bitbucket_list_pull_request_changes', 'bitbucket_list_pull_request_commits', 'bitbucket_list_pull_request_comments',
-      'bitbucket_get_pull_request_comment', 'bitbucket_add_pull_request_comment', 'bitbucket_edit_pull_request_comment',
-      'bitbucket_delete_pull_request_comment', 'bitbucket_get_pull_request_diff', 'bitbucket_get_review_file',
+      'kanban_bitbucket_list_pull_request_changes', 'kanban_bitbucket_list_pull_request_commits', 'kanban_bitbucket_list_pull_request_comments',
+      'kanban_bitbucket_get_pull_request_comment', 'kanban_bitbucket_add_pull_request_comment', 'kanban_bitbucket_edit_pull_request_comment',
+      'kanban_bitbucket_delete_pull_request_comment', 'kanban_bitbucket_get_pull_request_diff', 'kanban_bitbucket_get_review_file',
     ], async (call, error) => {
       const common = { projectKey, repositorySlug, pullRequestId }
-      const changes = await walk(call, 'bitbucket_list_pull_request_changes', common, 'PR changes', 'cursor')
+      const changes = await walk(call, 'kanban_bitbucket_list_pull_request_changes', common, 'PR changes', 'cursor')
       const expectedChanges = requiredPositive(open.changedFiles ?? open.targetFiles, 'changedFiles')
       expect(changes.values.length).toBe(expectedChanges)
       expect(changes.pages.length).toBeGreaterThan(1)
@@ -220,27 +220,27 @@ onlyBitbucket('Bitbucket complex fixture through the real DSH registry and ACP b
       expect(new Set(changedPaths).size).toBe(changedPaths.length)
       expect(changedPaths).toContain(requiredText(open.longFilePath, 'longFilePath'))
 
-      const commits = await walk(call, 'bitbucket_list_pull_request_commits', common, 'PR commits', 'cursor')
+      const commits = await walk(call, 'kanban_bitbucket_list_pull_request_commits', common, 'PR commits', 'cursor')
       if (open.commits !== undefined) expect(commits.values.length).toBe(requiredPositive(open.commits, 'commits'))
       expect(commits.pages.length).toBeGreaterThan(1)
 
-      const comments = await walk(call, 'bitbucket_list_pull_request_comments', common, 'PR comments', 'cursor')
+      const comments = await walk(call, 'kanban_bitbucket_list_pull_request_comments', common, 'PR comments', 'cursor')
       const observedCommentIds = new Set(commentNodes(comments.values).map(row => row.id))
       for (const id of open.commentIds ?? []) expect(observedCommentIds.has(String(id)), `comment ${String(id)} appears across activity pages`).toBe(true)
       if (open.replyId != null) expect(observedCommentIds.has(String(open.replyId)), 'nested reply appears across activity pages').toBe(true)
       if (open.commentIds?.length > 3) expect(comments.pages.length).toBeGreaterThan(1)
       if (open.replyId != null) {
-        const reply = await call('bitbucket_get_pull_request_comment', { ...common, commentId: Number(open.replyId) })
+        const reply = await call('kanban_bitbucket_get_pull_request_comment', { ...common, commentId: Number(open.replyId) })
         expect(String(reply.id)).toBe(String(open.replyId))
         const expectedParentId = open.comments?.find((row: Json) => String(row.id) === String(open.replyId))?.parentId
         if (expectedParentId != null && reply.parent?.id != null) expect(String(reply.parent.id)).toBe(String(expectedParentId))
       }
       if (open.inlineCommentId != null && open.inlineCommentPath) {
-        const inline = await walk(call, 'bitbucket_list_pull_request_comments', { ...common, path: String(open.inlineCommentPath) }, 'inline PR comments', 'cursor')
+        const inline = await walk(call, 'kanban_bitbucket_list_pull_request_comments', { ...common, path: String(open.inlineCommentPath) }, 'inline PR comments', 'cursor')
         expect(commentNodes(inline.values).some(row => row.id === String(open.inlineCommentId))).toBe(true)
       }
 
-      const diff = await call('bitbucket_get_pull_request_diff', common)
+      const diff = await call('kanban_bitbucket_get_pull_request_diff', common)
       expect(typeof diff.complete).toBe('boolean')
       expect(typeof diff.serverTruncated).toBe('boolean')
       expect(diff.paged).toBe(false)
@@ -249,25 +249,25 @@ onlyBitbucket('Bitbucket complex fixture through the real DSH registry and ACP b
         expect(diff.complete).toBe(false)
         expect(typeof diff.nextAction).toBe('string')
       }
-      const fileDiff = await call('bitbucket_get_pull_request_diff', { ...common, path: requiredText(open.longFilePath, 'longFilePath'), contextLines: 3 })
+      const fileDiff = await call('kanban_bitbucket_get_pull_request_diff', { ...common, path: requiredText(open.longFilePath, 'longFilePath'), contextLines: 3 })
       expect(fileDiff.paged).toBe(false)
       expect(typeof fileDiff.complete).toBe('boolean')
       for (const renamed of open.renamedFiles ?? []) {
-        const renamedDiff = await call('bitbucket_get_pull_request_diff', { ...common, path: requiredText(renamed.path, 'renamed path'), srcPath: requiredText(renamed.srcPath, 'renamed srcPath'), contextLines: 3 })
+        const renamedDiff = await call('kanban_bitbucket_get_pull_request_diff', { ...common, path: requiredText(renamed.path, 'renamed path'), srcPath: requiredText(renamed.srcPath, 'renamed srcPath'), contextLines: 3 })
         expect(renamedDiff.path).toBe(renamed.path)
         expect(renamedDiff.srcPath).toBe(renamed.srcPath)
       }
 
       const at = requiredText(open.headSha, 'immutable headSha')
       const longFilePath = requiredText(open.longFilePath, 'longFilePath')
-      const first = await call('bitbucket_get_review_file', { projectKey, repositorySlug, path: longFilePath, at, start: 0, limit: 5 })
+      const first = await call('kanban_bitbucket_get_review_file', { projectKey, repositorySlug, path: longFilePath, at, start: 0, limit: 5 })
       expect(first.pageComplete).toBe(true)
       expect(first.complete).toBe(false)
       expect(Number.isSafeInteger(Number(first.nextStart))).toBe(true)
       const totalLines = requiredPositive(first.linePage?.totalLines, 'review file totalLines')
       expect(totalLines).toBeGreaterThan(5)
       expect(first.nextStart).toBe(5)
-      const tail = await call('bitbucket_get_review_file', { projectKey, repositorySlug, path: longFilePath, at, start: Math.max(0, totalLines - 20), limit: 20 })
+      const tail = await call('kanban_bitbucket_get_review_file', { projectKey, repositorySlug, path: longFilePath, at, start: Math.max(0, totalLines - 20), limit: 20 })
       expect(tail.complete).toBe(true)
       expect(tail.nextStart).toBeNull()
       expect(tail.linePage?.isLastPage).toBe(true)
@@ -279,25 +279,25 @@ onlyBitbucket('Bitbucket complex fixture through the real DSH registry and ACP b
       const updatedText = `${initialText} edited`
       let createdId: number | null = null
       try {
-        const created = await call('bitbucket_add_pull_request_comment', { ...common, text: initialText })
+        const created = await call('kanban_bitbucket_add_pull_request_comment', { ...common, text: initialText })
         createdId = requiredPositive(created.id, 'created comment id')
-        const listed = await walk(call, 'bitbucket_list_pull_request_comments', common, 'PR comments after create', 'cursor')
+        const listed = await walk(call, 'kanban_bitbucket_list_pull_request_comments', common, 'PR comments after create', 'cursor')
         expect(commentNodes(listed.values).some(row => row.id === String(createdId))).toBe(true)
-        const before = await call('bitbucket_get_pull_request_comment', { ...common, commentId: createdId })
+        const before = await call('kanban_bitbucket_get_pull_request_comment', { ...common, commentId: createdId })
         expect(before.text).toBe(initialText)
-        await call('bitbucket_edit_pull_request_comment', { ...common, commentId: String(createdId), text: updatedText, version: requiredNonNegative(before.version, 'comment version') })
-        const edited = await call('bitbucket_get_pull_request_comment', { ...common, commentId: createdId })
+        await call('kanban_bitbucket_edit_pull_request_comment', { ...common, commentId: String(createdId), text: updatedText, version: requiredNonNegative(before.version, 'comment version') })
+        const edited = await call('kanban_bitbucket_get_pull_request_comment', { ...common, commentId: createdId })
         expect(edited.text).toBe(updatedText)
         expect(Number(edited.version)).toBeGreaterThan(Number(before.version))
       } finally {
         if (createdId !== null) {
-          const current = await call('bitbucket_get_pull_request_comment', { ...common, commentId: createdId })
-          await call('bitbucket_delete_pull_request_comment', { ...common, commentId: String(createdId), version: requiredNonNegative(current.version, 'current comment version') })
+          const current = await call('kanban_bitbucket_get_pull_request_comment', { ...common, commentId: createdId })
+          await call('kanban_bitbucket_delete_pull_request_comment', { ...common, commentId: String(createdId), version: requiredNonNegative(current.version, 'current comment version') })
         }
       }
-      const deleted = await error('bitbucket_get_pull_request_comment', { ...common, commentId: createdId })
+      const deleted = await error('kanban_bitbucket_get_pull_request_comment', { ...common, commentId: createdId })
       expect(deleted).toMatchObject({ code: 'ATLASSIAN_HTTP_404', httpStatus: 404 })
-      const afterDelete = await walk(call, 'bitbucket_list_pull_request_comments', common, 'PR comments after delete', 'cursor')
+      const afterDelete = await walk(call, 'kanban_bitbucket_list_pull_request_comments', common, 'PR comments after delete', 'cursor')
       expect(commentNodes(afterDelete.values).some(row => row.id === String(createdId))).toBe(false)
     })
   }, 180_000)
@@ -327,17 +327,17 @@ onlyConfluence('Confluence complex fixture through the real DSH registry and ACP
       fileHostPath() { return undefined },
     }
     await withBridge(config, [
-      'confluence_list_descendants', 'confluence_get_page', 'confluence_list_comments', 'confluence_list_attachments',
-      'confluence_get_attachment', 'confluence_read_attachment', 'confluence_download_attachment',
+      'kanban_confluence_list_descendants', 'kanban_confluence_get_page', 'kanban_confluence_list_comments', 'kanban_confluence_list_attachments',
+      'kanban_confluence_get_attachment', 'kanban_confluence_read_attachment', 'kanban_confluence_download_attachment',
     ], async call => {
-      const descendants = await walk(call, 'confluence_list_descendants', { pageId: rootPageId }, 'Confluence descendants', 'start')
+      const descendants = await walk(call, 'kanban_confluence_list_descendants', { pageId: rootPageId }, 'Confluence descendants', 'start')
       const observedIds = descendants.values.map(row => String(row.id))
       expect(new Set(observedIds).size).toBe(observedIds.length)
       const expectedDescendantIds = expectedPages.map(page => String(page.id)).filter(id => id !== rootPageId)
       expect(new Set(observedIds)).toEqual(new Set(expectedDescendantIds))
       expect(descendants.pages.length).toBeGreaterThan(1)
       for (const page of expectedPages) {
-        const actual = await call('confluence_get_page', { pageId: String(page.id) })
+        const actual = await call('kanban_confluence_get_page', { pageId: String(page.id) })
         expect(String(actual.id)).toBe(String(page.id))
         expect(Number.isSafeInteger(Number(actual.version?.number))).toBe(true)
         if (page.parentId !== undefined && page.parentId !== null) {
@@ -347,7 +347,7 @@ onlyConfluence('Confluence complex fixture through the real DSH registry and ACP
       }
       const expectedComments = manifest.comments as Json[] | undefined
       if (Array.isArray(expectedComments) && expectedComments.length) {
-        const comments = await walk(call, 'confluence_list_comments', { pageId: rootPageId }, 'Confluence root comments', 'start')
+        const comments = await walk(call, 'kanban_confluence_list_comments', { pageId: rootPageId }, 'Confluence root comments', 'start')
         expect(new Set(comments.values.map(row => String(row.id)))).toEqual(new Set(expectedComments.map(row => String(row.id))))
         if (expectedComments.length > 3) expect(comments.pages.length).toBeGreaterThan(1)
       }
@@ -362,12 +362,12 @@ onlyConfluence('Confluence complex fixture through the real DSH registry and ACP
       for (const page of expectedPages) {
         const pageId = String(page.id)
         const expected = attachmentsByPage.get(pageId) ?? []
-        const listed = await walk(call, 'confluence_list_attachments', { pageId }, `attachments on ${pageId}`, 'start')
+        const listed = await walk(call, 'kanban_confluence_list_attachments', { pageId }, `attachments on ${pageId}`, 'start')
         expect(listed.values.length).toBe(expected.length)
         expect(new Set(listed.values.map(row => String(row.id)))).toEqual(new Set(expected.map(row => String(row.id))))
         if (expected.length > 3) expect(listed.pages.length).toBeGreaterThan(1)
         for (const attachment of expected) {
-          const metadata = await call('confluence_get_attachment', { attachmentId: String(attachment.id) })
+          const metadata = await call('kanban_confluence_get_attachment', { attachmentId: String(attachment.id) })
           expect(String(metadata.id)).toBe(String(attachment.id))
           expect(metadata.title).toBe(attachment.title)
           expect(Number.isSafeInteger(Number(metadata.version?.number))).toBe(true)
@@ -377,7 +377,7 @@ onlyConfluence('Confluence complex fixture through the real DSH registry and ACP
           const visited = new Set<number>()
           let completed = false
           for (let chunk = 0; chunk < 500; chunk += 1) {
-            const read = await call('confluence_read_attachment', { attachmentId: String(attachment.id), offset, maxChars: chunk === 0 ? 17 : 4096 })
+            const read = await call('kanban_confluence_read_attachment', { attachmentId: String(attachment.id), offset, maxChars: chunk === 0 ? 17 : 4096 })
             expect(read.supported).toBe(true)
             expect(typeof read.text).toBe('string')
             text += read.text
@@ -392,11 +392,11 @@ onlyConfluence('Confluence complex fixture through the real DSH registry and ACP
         }
       }
       const binaryId = requiredText(String(manifest.binaryAttachmentId ?? ''), 'binaryAttachmentId')
-      const binary = await call('confluence_read_attachment', { attachmentId: binaryId, offset: 0, maxChars: 64 })
+      const binary = await call('kanban_confluence_read_attachment', { attachmentId: binaryId, offset: 0, maxChars: 64 })
       expect(binary.supported).toBe(false)
       expect(typeof binary.reason).toBe('string')
       expect(JSON.stringify(binary)).not.toContain('base64')
-      const download = await call('confluence_download_attachment', { attachmentId: binaryId })
+      const download = await call('kanban_confluence_download_attachment', { attachmentId: binaryId })
       expect(download.available).toBe(true)
       expect(download.file?.attachmentId).toBe('complex-live-captured-file')
       const binaryFixture = expectedAttachments.find(item => String(item.id) === binaryId)

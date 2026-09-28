@@ -57,7 +57,7 @@ describe('Bitbucket pull request comment listing', () => {
     confluence: { baseUrl: '', bearerToken: '', cql: [] },
   } satisfies AtlassianKanbanConfig))
 
-  async function run(args: Record<string, unknown>, toolName = 'bitbucket_list_pull_request_comments') {
+  async function run(args: Record<string, unknown>, toolName = 'kanban_bitbucket_list_pull_request_comments') {
     const ctx = new Context()
     await ctx.plugin(SystemPrompt, {})
     await ctx.plugin(ToolRuntime)
@@ -93,7 +93,7 @@ describe('Bitbucket pull request comment listing', () => {
   })
 
   it('reads a comment by id to retrieve its current version before mutation', async () => {
-    const result = await run({ commentId: 31 }, 'bitbucket_get_pull_request_comment')
+    const result = await run({ commentId: 31 }, 'kanban_bitbucket_get_pull_request_comment')
     expect(requestUrls[0]).toBe('/prefix/rest/api/1.0/projects/ENG/repos/site/pull-requests/7/comments/31')
     expect(result).toMatchObject({ id: 31, version: 4 })
   })

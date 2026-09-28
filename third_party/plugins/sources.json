@@ -4,10 +4,10 @@
   "plugins": [
     {
       "name": "@zaimokuza/dsh-acp-adapter",
-      "version": "0.1.7-rc.2.3",
+      "version": "0.1.7-rc.2.4",
       "source": "third_party/plugins/dsh-acp-adapter",
       "origin": {
-        "commit": "98754d33b8eee21c6203bde948767ead1b6852c4",
+        "commit": "6d25e52a83618809d28467b618ebd9d52a24e7b4",
         "repository": "https://github.com/zaimokuza-yoshiteru/dsh-acp-adapter",
         "changes": [
           "Use the source assets/registry snapshot without a network refresh.",
@@ -20,8 +20,8 @@
         ]
       },
       "sourceIncludesLocalChanges": true,
-      "sourceSha256": "0ce8710fd38a53369bb5807a64342f5526f52286a722991b12fef44dcc83fae0",
-      "fileCount": 298,
+      "sourceSha256": "198eb71da1a86a12156028ffb997bcf63cb8e9d96361b7c818f9e97bb8bbadf0",
+      "fileCount": 300,
       "retainedDocuments": [
         {
           "path": "LICENSE",
@@ -110,7 +110,7 @@
     },
     {
       "name": "dsh-atlassian-kanban",
-      "version": "0.1.0-alpha.8",
+      "version": "0.1.0-alpha.9",
       "source": "third_party/plugins/dsh-atlassian-kanban",
       "origin": {
         "commit": null,
@@ -121,12 +121,16 @@
           "Add package entry validation and independent test configuration and dependency lock.",
           "Require explicit environment variables for private live-test fixture files.",
           "Remove the unused aggregate settings writer and resource-cache variables; test the production settings writer.",
-          "Use host attachment interfaces instead of any without changing download or TLS behavior."
+          "Use host attachment interfaces instead of any without changing download or TLS behavior.",
+          "Show connection success without the authenticated account name.",
+          "Prefix all tools with kanban_ and update tool guidance and ACP bridge tests.",
+          "Add resizable single-line Jira and Bitbucket tables with local column preferences and full-text tooltips.",
+          "Declare the MCP SDK used directly by integration tests."
         ]
       },
       "sourceIncludesLocalChanges": true,
-      "sourceSha256": "2b236b65098ac9fca34ba0d44e14698e34344d3a7c94c3516b07282446042605",
-      "fileCount": 59,
+      "sourceSha256": "348ad2616db7ffab7114adc4b373e13af04986ce144a3e74208de1076ab36d7c",
+      "fileCount": 60,
       "retainedDocuments": [],
       "excluded": [
         "README and ordinary development/research/release documents",
