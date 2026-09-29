@@ -38,7 +38,7 @@ if (!executable) {
     : join(unpacked, 'DSH Desktop.app', 'Contents', 'MacOS', 'DSH Desktop')
 }
 const home = await mkdtemp(join(output, 'profile-'))
-const dshHome = target === 'win-x64' ? join(home, '.dsh') : home
+const dshHome = target === 'win-x64' ? join(home, '.dsh-desktop') : home
 const profile = join(dshHome, 'profiles', 'desktop')
 report.homeMode = target === 'win-x64' ? 'default-user-home' : 'explicit-dsh-home'
 await mkdir(profile, { recursive: true })
