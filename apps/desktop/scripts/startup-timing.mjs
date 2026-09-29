@@ -1,7 +1,7 @@
 /** Measure the shipped GUI from process launch through a successful Settings interaction. */
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { createReadStream } from 'node:fs'
+import { createReadStream, existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { join, resolve } from 'node:path'
@@ -41,9 +41,14 @@ const home = await mkdtemp(join(output, 'profile-'))
 const dshHome = target === 'win-x64' ? join(home, '.dsh-desktop') : home
 const profile = join(dshHome, 'profiles', 'desktop')
 report.homeMode = target === 'win-x64' ? 'default-user-home' : 'explicit-dsh-home'
-await mkdir(profile, { recursive: true })
-// A test-owned ephemeral Host port avoids collisions without replacing the shipped launcher.
-await writeFile(join(profile, 'cordis.patch.yml'), '- id: webserver\n  config:\n    host: 127.0.0.1\n    port: 0\n')
+if (target === 'win-x64') {
+  report.initialDirectories = { dshExists: existsSync(join(home, '.dsh')), desktopExists: existsSync(dshHome) }
+  assert.deepEqual(report.initialDirectories, { dshExists: false, desktopExists: false })
+} else {
+  await mkdir(profile, { recursive: true })
+  // A test-owned ephemeral Host port avoids collisions without replacing the shipped launcher.
+  await writeFile(join(profile, 'cordis.patch.yml'), '- id: webserver\n  config:\n    host: 127.0.0.1\n    port: 0\n')
+}
 const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/KEY|SECRET|TOKEN|PASSWORD|^ELECTRON_RUN_AS_NODE$|^NODE_OPTIONS$|^NODE_PATH$/iu.test(name)))
 Object.assign(env, { DSH_HOME: home, DSH_TELEMETRY_MODE: 'DISABLED', DSH_DESKTOP_OPEN_DEVTOOLS: '0',
   HOME: home, USERPROFILE: home, ZDOTDIR: home, DSH_DESKTOP_DIAGNOSTIC_FILE: join(output, 'launch-error.txt'),
