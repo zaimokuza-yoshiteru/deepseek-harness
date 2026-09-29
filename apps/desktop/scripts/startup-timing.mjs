@@ -90,7 +90,34 @@ async function verifyPlugins(app, page, run, kind) {
     assert.equal(bundle.error, undefined, `${name} has a loading error`)
   }
   await expect(page.getByRole('button', { name: /^(Atlassian Kanban|Atlassian 看板)$/u })).toBeVisible()
+  if (kind === 'plugin-list-timeout-retry') {
+    await page.evaluate(() => {
+      const original = window.fetch
+      window.__DSH_CI_TIMEOUT_HITS__ = 0
+      window.fetch = async (...args) => {
+        const input = args[0] instanceof Request ? args[0].url : String(args[0])
+        if (input.includes('api/pluginManager/listBundles')) {
+          window.fetch = original
+          window.__DSH_CI_TIMEOUT_HITS__++
+          await new Promise(resolve => setTimeout(resolve, 200))
+          throw new DOMException('CI injected list request timeout', 'TimeoutError')
+        }
+        return original(...args)
+      }
+    })
+  }
   await page.getByRole('button', { name: /^(Plugins|插件)$/u, exact: true }).click()
+  if (kind === 'plugin-list-timeout-retry') {
+    const retry = page.getByRole('button', { name: /^(Retry|重试)$/u, exact: true })
+    await expect(retry).toBeVisible()
+    await expect(page.locator('[data-plugin-group="official"]')).toBeVisible()
+    for (const name of pluginNames) await expect(page.locator(`[data-plugin-package="${name}"]`)).toHaveCount(0)
+    assert.equal(await page.evaluate(() => window.__DSH_CI_TIMEOUT_HITS__), 1)
+    await retry.scrollIntoViewIfNeeded()
+    await page.screenshot({ path: join(output, `${kind}-injected-failure.png`) })
+    run.injectedFailure = { kind: 'synthetic-fetch-TimeoutError', officialVisible: true, packageCards: 0 }
+    await retry.click()
+  }
   for (const name of pluginNames) {
     const card = page.locator(`[data-plugin-package="${name}"]`)
     await expect(card).toBeVisible()
@@ -103,7 +130,7 @@ async function verifyPlugins(app, page, run, kind) {
   await save()
 }
 const scenarios = ['fresh-profile', 'same-profile-relaunch', ...(target === 'win-x64' ? [
-  'delete-both', 'delete-dsh-only', 'delete-desktop-only', 'unicode-space-app-path', 'deep-app-path',
+  'delete-both', 'delete-dsh-only', 'delete-desktop-only', 'plugin-list-timeout-retry', 'unicode-space-app-path', 'deep-app-path',
 ] : [])]
 const legacyHome = join(home, '.dsh')
 const legacySentinel = join(legacyHome, 'ci-sentinel.txt')
@@ -148,7 +175,7 @@ for (const kind of scenarios) {
   const mark = name => { run.timings[name] = elapsed(); console.log(JSON.stringify({ kind, stage: name, ms: run.timings[name] })) }
   const requests = new Map()
   try {
-    app = await _electron.launch({ executablePath: executable, env, args: ['--lang=en-US'], timeout: 300_000 })
+    app = await _electron.launch({ executablePath: executable, cwd: home, env, args: ['--lang=en-US'], timeout: 300_000 })
     child = app.process()
     const handleWelcome = candidate => {
       if (seenWindows.has(candidate)) return
