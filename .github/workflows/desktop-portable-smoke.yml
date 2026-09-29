@@ -65,4 +65,5 @@ jobs:
           path: |
             .artifacts/startup-timing/result.json
             .artifacts/startup-timing/*.png
+            .artifacts/startup-timing/launch-error.txt
           if-no-files-found: warn

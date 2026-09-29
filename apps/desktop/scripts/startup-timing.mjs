@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { mkdir, mkdtemp, readdir, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { join, resolve } from 'node:path'
 import { once } from 'node:events'
@@ -38,7 +38,9 @@ if (!executable) {
     : join(unpacked, 'DSH Desktop.app', 'Contents', 'MacOS', 'DSH Desktop')
 }
 const home = await mkdtemp(join(output, 'profile-'))
-const profile = join(home, 'profiles', 'desktop')
+const dshHome = target === 'win-x64' ? join(home, '.dsh') : home
+const profile = join(dshHome, 'profiles', 'desktop')
+report.homeMode = target === 'win-x64' ? 'default-user-home' : 'explicit-dsh-home'
 await mkdir(profile, { recursive: true })
 // A test-owned ephemeral Host port avoids collisions without replacing the shipped launcher.
 await writeFile(join(profile, 'cordis.patch.yml'), '- id: webserver\n  config:\n    host: 127.0.0.1\n    port: 0\n')
@@ -46,7 +48,54 @@ const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/
 Object.assign(env, { DSH_HOME: home, DSH_TELEMETRY_MODE: 'DISABLED', DSH_DESKTOP_OPEN_DEVTOOLS: '0',
   HOME: home, USERPROFILE: home, ZDOTDIR: home, DSH_DESKTOP_DIAGNOSTIC_FILE: join(output, 'launch-error.txt'),
   npm_config_registry: 'http://127.0.0.1:1/unreachable/', npm_config_userconfig: join(home, 'absent.npmrc') })
+// Exercise the ordinary Windows launch path without a preconfigured DSH_HOME.
+if (target === 'win-x64') delete env.DSH_HOME
 const save = () => writeFile(join(output, 'result.json'), JSON.stringify(report, null, 2) + '\n')
+const pluginNames = ['@zaimokuza/dsh-acp-adapter', '@zaimokuza/dsh-agent-teams-office', 'dsh-boot-ocbc', 'dsh-atlassian-kanban']
+async function verifyPlugins(app, page, run, kind) {
+  const resources = await app.evaluate(() => process.resourcesPath)
+  const seed = JSON.parse(await readFile(join(resources, 'plugin-seed', 'package.json'), 'utf8'))
+  const installed = JSON.parse(await readFile(join(profile, 'package.json'), 'utf8'))
+  run.plugins = { seed: Object.keys(seed.dependencies ?? {}), profileDependencies: Object.keys(installed.dependencies ?? {}),
+    profileBundles: installed.dsh?.profile?.bundles ?? [], host: [], cards: [] }
+  await save()
+  for (const name of pluginNames) {
+    assert.ok(run.plugins.seed.includes(name), `Release archive is missing ${name}`)
+    assert.ok(run.plugins.profileDependencies.includes(name), `First startup did not install ${name}`)
+    assert.ok(run.plugins.profileBundles.includes(name), `First startup did not enable ${name}`)
+    const pkg = JSON.parse(await readFile(join(profile, 'node_modules', name, 'package.json'), 'utf8'))
+    assert.equal(pkg.name, name)
+  }
+  const bundles = await page.evaluate(async () => {
+    const method = 'pluginManager/listBundles'
+    const response = await fetch(`/api/${method}`, { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'client-request', rpcId: 'startup-plugins', method, payload: { args: {} } }) })
+    if (!response.ok) throw new Error(`Plugin inventory HTTP ${response.status}`)
+    const value = await response.json()
+    if (!value.result?.ok) throw new Error('Plugin inventory RPC failed')
+    return value.result.value
+  })
+  run.plugins.host = bundles.filter(bundle => pluginNames.includes(bundle.name))
+    .map(({ name, version, enabled, error }) => ({ name, version, enabled, error }))
+  await save()
+  for (const name of pluginNames) {
+    const bundle = run.plugins.host.find(bundle => bundle.name === name)
+    assert.ok(bundle, `Running desktop host is missing ${name}`)
+    assert.equal(bundle.enabled, true, `${name} is disabled`)
+    assert.equal(bundle.error, undefined, `${name} has a loading error`)
+  }
+  await expect(page.getByRole('button', { name: /^(Atlassian Kanban|Atlassian 看板)$/u })).toBeVisible()
+  await page.getByRole('button', { name: /^(Plugins|插件)$/u, exact: true }).click()
+  for (const name of pluginNames) {
+    const card = page.locator(`[data-plugin-package="${name}"]`)
+    await expect(card).toBeVisible()
+    await expect(card).not.toHaveAttribute('data-plugin-status', 'problem')
+    run.plugins.cards.push(name)
+  }
+  await page.screenshot({ path: join(output, `${kind}-plugins.png`), fullPage: true })
+  run.plugins.passed = true
+  await save()
+}
 for (const kind of ['fresh-profile', 'same-profile-relaunch']) {
   const run = { kind, timings: {}, errors: [], requests: [] }
   report.runs.push(run)
@@ -116,6 +165,7 @@ for (const kind of ['fresh-profile', 'same-profile-relaunch']) {
       .some(window => window.webContents.getURL().startsWith('dsh-app://app/') && window.isVisible())),
       { timeout: 300_000, message: 'The workspace must be visible after startup' }).toBe(true)
     mark('workspaceVisibleMs')
+    await verifyPlugins(app, page, run, kind)
     await settingsLauncher.click()
     if (!intranet) await page.getByRole('menuitem', { name: /^(Settings|设置)$/u, exact: true }).click()
     await page.getByRole('dialog').getByRole('button', { name: /^(General|通用设置)$/u, exact: true }).waitFor({ state: 'visible' })
