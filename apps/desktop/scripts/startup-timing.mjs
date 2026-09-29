@@ -2,9 +2,9 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { createReadStream, existsSync } from 'node:fs'
-import { mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { once } from 'node:events'
 
 const desktopRequire = createRequire(new URL('../package.json', import.meta.url))
@@ -97,13 +97,47 @@ async function verifyPlugins(app, page, run, kind) {
     await expect(card).not.toHaveAttribute('data-plugin-status', 'problem')
     run.plugins.cards.push(name)
   }
+  await page.locator('[data-plugin-group="bundles"]').scrollIntoViewIfNeeded()
   await page.screenshot({ path: join(output, `${kind}-plugins.png`), fullPage: true })
   run.plugins.passed = true
   await save()
 }
-for (const kind of ['fresh-profile', 'same-profile-relaunch']) {
+const scenarios = ['fresh-profile', 'same-profile-relaunch', ...(target === 'win-x64' ? [
+  'delete-both', 'delete-dsh-only', 'delete-desktop-only', 'unicode-space-app-path', 'deep-app-path',
+] : [])]
+const legacyHome = join(home, '.dsh')
+const legacySentinel = join(legacyHome, 'ci-sentinel.txt')
+for (const kind of scenarios) {
   const run = { kind, timings: {}, errors: [], requests: [] }
   report.runs.push(run)
+  // Every preceding run must pass UI checks and fully exit before touching its test-owned state.
+  if (kind.startsWith('delete-')) {
+    assert.ok(report.runs.at(-2)?.passed && report.runs.at(-2)?.exit?.code === 0)
+    await mkdir(legacyHome, { recursive: true })
+    await writeFile(legacySentinel, 'CI legacy directory preservation check\n')
+    const manifestBefore = await readFile(join(profile, 'package.json'), 'utf8')
+    const removed = kind === 'delete-both' ? [legacyHome, dshHome] : [kind === 'delete-dsh-only' ? legacyHome : dshHome]
+    for (const directory of removed) {
+      assert.equal(dirname(directory), home)
+      await rm(directory, { recursive: true, force: false, maxRetries: 5, retryDelay: 200 })
+      assert.equal(existsSync(directory), false)
+    }
+    if (kind === 'delete-dsh-only') assert.equal(await readFile(join(profile, 'package.json'), 'utf8'), manifestBefore)
+    if (kind === 'delete-desktop-only') assert.equal(await readFile(legacySentinel, 'utf8'), 'CI legacy directory preservation check\n')
+    run.removedDirectories = removed.map(directory => directory === legacyHome ? '.dsh' : '.dsh-desktop')
+  }
+  if (kind.endsWith('-app-path')) {
+    assert.ok(report.runs.at(-2)?.passed && report.runs.at(-2)?.exit?.code === 0)
+    const parent = kind === 'unicode-space-app-path' ? join(output, '企业应用 带空格')
+      : join(output, 'deep-path', ...Array.from({ length: 6 }, (_, i) => `level-${i}-abcdefghijklm`))
+    await mkdir(parent, { recursive: true })
+    const destination = join(parent, 'DSH Desktop')
+    await rename(dirname(executable), destination)
+    executable = join(destination, 'DSH Desktop.exe')
+    await rm(dshHome, { recursive: true, force: false, maxRetries: 5, retryDelay: 200 })
+  }
+  run.beforeLaunch = { dshExists: existsSync(legacyHome), desktopExists: existsSync(dshHome), executable, executablePathLength: executable.length }
+  await save()
   let app, page, child, firstScreenshot
   let stopping = false
   const welcomeTasks = []
@@ -186,6 +220,7 @@ for (const kind of ['fresh-profile', 'same-profile-relaunch']) {
     assert.equal(run.renderer.bootPagePresent, false)
     await page.screenshot({ path: join(output, `${kind}-interactive.png`), timeout: 15_000 })
     assert.deepEqual(run.errors, [], 'Renderer exceptions or failed requests must be investigated')
+    if (kind === 'delete-desktop-only') assert.equal(await readFile(legacySentinel, 'utf8'), 'CI legacy directory preservation check\n')
     run.passed = true
   } catch (error) {
     run.passed = false
