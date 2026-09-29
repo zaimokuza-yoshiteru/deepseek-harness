@@ -1,3 +1,3 @@
 import { buildPlugins } from '../../../scripts/build-plugins.mjs'
 
-await buildPlugins()
+await buildPlugins({ desktopOnly: true })

@@ -94,8 +94,8 @@ export async function verifyPluginArchive(archive, expected) {
   return manifest
 }
 
-export async function buildPlugins({ install = true, test = false } = {}) {
-  const config = JSON.parse(readFileSync(join(ROOT, 'apps/desktop/release-plugins.json'), 'utf8'))
+export async function buildPlugins({ install = true, test = false, desktopOnly = false } = {}) {
+  const config = JSON.parse(readFileSync(join(ROOT, 'apps/desktop/src/release-plugins.json'), 'utf8'))
   mkdirSync(PLUGIN_OUTPUT, { recursive: true })
   // Invalidate the previous result before starting any work.
   for (const file of ['inputs.json', 'manifest.json']) rmSync(join(PLUGIN_OUTPUT, file), { force: true })
@@ -104,7 +104,8 @@ export async function buildPlugins({ install = true, test = false } = {}) {
   const registry = process.env.DSH_DESKTOP_NPM_REGISTRY
   if (registry) environment.npm_config_registry = registry
   const records = []
-  for (const plugin of config.plugins) {
+  const selected = desktopOnly ? config.plugins.filter(plugin => plugin.desktopBundle !== false) : config.plugins
+  for (const plugin of selected) {
     const directory = resolve(ROOT, plugin.source)
     if (!directory.startsWith(join(ROOT, 'third_party/plugins') + sep)) throw new Error(`Invalid plugin source: ${plugin.source}`)
     const pkg = JSON.parse(readFileSync(join(directory, 'package.json'), 'utf8'))
@@ -141,6 +142,6 @@ export async function buildPlugins({ install = true, test = false } = {}) {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const { values } = parseArgs({ options: { 'skip-install': { type: 'boolean', default: false }, test: { type: 'boolean', default: false } } })
-  await buildPlugins({ install: !values['skip-install'], test: values.test })
+  const { values } = parseArgs({ options: { 'skip-install': { type: 'boolean', default: false }, test: { type: 'boolean', default: false }, 'desktop-only': { type: 'boolean', default: false } } })
+  await buildPlugins({ install: !values['skip-install'], test: values.test, desktopOnly: values['desktop-only'] })
 }

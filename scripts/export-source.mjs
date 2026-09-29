@@ -22,7 +22,7 @@ const SECRET_CONTENT = /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|(?<![A
 // These exact test files exercise secret redaction with synthetic values. Any byte change is scanned normally.
 const REVIEWED_SECRET_TEST_FIXTURES = new Map([
   ['third_party/plugins/dsh-acp-adapter/test/unit/domain/observability/redaction.spec.ts', 'd8cbf34820fa5d01eb1e18ebc09248334602c5c606705d8778f651bbe44b9fef'],
-  ['third_party/plugins/dsh-acp-adapter/test/unit/runtime/stderr.spec.ts', '697c20502ca138041bcb69c3a4968e9a9eb4d6ae549257051aafde30566c8704'],
+  ['third_party/plugins/dsh-acp-adapter/test/unit/runtime/stderr.spec.ts', '41255f5d8d6340b5205f051f7ce44139f852ff68425f9bb918493b5850841b64'],
 ])
 
 function sourceAllowed(path, withTests) {

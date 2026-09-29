@@ -1,6 +1,8 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
+import { ToolCallId } from '@deepseek-ai/dsh-llm'
+import type { UserMessage } from '@deepseek-ai/dsh-llm'
 import SessionStore, { SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
 import type { Session } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
@@ -13,10 +15,16 @@ import { sessionFactsSchema } from '../../../src/domain/session/session-facts.ts
 import type { AcpReplayPayloadV1 } from '../../../src/domain/session/acp-replay-payload.ts'
 
 const replay = (owner: string, agent = `agent-${owner}`): AcpReplayPayloadV1 => ({
-  kind: 'dsh-acp', version: 1, ownerDshSessionId: owner,
-  profileId: 'codex', profileGeneration: 2, agentSessionId: agent,
-  bindingEpoch: 2, launchFingerprint: 'fingerprint',
-  committedPromptOrdinal: 3, committedActivitySeq: 8,
+  kind: 'dsh-acp',
+  version: 1,
+  ownerDshSessionId: owner,
+  profileId: 'codex',
+  profileGeneration: 2,
+  agentSessionId: agent,
+  bindingEpoch: 2,
+  launchFingerprint: 'fingerprint',
+  committedPromptOrdinal: 3,
+  committedActivitySeq: 8,
 })
 
 const contexts: Context[] = []
@@ -46,11 +54,18 @@ function appendUserStep(session: Session, turn: number, step: number, text: stri
   return session.append('user/message', user(text), { surfaceOp: 'append' })
 }
 
-function appendReplay(session: Session, turn: number, step: number, payload: AcpReplayPayloadV1, extra: Record<string, unknown> = {}) {
+function appendReplay(
+  session: Session,
+  turn: number,
+  step: number,
+  payload: AcpReplayPayloadV1,
+  extra: Record<string, unknown> = {},
+) {
   const message = createAssistantMessage({
     content: [{ type: 'text', text: 'answer must not enter the projection' }],
     source: {
-      provider: 'acp', model: 'codex',
+      provider: 'acp',
+      model: 'codex',
       replayState: { response: { ...payload, ...extra } } as never,
     },
   })
@@ -77,7 +92,9 @@ describe('ACP execution SessionProjection integration', () => {
     const first = appendUserStep(session, 1, 0, 'first input')
     let facts = readSessionFacts(ctx, session)
     expect(facts).toMatchObject({
-      turnOpen: true, turnSeen: true, hasSemanticHistory: true,
+      turnOpen: true,
+      turnSeen: true,
+      hasSemanticHistory: true,
       priorSemanticHistory: false,
       openSteps: [{ turn: 1, step: 0, startSeq: first.seq - 1, messageIds: [first.data.id] }],
     })
@@ -89,6 +106,86 @@ describe('ACP execution SessionProjection integration', () => {
     expect(facts.turnOpen).toBe(true)
     expect(facts.priorSemanticHistory).toBe(true)
     expect(facts.openSteps).toEqual([])
+  })
+
+  it('projects current DSH snapshots from the effective surface without older history', async () => {
+    const ctx = await harness()
+    const session = ctx.sessions.create(SessionId('facts-model-context'))
+    const add = (kind: string, text: string) => {
+      const message = createUserMessage({
+        content: [{ type: 'text', text }],
+        source: { kind, ...(kind === 'skill-catalog' ? { form: 'catalog', entries: [] } : {}) } as never,
+      })
+      session.append('user/message', message, { surfaceOp: 'append' })
+    }
+    add('skill-catalog', 'Old catalog')
+    add('user', 'Earlier native request')
+    add('skill-catalog', 'No skills are currently available through the `skill` tool.')
+    add('runtime-context', 'Mode: read-only.')
+
+    // This harness has no current Agent/tool entry point, so a retained catalog
+    // cannot be treated as current even though it remains on the session surface.
+    expect(acpSessionView(ctx, session)?.currentModelContextSnapshots?.()).toEqual([
+      expect.objectContaining({ source: 'runtime-context', text: 'Mode: read-only.' }),
+    ])
+  })
+
+  it('watches only live user and pending-question replies in nextStep', async () => {
+    const ctx = await harness()
+    const session = ctx.sessions.create(SessionId('facts-steering-sources'))
+    const inbox: { nextStep: UserMessage[]; nextTurn: UserMessage[] } = { nextStep: [], nextTurn: [] }
+    const agent = { id: session.id, session, inbox }
+    ctx.provide('agents', { get: (id: string) => (id === agent.id ? agent : undefined) } as never)
+    const listener = vi.fn()
+    const stop = acpSessionView(ctx, session)?.watchSteering?.(listener)
+
+    const schedule = createUserMessage({
+      content: [{ type: 'text', text: 'scheduled reminder' }],
+      source: { kind: 'schedule' } as never,
+    })
+    agent.inbox.nextStep.push(schedule)
+    ctx.emit('agent/inbox/inserted', { agent, message: schedule } as never)
+    await Promise.resolve()
+    expect(listener).not.toHaveBeenCalled()
+
+    agent.inbox.nextStep.splice(0)
+    const userReply = createUserMessage({
+      content: [{ type: 'text', text: 'ordinary reply' }],
+      source: { kind: 'user' },
+    })
+    agent.inbox.nextStep.push(userReply)
+    ctx.emit('agent/inbox/inserted', { agent, message: userReply } as never)
+    agent.inbox.nextStep.splice(0)
+    await Promise.resolve()
+    expect(listener).not.toHaveBeenCalled()
+
+    agent.inbox.nextStep.push(userReply)
+    ctx.emit('agent/inbox/inserted', { agent, message: userReply } as never)
+    await Promise.resolve()
+    expect(listener).toHaveBeenCalledOnce()
+
+    listener.mockClear()
+    agent.inbox.nextStep.splice(0)
+    const lateReply = createUserMessage({
+      content: [{ type: 'text', text: 'answer_to_pending_question' }],
+      source: { kind: 'user-question-reply', callId: ToolCallId('same-call-id'), outcome: 'answered' },
+    })
+    agent.inbox.nextTurn.push(lateReply)
+    ctx.emit('agent/inbox/inserted', { agent, message: lateReply } as never)
+    await Promise.resolve()
+    expect(listener).not.toHaveBeenCalled()
+
+    agent.inbox.nextTurn.splice(0)
+    agent.inbox.nextStep.push(lateReply)
+    ctx.emit('agent/inbox/inserted', { agent, message: lateReply } as never)
+    await Promise.resolve()
+    expect(listener).toHaveBeenCalledOnce()
+
+    listener.mockClear()
+    stop?.()
+    ctx.emit('agent/inbox/inserted', { agent, message: lateReply } as never)
+    await Promise.resolve()
+    expect(listener).not.toHaveBeenCalled()
   })
 
   it('checkpoints and cold-restores the same state over a suffix', async () => {
@@ -150,13 +247,17 @@ describe('ACP execution SessionProjection integration', () => {
     const watermark = checkpointSeq(checkpoint)
     session.append('turn/start', { turn: 2 })
 
-    expect(() => ctx.sessionProjections.restore(
-      checkpoint, [], SessionLogOffset(watermark), session.header, SessionLogOffset(0),
-    )).toThrow(/re-read from seq 0/)
+    expect(() =>
+      ctx.sessionProjections.restore(checkpoint, [], SessionLogOffset(watermark), session.header, SessionLogOffset(0)),
+    ).toThrow(/re-read from seq 0/)
 
     const truncated = session.snapshotEvents(SessionLogOffset(0), SessionLogOffset(watermark - 1))
     const restored = ctx.sessionProjections.restore(
-      checkpoint, truncated, SessionLogOffset(0), session.header, SessionLogOffset(0),
+      checkpoint,
+      truncated,
+      SessionLogOffset(0),
+      session.header,
+      SessionLogOffset(0),
     )
     expect(restored.snapshot.asOfSeq).toBe(truncated.at(-1)?.seq)
     expect(restored.checkpoint.acpExecution?.seq).toBe(truncated.at(-1)?.seq)

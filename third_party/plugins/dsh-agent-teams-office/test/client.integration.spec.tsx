@@ -31,7 +31,9 @@ afterEach(async () => { await runtime?.dispose(); runtime = null; scenes.length 
 async function setup(enabled = true) {
   Element.prototype.getAnimations = () => [];
   const current = await SlotTestRuntime.create(); runtime = current;
-  current.ctx.provide('layout', stub<ClientContext['layout']>({ openRightbar() {}, closeRightbar() {} }));
+  const panelInfo = (current as unknown as { panelInfo?: ClientContext['layout']['panelInfo'] }).panelInfo
+    ?? { getSnapshot: () => ({ activePanelId: null }), subscribe: () => () => {} };
+  current.ctx.provide('layout', stub<ClientContext['layout']>({ panelInfo, openRightbar() {}, closeRightbar() {} }));
   current.ctx.provide('resources', stub<Resources>({ pin() {} }));
   const locale = new LocaleRuntime(current.ctx); current.ctx.provide('locale', locale); current.slots.installLocale(locale);
   await current.declare({ rightbar: { kind: 'single', scope: 'root' } });
@@ -121,8 +123,7 @@ it('disabled Agent Teams leaves no Office entry', async () => {
   expect(scenes).toHaveLength(0);
 });
 
-// DSH 0.1.7 retains visited tabs across main-session changes.
-it.skipIf(!sidebarInject.includes('uiSession'))('switching sessions and hiding the sidebar preserves the office and suspends its work', async () => {
+it.skipIf(!sidebarInject.includes('uiSession'))('switching sessions, main panels, and hiding the sidebar preserves the office and suspends its work', async () => {
   const h = await setup();
   await act(async () => { h.controller.openTab('dsh-agent-teams-office'); });
   await waitFor(() => expect(scenes).toHaveLength(1));
@@ -148,6 +149,22 @@ it.skipIf(!sidebarInject.includes('uiSession'))('switching sessions and hiding t
   expect(document.querySelector('canvas')).toBe(first.canvas);
   expect(first.camera.zoom).toBe(1.4); expect(first.tick).toBe(42);
   expect(within(document.body).getByRole('button', { name: /聚焦|Focus/ })).toBeTruthy();
+  const panelInfo = (h.runtime as unknown as { panelInfo?: { set(value: { activePanelId: string | null }): void } }).panelInfo;
+  if (panelInfo) {
+    const beforePanel = leadCalls();
+    await act(async () => { panelInfo.set({ activePanelId: 'fixture/main' }); });
+    expect(first.setActive).toHaveBeenLastCalledWith(false);
+    expect(first.destroy).not.toHaveBeenCalled();
+    expect(h.controller.mounted.getSnapshot()).toBeUndefined();
+    await new Promise(resolve => setTimeout(resolve, 1600));
+    expect(leadCalls()).toBe(beforePanel);
+    await act(async () => { panelInfo.set({ activePanelId: null }); });
+    expect(first.setActive).toHaveBeenLastCalledWith(true);
+    expect(h.controller.mounted.getSnapshot()).toBe('lead');
+    expect(scenes).toHaveLength(1);
+    expect(document.querySelector('canvas')).toBe(first.canvas);
+    expect(first.camera.zoom).toBe(1.4); expect(first.tick).toBe(42);
+  }
   await act(async () => { h.controller.dock(findTabPane(h.layout(), tab.id).id); h.controller.close(tab.id); });
   expect(first.destroy).toHaveBeenCalledOnce();
   expect(document.querySelector('canvas')).toBeNull();

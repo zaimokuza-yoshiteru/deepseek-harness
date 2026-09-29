@@ -1,0 +1,96 @@
+import OTel from '@deepseek-ai/dsh-otel'
+/** Desktop-only collector policy and bounded shutdown against an unresponsive receiver. */
+import { createServer } from 'node:http'
+import { once } from 'node:events'
+import { fileURLToPath } from 'node:url'
+import { Context } from '@deepseek-ai/cordis'
+import Loader from '@deepseek-ai/cordis-plugin-loader'
+import { loadOverlayPatches } from '@deepseek-ai/dsh-app-boot'
+import * as Telemetry from '@deepseek-ai/dsh-host-product-telemetry-otel'
+import Analytics from '@deepseek-ai/dsh-client-product-analytics'
+import { afterEach, expect, it, onTestFinished, vi } from 'vitest'
+
+afterEach(() => { vi.unstubAllEnvs() })
+
+it.each([
+  { profile: 'desktop', intranet: false },
+  { profile: 'web', intranet: false },
+  { profile: 'desktop', intranet: true },
+])('limits collection and its shutdown to the Desktop launch: $profile / intranet=$intranet', async ({ profile, intranet }) => {
+  const received: string[] = []
+  const gotRequest = Promise.withResolvers<undefined>()
+  const server = createServer((req) => { received.push(req.url ?? ''); req.resume(); req.once('end', () => { gotRequest.resolve(undefined) }) })
+  server.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  onTestFinished(async () => { const closed = once(server, 'close'); server.close(); server.closeAllConnections(); await closed })
+  const address = server.address()
+  if (address === null || typeof address === 'string') throw new Error('missing collector address')
+  vi.stubEnv('DSH_CLIENT_VERSION', 'test-version')
+  vi.stubEnv('DSH_PRODUCT_ANALYTICS_OTLP_URL', `http://127.0.0.1:${address.port}/logs`)
+  vi.stubEnv('DSH_DESKTOP_INTRANET', intranet ? '1' : '')
+  vi.stubEnv('DSH_TELEMETRY_MODE', 'DISABLED')
+  const ctx = new Context()
+  onTestFinished(() => ctx.fiber.dispose())
+  ctx.provide('profileContext', {
+    name: profile, dir: '/profile', patchPath: '/profile/cordis.patch.yml', installAnchor: '/profile/package.json',
+    cwd: '/workspace', home: '/home', startedBundles: [], overlays: [], telemetryDisabledEnv: undefined,
+  })
+  const identity = vi.fn().mockResolvedValue(undefined)
+  if (!intranet) ctx.provide('deepseekAccount', { getDeviceIdentity: identity } as never)
+  await ctx.plugin(OTel)
+  ctx.baseUrl = 'file:///'
+  await ctx.plugin(Loader).await()
+  ctx.loader.builtins.telemetry = Telemetry
+  ctx.loader.builtins.analytics = Analytics
+  const rows = loadOverlayPatches('analytics', fileURLToPath(new URL('../cordis.patch.yml', import.meta.url)))
+    .flatMap(patch => patch.insert ?? []).filter(row => row.id === 'desktop-product-telemetry' || row.id === 'product-analytics')
+  const entries = rows.map(row => ({ ...row, name: row.id === 'desktop-product-telemetry' ? 'cordis:telemetry' : 'cordis:analytics' }))
+  await ctx.loader.root.update(entries)
+  await ctx.loader.await()
+  const entry = ctx.loader.resolve('desktop-product-telemetry')
+  expect(entry.disabled).toBe(profile !== 'desktop' || intranet)
+  expect(ctx.loader.resolve('product-analytics').disabled).toBe(profile !== 'desktop' || intranet)
+  if (profile !== 'desktop' || intranet) {
+    expect(ctx.get('productTelemetry')).toBeUndefined()
+    expect(ctx.get('productAnalytics')).toBeUndefined()
+    // Give accidentally-mounted exporters a chance to resolve their first
+    // interval, then dispose the actual composition and prove no request left.
+    await new Promise(resolve => setTimeout(resolve, 50))
+    await ctx.fiber.dispose()
+    expect(received).toEqual([])
+    return
+  }
+  expect(rows[0]!.config).toMatchObject({
+    scheduledDelayMillis: 30000, timeoutMillis: 15000, exportTimeoutMillis: 20000, shutdownTimeoutMillis: 2000,
+  })
+  const analytics = ctx.productAnalytics
+  const analyticsFiber = ctx.loader.resolve('product-analytics').fiber
+  const telemetryFiber = entry.fiber
+  const lifetime = new AbortController()
+  onTestFinished(() => { lifetime.abort() })
+  const policy = analytics.watchPolicy(lifetime.signal)[Symbol.asyncIterator]()
+  expect(await policy.next()).toEqual({ value: true, done: false })
+  for (const enabled of [false, true]) {
+    const changed = policy.next()
+    await ctx.loader.root.update(entries.map(row => row.id === 'product-analytics'
+      ? { ...row, config: { ...row.config as Record<string, unknown>, enabled } } : row))
+    await ctx.loader.await()
+    expect(await changed).toEqual({ value: enabled, done: false })
+    expect(ctx.loader.resolve('product-analytics').fiber === analyticsFiber).toBe(true)
+    expect(entry.fiber === telemetryFiber).toBe(true)
+    if (!enabled) {
+      await analytics.report({ eventName: 'desktop_app_launch', timestamp: 1, attributes: {} })
+      expect(identity).not.toHaveBeenCalled()
+    }
+  }
+  const emit = vi.spyOn(ctx.productTelemetry, 'emit')
+  await analytics.report({ eventName: 'desktop_app_launch', timestamp: 1, attributes: {} })
+  expect(emit).toHaveBeenCalledWith(expect.objectContaining({ attributes: { app_version: 'test-version' } }))
+  lifetime.abort()
+  await policy.return?.()
+  ctx.productTelemetry.emit({ eventName: 'desktop_upgrade_install_restart_click', body: 'upgrade', timestamp: Date.now() })
+  const disposal = entry.fiber!.dispose()
+  await gotRequest.promise
+  expect(received).toContain('/logs')
+  await disposal
+})

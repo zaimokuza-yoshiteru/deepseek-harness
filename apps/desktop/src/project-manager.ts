@@ -92,14 +92,16 @@ export class DesktopProjectManager {
    * Prepare the pinned plugin profile, installing additional user plugins only during migration.
    * @param production - Remove retired application-owned profile packages before Host startup.
    */
-  async applyRelease(production = false): Promise<void> {
+  async applyRelease(
+    production = false, environment: () => Promise<NodeJS.ProcessEnv> = async () => process.env,
+  ): Promise<void> {
     await this.withLock(async () => {
       const descriptor = readDesktopRuntime(this.runtime.dsh)
       if (this.runtime.pluginSeed !== undefined && needsPluginSeed(this.paths.profile, this.runtime.pluginSeed)) {
         await applyPluginSeed(this.paths.profile, this.runtime.pluginSeed,
           resolve(this.paths.profile, '../../desktop/migration-backups'), descriptor, async (install) => {
             createPluginProfile(this.paths.profile)
-            if (install) await this.installUserPlugins()
+            if (install) await this.installUserPlugins(await environment())
           })
       }
       cleanProfileCorePackages(this.paths.profile, descriptor.sharedPackages.map(entry => entry.name), production)
@@ -109,10 +111,10 @@ export class DesktopProjectManager {
     })
   }
 
-  private async installUserPlugins(): Promise<void> {
+  private async installUserPlugins(baseEnvironment: NodeJS.ProcessEnv): Promise<void> {
     const { node, pnpm, nodeBin } = this.runtime
     if (node === undefined || pnpm === undefined) throw new Error('desktop migration: bundled package manager unavailable')
-    const environment = desktopNpmEnvironment().env
+    const environment = desktopNpmEnvironment(baseEnvironment).env
     await new Promise<void>((accept, reject) => {
       let diagnostic = ''
       const child = spawn(node, ['--expose-internals', pnpm, 'install', '--prod', '--no-frozen-lockfile'], {

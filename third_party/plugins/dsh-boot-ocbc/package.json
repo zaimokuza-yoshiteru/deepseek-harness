@@ -1,6 +1,6 @@
 {
   "name": "dsh-boot-ocbc",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "type": "module",
   "description": "OCBC startup animation for DeepSeek Harness Web and Desktop",
   "main": "./lib/index.js",
@@ -10,7 +10,8 @@
     "./package.json": "./package.json"
   },
   "engines": {
-    "node": ">=22.19.0"
+    "node": ">=22.19.0",
+    "dsh": "0.1.7-rc.2 || 0.2.0-rc.2"
   },
   "license": "UNLICENSED",
   "files": [
@@ -31,7 +32,7 @@
       ]
     },
     "engines": {
-      "dsh": ">=0.1.7-rc.2"
+      "dsh": "0.1.7-rc.2 || 0.2.0-rc.2"
     },
     "bundle": {
       "patch": "./cordis.patch.yml"

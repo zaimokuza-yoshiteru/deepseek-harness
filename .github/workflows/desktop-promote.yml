@@ -179,8 +179,7 @@ jobs:
                   plugin_manifest = json.loads(archive.read(plugin_manifest_path))
                   plugins = plugin_manifest['plugins']
                   assert plugins
-                  configured = {plugin['name']: plugin['source'] for plugin in json.load(open('../apps/desktop/release-plugins.json'))['plugins']}
-                  assert len(configured) == 4
+                  configured = {plugin['name']: plugin['source'] for plugin in json.load(open('../apps/desktop/src/release-plugins.json'))['plugins'] if plugin.get('desktopBundle', True)}
                   assert {plugin['name'] for plugin in plugins} == set(configured)
                   names = set()
                   for plugin in plugins:

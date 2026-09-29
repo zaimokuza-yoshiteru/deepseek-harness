@@ -7,15 +7,18 @@ import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-const [runtime, profile] = process.argv.slice(2)
+const [runtime, profile, selectedJson] = process.argv.slice(2)
 assert.ok(runtime && profile, 'Expected runtime and profile directories')
+assert.ok(selectedJson, 'Expected the active portable plugin list')
+const pinnedPlugins = JSON.parse(selectedJson)
+assert.ok(Array.isArray(pinnedPlugins) && pinnedPlugins.length > 0 && pinnedPlugins.every(name => typeof name === 'string'),
+  'Expected a non-empty list of active portable plugin names')
 const hostRequire = createRequire(join(runtime, 'package.json'))
 const pluginRequire = createRequire(join(profile, 'package.json'))
 const loadHost = name => import(pathToFileURL(hostRequire.resolve(name)).href)
 const { evaluatePluginCompatibility, loadProfileDirectory } = await loadHost('@deepseek-ai/dsh-app-boot')
 const installAnchor = join(runtime, 'node_modules/@deepseek-ai/dsh/package.json')
 assert.equal(existsSync(join(profile, 'compatibility.json')), false, 'Fresh packaged profiles must need no exemptions')
-const pinnedPlugins = ['@zaimokuza/dsh-acp-adapter', '@zaimokuza/dsh-agent-teams-office']
 for (const name of pinnedPlugins) {
   const path = join(profile, 'node_modules', name, 'package.json')
   const original = readFileSync(path, 'utf8')

@@ -10,7 +10,7 @@ import { DSH_SOURCE_TAG, DSH_SOURCE_VERSION } from './dsh-target.ts'
 import { PLATFORM_EXTERNALS } from './dsh-platform-snapshot.ts'
 
 const reference = process.env.DSH_UPSTREAM_CHECKOUT
-if (!reference) throw new Error('Set DSH_UPSTREAM_CHECKOUT to the DSH 0.1.7-rc.2 source checkout to run this compatibility check.')
+if (!reference) throw new Error('Set DSH_UPSTREAM_CHECKOUT to a built DSH source checkout to run this compatibility check.')
 const expectedTag = DSH_SOURCE_TAG
 const requiredPackages = [
   'packages/api/session-controller/package.json',
@@ -23,10 +23,7 @@ const platformSource = 'packages/client/web/src/platform.ts'
 // and the web profile serves the frontend build. A source-only checkout is not
 // enough; fail here instead of letting a pre-existing build in a developer's
 // tree mask an incomplete CI build.
-const requiredBuildArtifacts = [
-  'apps/cli/lib/bin.js',
-  'apps/web/dist/index.html',
-]
+const requiredBuildArtifacts = ['apps/cli/lib/bin.js', 'apps/web/dist/index.html']
 
 if (!existsSync(join(reference, '.git'))) {
   throw new Error(`DSH reference is missing: ${reference}`)
@@ -51,7 +48,9 @@ for (const relative of requiredPackages) {
 
 for (const relative of requiredBuildArtifacts) {
   if (!existsSync(join(reference, relative))) {
-    throw new Error(`DSH reference is not fully built: missing ${relative}; run pnpm build in the reference checkout first`)
+    throw new Error(
+      `DSH reference is not fully built: missing ${relative}; run pnpm build in the reference checkout first`,
+    )
   }
 }
 
@@ -68,7 +67,9 @@ if (JSON.stringify([...referencePlatform].sort()) !== JSON.stringify([...PLATFOR
   const actual = new Set(referencePlatform)
   const missing = PLATFORM_EXTERNALS.filter((specifier) => !actual.has(specifier))
   const extra = referencePlatform.filter((specifier) => !expected.has(specifier))
-  throw new Error(`DSH platform snapshot drift: removed-by-host=${JSON.stringify(missing)} missing-from-snapshot=${JSON.stringify(extra)}`)
+  throw new Error(
+    `DSH platform snapshot drift: removed-by-host=${JSON.stringify(missing)} missing-from-snapshot=${JSON.stringify(extra)}`,
+  )
 }
 
 const llm = await import(pathToFileURL(join(reference, 'packages/llm/llm/lib/index.js')).href)

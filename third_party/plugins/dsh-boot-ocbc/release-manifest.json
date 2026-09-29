@@ -1,6 +1,6 @@
 {
   "name": "dsh-boot-ocbc",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "files": {
     "asset-manifest.json": "0002a939e437277526a9f07d9d98e165f699ef7ab9991650e31d60b6cc86abeb",
     "assets/arrival-12.bin": "caa4daff3a5a4c7efb98513d7bb7f93f2be6a2d3f4d6b0f5417ea447eae3fe05",
@@ -123,17 +123,17 @@
     "assets/glyphs.png": "212f23656b5dbaf2a0a85a8b738d0ad1919cb79929ab04d058bbba94544bae38",
     "assets/icon.svg": "c7b89c54260ea94c033de860914cba7690e546d45e0aac4b118c7c63911b03ff",
     "cordis.patch.yml": "1893c16ce833882afbd0717f287489c5e434805ff5aa17d5ff4f83684fdb0b73",
-    "dsh.plugin.json": "729175ccfe92f973921e189df2a2dc1bad2d3728351669edf43aa71253f662fb",
+    "dsh.plugin.json": "4a9efd6a4a3deebb54171600e1754a4b5d6e3468049fd464b5b4e5cc8caa7a58",
     "lib/boot.js": "2cc46be6d899b8a70fc1c28e4504f3d8d623c719571b8ae5dd400b253e418c32",
     "lib/client.js": "a05eefcce71ae11da5d4d0a50d75845445f16c66ed10a2ead8640c00c78617af",
     "lib/index.js": "06e959069ec9422e86784aa3ad9a84dc79110ce04e06107cfac7ff8e32fca79f",
     "lib/renderer.js": "2d4c20e555f22e103ad7e49bb523de97d7fe8a604518a41d5ca8c484ecef519b",
     "lib/source-files.mjs": "ed024033f7be3476740b5c474c362c60fd2e77fb2dc9284965ab2aa3d1db5537",
     "lib/verify-package.mjs": "14ea3d9494c4d2ac28cfb0012b1f558eb50adb9f570ac52af5db2c63a7f0ae97",
-    "package.json": "834704fa1e1131a6acaa27340448ce1b4645576eaec767f17ddcc897d3d585d2"
+    "package.json": "e1f17e8d9bcda1f9e2ae82d1befa465ac752ff1b6543ad3cde1b48901484b289"
   },
   "sources": {
-    "package-lock.json": "905e6e6c08cf11fefb7e42a0baca0276e9df693c485d2f909d412bbe3a100a0c",
+    "package-lock.json": "92d389775916afc8dfbadf221eeb7bf5e4016b3721db818772d64cd20a49e114",
     "scripts/build.mjs": "6f88ab3c57361192e1f1cb1ebe9f3c76a7c33deb9ab9e5ddfd6c89ec165fdacb",
     "scripts/pack.mjs": "b8633255530f96d94249655b8e93d0ff177ee092716077fee9aa03c3d2042844",
     "scripts/source-files.mjs": "ed024033f7be3476740b5c474c362c60fd2e77fb2dc9284965ab2aa3d1db5537",

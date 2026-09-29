@@ -5,13 +5,10 @@ import { officePackageDirectories } from '../../scripts/libreoffice-packages.mjs
 import { prepareWindowsAsarUnpack, verifyWindowsAsarUnpack } from './scripts/windows-asar-unpack.mjs'
 import { fileURLToPath } from 'node:url'
 import { readFileSync } from 'node:fs'
+import { resolveDesktopDistributionVersion } from '../../scripts/desktop-distribution-version.mjs'
 
 const delivery = JSON.parse(readFileSync(new URL('../../delivery.json', import.meta.url), 'utf8'))
-const tag = process.env.DSH_DESKTOP_DISTRIBUTION_VERSION ?? delivery.version
-const version = tag.replace('0.1.7.rc.', '0.1.7-rc.')
-if (!/^0\.1\.7-rc\.2\.[1-9][0-9]*$/u.test(version)) {
-  throw new Error('desktop portable: expected distribution version 0.1.7.rc.2.<positive integer>')
-}
+const { tag, appVersion: version } = resolveDesktopDistributionVersion(delivery, process.env.DSH_DESKTOP_DISTRIBUTION_VERSION)
 const target = resolveDesktopBuildTarget()
 const paths = resolveDesktopTargetBuildPaths()
 

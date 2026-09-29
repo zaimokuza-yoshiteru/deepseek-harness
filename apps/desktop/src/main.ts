@@ -1,11 +1,11 @@
 import { configureDesktopDistribution } from './distribution.ts'
-import { desktopShellEnvironment } from './shell-environment.ts'
 import { desktopNpmEnvironment } from './npm-environment.ts'
+import type { ProductEventMap, ProductEvent } from '@deepseek-ai/dsh-client-product-analytics/types'
 import { WINDOWS_TITLEBAR_HEIGHT } from './windows-layout.ts'
 /** Electron shell: desktop project ownership, custom protocol, windows, and lifecycle. */
 
 import { readFile, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { delimiter, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   app,
@@ -32,9 +32,11 @@ import { installDesktopDirectoryPicker } from './directory-picker.ts'
 import { installMicrophonePermissions } from './microphone-permissions.ts'
 import { DesktopBackendController } from './backend-controller.ts'
 import { DESKTOP_IPC, SCHEME, assertDesktopSender, type DesktopUpdateState } from './ipc.ts'
+import { readDeviceInfo } from './device-info.ts'
 import { desktopUpdateReadyConfirmation, formatDesktopMessage, resolveDesktopLocale, resolveDesktopStartupLocale } from './locale.ts'
 import { claimDesktopSingleInstance } from './single-instance.ts'
 import { DesktopUpdateCoordinator } from './update-coordinator.ts'
+import { DesktopCommandManager } from './command-management.ts'
 import { serveWebDocument, authenticateWebHost, forwardWebRequest } from './web-document.ts'
 import { DesktopFatalRecovery } from './fatal-recovery.ts'
 import { pruneCrashReports, RendererConsoleTail, writeCrashReport, type CrashReportSource } from './crash-report.ts'
@@ -46,8 +48,9 @@ import { DesktopUpdatePreparationError } from './update-error.ts'
 import { DesktopUpdateSchedule, resolveDesktopUpdateScheduleConfig } from './update-schedule.ts'
 import { desktopUpdateErrorSummary, presentDesktopUpdate } from './update-presentation.ts'
 import { desktopErrorState } from './startup-error.ts'
+import { readDesktopLoginShellEnvironment, resolveDesktopLoginShellConfig } from './login-shell-environment.ts'
 import { DesktopMandatoryUpdatePolicy, resolveDesktopPolicyConfig, type DesktopPolicyState } from './mandatory-update-policy.ts'
-import { desktopClientMetadata } from './client-metadata.ts'
+import { desktopClientMetadata, desktopClientVersion } from './client-metadata.ts'
 import { DesktopMandatoryUpdateWindow } from './mandatory-update-window.ts'
 import { DesktopPolicyTestAuth } from './policy-test-auth.ts'
 import { DesktopUpdateDialog, type UpdateDialogOptions } from './update-dialog.ts'
@@ -245,9 +248,8 @@ function createWindow(preload: string, show = false, primary = false): BrowserWi
     if (['http:', 'https:'].includes(new URL(url).protocol)) void shell.openExternal(url)
     return { action: 'deny' }
   })
-  if (process.platform === 'darwin') {
-    // macOS hides the traffic lights in fullscreen; the page drops its
-    // clearance for them off the html[data-fullscreen] flag this feeds.
+  if (process.platform === 'darwin' || process.platform === 'win32') {
+    // Fullscreen hides native window controls; overlays drop their caption clearance.
     const sendFullscreen = (): void => {
       if (!window.isDestroyed()) window.webContents.send(DESKTOP_IPC.windowFullscreen, window.isFullScreen())
     }
@@ -256,6 +258,8 @@ function createWindow(preload: string, show = false, primary = false): BrowserWi
     // Reloads and navigations re-register the preload listener; resend the
     // current state so a fullscreen reload does not fall back to windowed CSS.
     window.webContents.on('did-finish-load', sendFullscreen)
+  }
+  if (process.platform === 'darwin') {
     // Deminiaturize reattaches the NSVisualEffectView material late
     // (electron/electron#25368), so a transparent window shows the desktop
     // through the sidebar until then. Paint an opaque base while minimized or
@@ -333,6 +337,32 @@ async function main(): Promise<void> {
     : join(process.resourcesPath, 'runtime', 'primary-runtime')
   const activeProject = paths.profile
   const manager = new DesktopProjectManager(paths, resources)
+  // Dock and Finder launches inherit only launchd's environment; every Host shares one login-shell read.
+  const loginShellRead = new AbortController()
+  // The probe runs in its own process group, which outlives Desktop unless the read is aborted.
+  app.on('will-quit', () => { loginShellRead.abort() })
+  const loginShell = readDesktopLoginShellEnvironment(process.env, resolveDesktopLoginShellConfig(process.env), {
+    signal: loginShellRead.signal,
+  }).then((result) => {
+    for (const failure of result.failures) console.warn(`desktop login shell: ${failure.shell} failed (${failure.reason})`)
+    return result.environment
+  })
+  const selectedHome = process.env.DSH_HOME
+  const fallbackNode = app.isPackaged
+    ? join(process.resourcesPath, 'runtime', 'primary-runtime', 'dependencies', 'node', 'bin', process.platform === 'win32' ? 'node.exe' : 'node')
+    : process.execPath
+  const hostEnvironmentReady = loginShell.then((imported) => {
+    const environment = { ...imported, ...desktopNpmEnvironment(imported).env }
+    const pathKey = Object.keys(environment).find(name => name.toLowerCase() === 'path') ?? 'PATH'
+    environment[pathKey] = [environment[pathKey], dirname(fallbackNode)].filter(Boolean).join(delimiter)
+    if (selectedHome !== undefined) environment.DSH_HOME = selectedHome
+    return environment
+  })
+  let hostEnvironment: NodeJS.ProcessEnv = process.env
+  const prepareHostEnvironment = async (): Promise<void> => {
+    hostEnvironment = await hostEnvironmentReady
+    Object.assign(process.env, hostEnvironment)
+  }
   let quitting = false
   let startup: Promise<void> | undefined
   let workspaceRecovery: Promise<void> | undefined
@@ -383,6 +413,15 @@ async function main(): Promise<void> {
       detail: formatDesktopMessage(locale.messages.aboutVersion, { version: app.getVersion() }),
       buttons: [locale.messages.updateAcknowledge], cancelId: 0 })
   }
+  const commandManager = new DesktopCommandManager({
+    resources: process.resourcesPath,
+    isPackaged: app.isPackaged,
+    isInstalledLocation: () => process.platform !== 'darwin' || app.isInApplicationsFolder(),
+    isInstalling: () => updateState.phase === 'installing',
+    isQuitting,
+    messages: () => currentDesktopLocale().messages,
+    show: ordinaryMessageBox,
+  })
   const appPreload = fileURLToPath(new URL('./preload-app.cjs', import.meta.url))
   const applicationUrl = `${SCHEME}://app/`
   let hostUrl: string | undefined
@@ -390,6 +429,15 @@ async function main(): Promise<void> {
   const browserGuests = new DesktopBrowserGuests(() => hostUrl)
   let injections: readonly unknown[] = []
   let welcomeBackend: DesktopWelcomeBackend | undefined
+  let reportedLaunch = false
+  let analyticsEnabled = false
+  const track = async <K extends keyof ProductEventMap>(eventName: K, attributes: ProductEventMap[K]): Promise<void> => {
+    if (intranet) return
+    const event = { eventName, attributes, timestamp: Date.now() } as ProductEvent
+    try {
+      if (analyticsEnabled) await welcomeBackend?.report(event)
+    } catch (_error) { /* Analytics cannot interrupt native actions. */ }
+  }
   let stopAccount: (() => void) | undefined
   let openedAttempt: string | undefined
   let returnedAttempt: string | undefined
@@ -422,7 +470,7 @@ async function main(): Promise<void> {
   const backend = new DesktopBackendController((onFailure) => {
     const hostInspectPort = developmentHostInspectPort(development)
     const host = new DesktopHostProcess(resources.node, resources.dsh, activeProject,
-      hostInspectPort, process.env, onFailure,
+      hostInspectPort, { ...hostEnvironment, DSH_CLIENT_VERSION: desktopClientVersion() }, onFailure,
       primaryRuntime,
       resources, (next) => { platformView.setSession(next) })
     return {
@@ -433,6 +481,8 @@ async function main(): Promise<void> {
         if (ready.injections === undefined) throw new Error('Desktop Host did not provide boot injections')
         injections = ready.injections
         welcomeBackend = await connectDesktopWelcome(ready.url, (input, init) => net.fetch(input, init), async () => (await session.defaultSession.cookies.get({ url: ready.url })).map(cookie => `${cookie.name}=${cookie.value}`).join('; '))
+        analyticsEnabled = intranet ? false : await welcomeBackend.analyticsEnabled().catch(() => false)
+        if (!reportedLaunch) { reportedLaunch = true; if (!intranet) void track('desktop_app_launch', {}) }
         stopAccount?.()
         stopAccount = undefined
         if (intranet) return
@@ -472,9 +522,11 @@ async function main(): Promise<void> {
             const state = await accountBackend.state()
             if (welcomeWindow !== undefined && !welcomeWindow.isDestroyed()) welcomeWindow.webContents.send(WELCOME_IPC.state, state)
           }).catch(() => undefined)
-        })
+        }, intranet ? undefined : (enabled) => { analyticsEnabled = enabled })
       },
       stop: async () => {
+        analyticsEnabled = false
+        stopAccount?.()
         try { await host.stop(requireCleanStop) }
         catch (error) {
           if (!requireCleanStop || !(error instanceof DesktopHostUncleanExitError)) throw error
@@ -516,7 +568,7 @@ async function main(): Promise<void> {
       updateStoppedHost = false
       if (restoreHost) {
         // Only confirmed process exit permits replacement before another installation confirmation.
-        const hostReady = backend.start(async () => {})
+        const hostReady = backend.start(prepareHostEnvironment)
         startup = hostReady
         const recovery = hostReady.then(async () => {
           if (quitting) return
@@ -542,21 +594,13 @@ async function main(): Promise<void> {
   }
   stopForRecovery = () => backend.close()
 
-  const launchEnvironment = async (): Promise<void> => {
-    const selectedHome = process.env.DSH_HOME
-    const fallback = app.isPackaged
-      ? join(process.resourcesPath, 'runtime', 'primary-runtime', 'dependencies', 'node', 'bin', process.platform === 'win32' ? 'node.exe' : 'node')
-      : process.execPath
-    const imported = await desktopShellEnvironment(process.env, fallback)
-    Object.assign(process.env, imported, desktopNpmEnvironment(imported).env)
-    if (selectedHome !== undefined) process.env.DSH_HOME = selectedHome
-  }
   const reconcileBackend = (): Promise<void> => {
     startup ??= (async () => {
       await navigateMain(applicationUrl)
       await backend.start(async () => {
-        await launchEnvironment()
-        await manager.applyRelease(app.isPackaged)
+        const environment = prepareHostEnvironment()
+        const release = manager.applyRelease(app.isPackaged, () => hostEnvironmentReady)
+        await Promise.all([release, environment])
       })
       if (backend.host !== undefined) await openInitialWindow()
       if (backend.host !== undefined) updateJournal?.action('workspace-ready')
@@ -572,6 +616,7 @@ async function main(): Promise<void> {
   const updates = new DesktopUpdateCoordinator(
     publishUpdate,
     async () => {
+      await commandManager.idle()
       await workspaceRecovery
       await startup?.catch(() => undefined)
       const host = backend.host
@@ -593,6 +638,8 @@ async function main(): Promise<void> {
         const result = await updateDialog.show(parent, confirmation)
         if (result.response !== 0 || isMandatory()) return false
       }
+      // The update lock rejects new HTTP requests, including analytics intake.
+      await track('desktop_upgrade_install_restart_click', {})
       if (backend.host !== host) throw new DesktopUpdatePreparationError('tasks-unavailable', locale.messages.updateTasksUnavailable)
       try {
         const stillActive = await host.updateTasks('lock')
@@ -617,11 +664,15 @@ async function main(): Promise<void> {
       }
       return true
     },
+    undefined, undefined, undefined,
+    (success, reason) => { void track('desktop_upgrade_download_result', { is_success: success, ...reason === undefined ? {} : { error_reason: reason } }) },
+
   )
 
   const updateSchedule = new DesktopUpdateSchedule(updates, resolveDesktopUpdateScheduleConfig(process.env))
 
   const downloadUpdate = async (version: string): Promise<DesktopUpdateState> => {
+    void track('desktop_upgrade_click', {})
     updateJournal?.action('download-requested')
     const state = await updates.download(version)
     if (state.phase !== 'ready' || quitting) return state
@@ -749,6 +800,10 @@ async function main(): Promise<void> {
     assertProductSender(event)
     return presentDesktopUpdate(updates.state)
   })
+  ipcMain.handle(DESKTOP_IPC.deviceInfo, (event) => {
+    assertProductSender(event)
+    return readDeviceInfo()
+  })
   ipcMain.handle(DESKTOP_IPC.onboardingApiKey, async (event) => {
     assertProductSender(event)
     return !intranet && (await readWelcomeState()).hasApiKey
@@ -804,7 +859,8 @@ async function main(): Promise<void> {
         if (state.phase === 'error' && state.failedOperation === 'check') { await showUpdateFailure(state); return }
         if (state.phase === 'idle') {
           await ordinaryMessageBox({ type: 'info', title: locale.messages.updateCheckTitle,
-            message: formatDesktopMessage(locale.messages.updateCurrent, { version: app.getVersion() }) })
+            message: locale.messages.updateCurrent,
+            detail: formatDesktopMessage(locale.messages.updateCurrentDetail, { version: app.getVersion() }) })
           return
         }
         if (state.phase === 'ready' || (state.phase === 'error' && state.failedOperation === 'install')) {
@@ -816,8 +872,9 @@ async function main(): Promise<void> {
         }
         if (state.phase !== 'available' && !(state.phase === 'error' && state.failedOperation === 'download')) return
         if (manual) {
-          const result = await ordinaryMessageBox({ title: locale.messages.updateCheckTitle, message: locale.messages.updateAvailable,
-            detail: formatDesktopMessage(locale.messages.updateDetail, { version: state.version ?? '' }),
+          const result = await ordinaryMessageBox({ title: locale.messages.updateCheckTitle,
+            message: formatDesktopMessage(locale.messages.updateAvailable, { version: state.version ?? '' }),
+            detail: locale.messages.updateDetail,
             buttons: [locale.messages.updateDownload], cancelId: 1 })
           if (result.response !== 0) return
         }
@@ -928,6 +985,8 @@ async function main(): Promise<void> {
       : { label: currentDesktopLocale().messages.aboutMenu, role: 'about' },
     { type: 'separator' },
     { label: currentDesktopLocale().messages.checkUpdatesMenu, click: () => { void openUpdatePrompt(true) } },
+    ...(!intranet && (process.platform === 'darwin' || process.platform === 'win32')
+      ? [{ label: currentDesktopLocale().messages.cliCommandMenu, click: () => { void commandManager.show() } }] : []),
     ...development ? [
       { type: 'separator' as const },
       { label: currentDesktopLocale().messages.reloadPageMenu, role: 'reload' as const },
@@ -1109,12 +1168,15 @@ async function main(): Promise<void> {
   const showWelcome = (): Promise<void> => {
     if (quitting) return Promise.resolve()
     if (welcomeWindow !== undefined && !welcomeWindow.isDestroyed()) {
+      if (!welcomeWindow.isVisible()) void track('auth_page_view', {})
       welcomeWindow.show()
       welcomeWindow.focus()
       return Promise.resolve()
     }
     openingWelcome ??= (async () => {
       welcomeWindow = await openWelcomeWindow(locale, {
+        analytics: track,
+        analyticsEnabled: () => Promise.resolve(analyticsEnabled),
         takeNotice: () => {
           const notice = pendingWelcomeNotice
           pendingWelcomeNotice = undefined

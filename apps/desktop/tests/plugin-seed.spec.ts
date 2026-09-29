@@ -8,6 +8,7 @@ import { DESKTOP_PORTABLE_PLUGINS } from '../src/portable-plugins.ts'
 
 const roots: string[] = []
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
+
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'desktop-migration-')); roots.push(root)
   const profile = join(root, 'profile'); const seed = join(root, 'seed'); const backup = join(root, 'backups')
@@ -15,6 +16,11 @@ function fixture() {
   writeFileSync(join(profile, 'lock'), 'owned')
   writeFileSync(join(seed, 'desktop-plugin-seed.json'), '{"id":"new"}')
   writeFileSync(join(seed, 'package.json'), JSON.stringify({ dependencies: Object.fromEntries(DESKTOP_PORTABLE_PLUGINS.map(p => [p.name, '1.0.0'])) }))
+  const acp = '@zaimokuza/dsh-acp-adapter'
+  const acpDirectory = join(seed, 'node_modules', ...acp.split('/'))
+  mkdirSync(acpDirectory, { recursive: true })
+  writeFileSync(join(acpDirectory, 'package.json'), JSON.stringify({ name: acp, version: '0.2.0-rc.2.0' }))
+  writeFileSync(join(acpDirectory, 'index.js'), 'export const seeded = true\n')
   const runtime = runtimeFixture(join(root, 'runtime'), '0.1.6-alpha.1')
   return { root, profile, seed, backup, runtime }
 }
@@ -29,6 +35,8 @@ it('initializes offline with Teams and all bundled plugins, retaining the held l
   expect(manifest.dsh.profile.bundles).toContain('@deepseek-ai/dsh-experimental-agent-team-profile')
   expect(manifest.dependencies['@zaimokuza/dsh-plugin-hub']).toBeUndefined()
   expect(manifest.dsh.profile.bundles).toContain('@zaimokuza/dsh-agent-teams-office')
+  expect(manifest.dsh.profile.bundles).toContain('@zaimokuza/dsh-acp-adapter')
+  expect(readFileSync(join(f.profile, 'node_modules/@zaimokuza/dsh-acp-adapter/index.js'), 'utf8')).toContain('seeded = true')
   expect(readFileSync(join(f.profile, 'lock'), 'utf8')).toBe('owned')
   expect(needsPluginSeed(f.profile, f.seed)).toBe(false)
 })
@@ -52,6 +60,23 @@ it('migrates an old profile without losing disabled Teams, plugin activation or 
   expect(readFileSync(join(f.profile, 'cordis.yml'), 'utf8')).toBe('user-settings')
   expect(JSON.parse(readFileSync(join(f.backup, readdirSync(f.backup)[0]!, 'package.json'), 'utf8'))).toEqual(old)
 })
+it('re-seeds markerless ACP offline while preserving its disabled state and saved configuration', async () => {
+  const f = fixture()
+  const acp = '@zaimokuza/dsh-acp-adapter'
+  writeFileSync(join(f.profile, 'package.json'), JSON.stringify({
+    dependencies: { [acp]: '0.1.5-rc.2.5' },
+    dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', acp] } },
+  }))
+  writeFileSync(join(f.profile, 'cordis.patch.yml'), '- id: dsh-acp-adapter\n  disabled: true\n  config:\n    permissions: []\n')
+  await applyPluginSeed(f.profile, f.seed, f.backup, f.runtime, async (install) => { expect(install).toBe(false) })
+  const migrated = JSON.parse(readFileSync(join(f.profile, 'package.json'), 'utf8')) as ProfileForTest
+  expect(migrated.dependencies[acp]).toBe('1.0.0')
+  expect(migrated.dsh.profile.bundles).toContain(acp)
+  expect(readFileSync(join(f.profile, 'node_modules', acp, 'index.js'), 'utf8')).toContain('seeded = true')
+  expect(readFileSync(join(f.profile, 'cordis.patch.yml'), 'utf8')).toBe(
+    '- id: dsh-acp-adapter\n  disabled: true\n  config:\n    permissions: []\n',
+  )
+})
 it('restores the exact original files if preparation fails', async () => {
   const f = fixture(); const original = '{"dependencies":{}}'
   writeFileSync(join(f.profile, 'package.json'), original)
@@ -70,7 +95,8 @@ it('discards build-machine pnpm state while keeping prebuilt dependency files', 
   writeFileSync(join(modules, '.pnpm-workspace-state-v1.json'), '{}')
   writeFileSync(join(modules, 'example', 'index.js'), 'export default 1')
   await applyPluginSeed(f.profile, f.seed, f.backup, f.runtime, async () => {})
-  expect(readdirSync(join(f.profile, 'node_modules'))).toEqual(['example'])
+  expect(readdirSync(join(f.profile, 'node_modules'))).toEqual(['@zaimokuza', 'example'])
+  expect(existsSync(join(f.profile, 'node_modules/@zaimokuza/dsh-acp-adapter/index.js'))).toBe(true)
   expect(readFileSync(join(f.profile, 'node_modules', 'example', 'index.js'), 'utf8')).toBe('export default 1')
 })
 

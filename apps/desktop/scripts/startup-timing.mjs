@@ -20,7 +20,7 @@ await mkdir(output, { recursive: true })
 const intranet = (process.env.DSH_DESKTOP_INTRANET ?? '1') === '1'
 const report = { target, archive: null, sha256: null, standardUser: process.env.DSH_STANDARD_USER_VERIFIED === '1',
   intranet,
-  measurement: 'Process launch through the configured startup flow to a visible Settings launcher and successful Settings dialog interaction; no model invocation.',
+  measurement: 'Process launch through a Settings click and visible General settings section; overlay completion is recorded separately before plugin inventory, screenshots, and audit work. Overlay-seen time is the first DOM observation, not an exact frame-present timestamp. No model invocation.',
   limitations: 'Fresh CI machine, immediately after ZIP extraction; not an OS disk-cache cold boot or a user endpoint security reproduction. Extraction is excluded.',
   runs: [] }
 let executable = process.argv[3] && resolve(process.argv[3])
@@ -59,7 +59,25 @@ if (target === 'win-x64') delete env.DSH_HOME
 const audit = process.env.DSH_STARTUP_DEPENDENCY_AUDIT === '1'
   ? await startDependencyAudit(dirname(executable), output, home, env) : undefined
 const save = () => writeFile(join(output, 'result.json'), JSON.stringify(report, null, 2) + '\n')
-const pluginNames = ['@zaimokuza/dsh-acp-adapter', '@zaimokuza/dsh-agent-teams-office', 'dsh-boot-ocbc', 'dsh-atlassian-kanban']
+const releasePluginManifest = JSON.parse(await readFile(new URL('../src/release-plugins.json', import.meta.url), 'utf8'))
+const pluginNames = releasePluginManifest.plugins.filter(plugin => plugin.desktopBundle !== false).map(plugin => plugin.name)
+function installStartupOverlayMonitor() {
+  if (window.__DSH_STARTUP_OVERLAYS__) return
+  const state = window.__DSH_STARTUP_OVERLAYS__ = {
+    timeOrigin: performance.timeOrigin, legacySeenAt: null, ocbcSeenAt: null, goneAt: null,
+  }
+  const scan = () => {
+    const legacy = document.querySelector('[data-dsh-boot]') !== null
+    const ocbc = document.querySelector('[data-dsh-boot-ocbc]') !== null
+    const now = performance.now()
+    if (legacy && state.legacySeenAt === null) state.legacySeenAt = now
+    if (ocbc && state.ocbcSeenAt === null) state.ocbcSeenAt = now
+    if (state.ocbcSeenAt !== null && !legacy && !ocbc && state.goneAt === null) state.goneAt = now
+    if (legacy || ocbc) state.goneAt = null
+  }
+  new MutationObserver(scan).observe(document, { subtree: true, childList: true })
+  scan()
+}
 async function verifyPlugins(app, page, run, kind) {
   const resources = await app.evaluate(() => process.resourcesPath)
   const seed = JSON.parse(await readFile(join(resources, 'plugin-seed', 'package.json'), 'utf8'))
@@ -179,7 +197,7 @@ for (const kind of scenarios) {
   }
   run.beforeLaunch = { dshExists: existsSync(legacyHome), desktopExists: existsSync(dshHome), executable, executablePathLength: executable.length }
   await save()
-  let app, page, child, firstScreenshot
+  let app, page, child
   let stopping = false
   const welcomeTasks = []
   const seenWindows = new WeakSet()
@@ -195,6 +213,7 @@ for (const kind of scenarios) {
       if (seenWindows.has(candidate)) return
       seenWindows.add(candidate)
       const task = (async () => {
+        await candidate.addInitScript(installStartupOverlayMonitor)
         await candidate.waitForURL(url => url.href.startsWith('dsh-app://app/') || url.pathname.endsWith('/welcome.html'), { timeout: 300_000 })
         await candidate.waitForLoadState('domcontentloaded')
         if (!candidate.url().includes('welcome.html')) return
@@ -213,6 +232,7 @@ for (const kind of scenarios) {
     page = await app.firstWindow({ timeout: 300_000 })
     mark('windowAvailableMs')
     page.setDefaultTimeout(300_000)
+    await page.evaluate(installStartupOverlayMonitor)
     page.on('pageerror', error => { run.errors.push({ ms: elapsed(), message: error.message }) })
     page.on('request', request => { requests.set(request, elapsed()) })
     page.on('requestfinished', request => {
@@ -226,8 +246,9 @@ for (const kind of scenarios) {
       if (!stopping) run.errors.push({ ms: elapsed(), type: 'request-failed', detail: request.failure()?.errorText })
       requests.delete(request)
     })
-    firstScreenshot = page.screenshot({ path: join(output, `${kind}-first-window.png`), timeout: 15_000 }).catch(() => {})
     await page.waitForURL('dsh-app://app/**', { timeout: 300_000 })
+    await page.waitForLoadState('domcontentloaded')
+    await page.evaluate(installStartupOverlayMonitor)
     const accountMenu = page.getByRole('button', { name: /^(Account menu|账号菜单)$/u, exact: true })
     const settingsLauncher = intranet ? page.getByRole('button', { name: /^(Settings|设置)$/u, exact: true }) : accountMenu
     await settingsLauncher.waitFor({ state: 'visible' })
@@ -245,14 +266,29 @@ for (const kind of scenarios) {
       .some(window => window.webContents.getURL().startsWith('dsh-app://app/') && window.isVisible())),
       { timeout: 300_000, message: 'The workspace must be visible after startup' }).toBe(true)
     mark('workspaceVisibleMs')
-    await verifyPlugins(app, page, run, kind)
-    await audit?.verify(app, profile, kind)
+    await page.waitForFunction(() => {
+      const state = (window).__DSH_STARTUP_OVERLAYS__
+      return state?.ocbcSeenAt !== null && state?.ocbcSeenAt !== undefined && state?.goneAt !== null
+    }, null, { timeout: 300_000 })
+    const overlay = await page.evaluate(() => (window).__DSH_STARTUP_OVERLAYS__)
+    const pageToLaunchMs = value => Math.round(overlay.timeOrigin + value - wallStart)
+    run.timings.overlaySeenMs = pageToLaunchMs(overlay.ocbcSeenAt)
+    run.timings.overlayGoneMs = pageToLaunchMs(overlay.goneAt)
+    run.timings.legacyBootSeenMs = overlay.legacySeenAt === null ? null : pageToLaunchMs(overlay.legacySeenAt)
     await settingsLauncher.click()
     if (!intranet) await page.getByRole('menuitem', { name: /^(Settings|设置)$/u, exact: true }).click()
-    await page.getByRole('dialog').getByRole('button', { name: /^(General|通用设置)$/u, exact: true }).waitFor({ state: 'visible' })
+    const settingsDialog = page.getByRole('dialog')
+    await settingsDialog.getByRole('button', { name: /^(General|通用设置)$/u, exact: true }).waitFor({ state: 'visible' })
     mark('interactiveMs')
+    await page.screenshot({ path: join(output, `${kind}-interactive.png`), timeout: 15_000 })
+    await page.keyboard.press('Escape')
+    await expect(settingsDialog).toHaveCount(0)
+    await save()
+    await verifyPlugins(app, page, run, kind)
+    await audit?.verify(app, profile, kind)
     run.renderer = await page.evaluate(() => ({
       bootPagePresent: !!document.querySelector('[data-dsh-boot]'),
+      ocbcOverlayPresent: !!document.querySelector('[data-dsh-boot-ocbc]'),
       timeOrigin: performance.timeOrigin,
       navigation: performance.getEntriesByType('navigation').map(n => ({ domContentLoadedMs: n.domContentLoadedEventEnd, loadMs: n.loadEventEnd })),
       paints: performance.getEntriesByType('paint').map(p => ({ name: p.name, ms: p.startTime })),
@@ -260,7 +296,7 @@ for (const kind of scenarios) {
     }))
     run.renderer.paints.forEach(p => { p.sinceLaunchMs = Math.round(run.renderer.timeOrigin + p.ms - wallStart) })
     assert.equal(run.renderer.bootPagePresent, false)
-    await page.screenshot({ path: join(output, `${kind}-interactive.png`), timeout: 15_000 })
+    assert.equal(run.renderer.ocbcOverlayPresent, false)
     assert.deepEqual(run.errors, [], 'Renderer exceptions or failed requests must be investigated')
     if (kind === 'delete-desktop-only') assert.equal(await readFile(legacySentinel, 'utf8'), 'CI legacy directory preservation check\n')
     run.passed = true
@@ -271,7 +307,6 @@ for (const kind of scenarios) {
     throw error
   } finally {
     stopping = true
-    await firstScreenshot
     await save()
     if (app) {
       let timer

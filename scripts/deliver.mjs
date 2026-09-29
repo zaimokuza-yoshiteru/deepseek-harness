@@ -4,14 +4,15 @@ import { copyFileSync, mkdirSync, readFileSync, readdirSync, writeFileSync } fro
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
+import { resolveDesktopDistributionVersion } from './desktop-distribution-version.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const config = JSON.parse(readFileSync(join(root, 'delivery.json'), 'utf8'))
 const { values } = parseArgs({ options: { target: { type: 'string' }, version: { type: 'string' } } })
 const target = values.target ?? (process.platform === 'darwin' && process.arch === 'arm64' ? 'mac-arm64' : process.platform === 'win32' ? 'win-x64' : undefined)
 if (!config.targets.includes(target)) throw new Error(`Specify --target ${config.targets.join(' or ')} on the corresponding build machine.`)
-const version = values.version ?? process.env.DSH_DESKTOP_DISTRIBUTION_VERSION ?? config.version
-if (!/^0\.1\.7\.rc\.2\.[1-9][0-9]*$/u.test(version)) throw new Error('Invalid desktop distribution version')
+const { tag: version } = resolveDesktopDistributionVersion(config,
+  values.version ?? process.env.DSH_DESKTOP_DISTRIBUTION_VERSION)
 const environment = { ...process.env, DSH_DESKTOP_DISTRIBUTION_VERSION: version }
 function run(command, args) {
   const child = spawnSync(command, args, { cwd: root, env: environment, stdio: 'inherit', shell: process.platform === 'win32' && command.endsWith('.cmd') })

@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it } from 'vitest'
-import { createServer, type Server } from 'node:http'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createServer } from 'node:http'
+import { readFile } from 'node:fs/promises'
 import { Context } from '@deepseek-ai/cordis'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
@@ -7,6 +8,8 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { AtlassianService } from '../../src/host/service.ts'
 import { registerTools } from '../../src/host/tools.ts'
+import { bootProfile, run } from '../helpers/profile.ts'
+import type { AtlassianSettingsView } from '../../src/shared/config.ts'
 import type { AtlassianKanbanConfig } from '../../src/shared/config.ts'
 import { createTeamBridge } from '../../../dsh-acp-adapter/src/host/teams/bridge.ts'
 import type { Context as CordisContext } from '@deepseek-ai/cordis'
@@ -44,6 +47,7 @@ describe('Atlassian tools over the native ACP MCP bridge', () => {
     if (address === null || typeof address === 'string') throw new Error('Mock Atlassian server did not bind')
 
     const ctx = new Context()
+    closers.push(() => ctx.fiber.dispose())
     await ctx.plugin(SystemPrompt, {})
     await ctx.plugin(ToolRuntime)
     const config: AtlassianKanbanConfig = {
@@ -130,5 +134,116 @@ describe('Atlassian tools over the native ACP MCP bridge', () => {
     expect(JSON.stringify(invalid)).toContain('customfield_12345')
     expect(JSON.stringify(invalid)).toContain('summary')
     expect(typeof invalid.nextAction).toBe('string')
+  })
+})
+
+
+describe('board configuration workflow over ACP', () => {
+  it('keeps searches temporary, persists and reads back queries, and returns save failures as errors', async () => {
+    const fixture = await bootProfile()
+    const { ctx } = fixture
+    const remoteQueries: string[] = []
+    const mockAtlassian = createServer((request, response) => {
+      const url = new URL(request.url ?? '/', 'http://local')
+      remoteQueries.push(url.searchParams.get('cql') ?? url.searchParams.get('jql') ?? '')
+      response.setHeader('content-type', 'application/json')
+      response.end(JSON.stringify({ results: [], issues: [], total: 0, size: 0 }))
+    })
+    await new Promise<void>((resolve, reject) => {
+      mockAtlassian.once('error', reject)
+      mockAtlassian.listen(0, '127.0.0.1', () => { mockAtlassian.off('error', reject); resolve() })
+    })
+    closers.push(() => new Promise<void>((resolve, reject) => mockAtlassian.close(error => error ? reject(error) : resolve())))
+    const address = mockAtlassian.address()
+    if (!address || typeof address === 'string') throw new Error('Missing mock server address')
+    const initial = await run(ctx, 'kanban_get_settings', {}) as AtlassianSettingsView
+    await run(ctx, 'kanban_update_connections', { expectedRevision: initial.revision,
+      jira: { baseUrl: `http://127.0.0.1:${address.port}/jira` },
+      confluence: { baseUrl: `http://127.0.0.1:${address.port}/wiki`, bearerToken: 'confluence-private-token' },
+    })
+    const agent = { id: 'configuration-session', inbox: { nextStep: [] }, steer() {} }
+    const bridgeContext = {
+      get(name: string) { return name === 'agents' ? { get: (id: string) => id === agent.id ? agent : undefined } : ctx.get(name, false) },
+      on(name: string, listener: (...args: any[]) => void) { return ctx.on(name, listener) },
+    } as unknown as CordisContext
+    let policy: 'auto' | 'ask' = 'ask'
+    const lease = await createTeamBridge(bridgeContext, agent.id, { mcpCapabilities: { http: true } }, undefined, async () => policy)
+    if (!lease) throw new Error('Missing MCP bridge')
+    closers.push(() => lease.close())
+    const server = lease.servers[0]
+    if (!server || !('url' in server)) throw new Error('Expected HTTP transport')
+    const client = new Client({ name: 'kanban-configuration-test', version: '1.0.0' })
+    await client.connect(new StreamableHTTPClientTransport(new URL(server.url)) as Parameters<Client['connect']>[0])
+    closers.push(() => client.close())
+    lease.beginPrompt(new AbortController().signal)
+    const permission = {
+      sessionId: agent.id,
+      toolCall: { toolCallId: 'save-query', name: `mcp__${server.name}__kanban_upsert_queries` },
+      options: [{ optionId: 'once', kind: 'allow_once' as const, name: 'Allow once' }],
+    }
+    expect(await lease.inspectPermission!(permission)).toMatchObject({ reason: 'approval-required', toolName: 'kanban_upsert_queries' })
+    policy = 'auto'
+    expect(await lease.inspectPermission!(permission)).toMatchObject({ reason: 'auto-approved', toolName: 'kanban_upsert_queries' })
+    const listed = (await client.listTools()).tools
+    const upsert = listed.find(tool => tool.name === 'kanban_upsert_queries')!
+    expect(upsert.description).toContain('DSH Atlassian Kanban')
+    expect(upsert.description).toContain('kanban_get_settings again')
+    expect(upsert.inputSchema).toMatchObject({ required: expect.arrayContaining(['expectedRevision', 'product', 'queries']), properties: {
+      product: { enum: ['jira', 'confluence'] }, queries: { items: { properties: { id: { description: expect.stringContaining('editing or renaming') } } } },
+    } })
+    for (const name of ['kanban_confluence_search', 'kanban_jira_search_issues']) {
+      expect(listed.find(tool => tool.name === name)?.description).toContain('never saves board configuration')
+    }
+    const call = async (name: string, args: Record<string, unknown> = {}) => {
+      const result = await client.callTool({ name, arguments: args })
+      const text = result.content.filter(item => item.type === 'text').map(item => item.text).join('\n')
+      expect(text).not.toContain('private-token')
+      return { result, text }
+    }
+    const read = async (): Promise<AtlassianSettingsView> => {
+      const { result, text } = await call('kanban_get_settings')
+      expect(result.isError).not.toBe(true)
+      return JSON.parse(text)
+    }
+    const before = await read()
+    const rawBefore = ctx.settings.describe().find(row => row.ns === 'dsh-atlassian-kanban')!.value as AtlassianKanbanConfig
+    const patchBefore = await readFile(fixture.profile.patchPath, 'utf8')
+    for (const [name, args] of [
+      ['kanban_confluence_search', { cql: 'space = TEMP' }],
+      ['kanban_jira_search_issues', { jql: 'project = TEMP' }],
+    ] as const) expect((await call(name, args)).result.isError).not.toBe(true)
+    expect(await read()).toEqual(before)
+    expect(await readFile(fixture.profile.patchPath, 'utf8')).toBe(patchBefore)
+    expect(remoteQueries).toEqual(['space = TEMP', 'project = TEMP'])
+
+    const queries = [{ name: 'Team pages', query: 'space = TEAM AND type = page' }]
+    expect((await call('kanban_upsert_queries', { expectedRevision: before.revision, product: 'confluence', queries })).result.isError).not.toBe(true)
+    const saved = await read()
+    const target = saved.confluence.cql.find(row => row.name === 'Team pages')!
+    expect(target).toEqual({ id: expect.any(String), ...queries[0] })
+    expect(saved.jira).toEqual(before.jira)
+    expect(saved.bitbucket).toEqual(before.bitbucket)
+    expect(remoteQueries).toHaveLength(2) // Configuration saving made no remote request.
+    const patchSaved = await readFile(fixture.profile.patchPath, 'utf8')
+    expect((await call('kanban_confluence_search', { cqlId: target.id })).result.isError).not.toBe(true)
+    expect(remoteQueries.at(-1)).toBe(target.query)
+    expect(await read()).toEqual(saved)
+    const stale = await call('kanban_upsert_queries', { expectedRevision: before.revision, product: 'confluence', queries: [{ ...target, query: 'space = STALE' }] })
+    expect(stale.result.isError).toBe(true)
+    expect(stale.text).toContain('Configuration revision conflict')
+    expect(await read()).toEqual(saved)
+    const failedSave = vi.spyOn(ctx.settings, 'mutate').mockRejectedValueOnce(new Error('backend failure: private-token'))
+    try {
+      const failed = await call('kanban_upsert_queries', { expectedRevision: saved.revision, product: 'confluence', queries: [{ ...target, query: 'space = FAILED' }] })
+      expect(failed.result.isError).toBe(true)
+      expect(failed.text).toContain('Could not save Atlassian settings.')
+      expect(await read()).toEqual(saved)
+      expect(await readFile(fixture.profile.patchPath, 'utf8')).toBe(patchSaved)
+    } finally { failedSave.mockRestore() }
+    const fresh = await read()
+    expect((await call('kanban_upsert_queries', { expectedRevision: fresh.revision, product: 'confluence', queries: [{ name: 'More pages', query: 'space = MORE' }] })).result.isError).not.toBe(true)
+    const confirmed = await read()
+    expect(confirmed.confluence.cql).toEqual([target, expect.objectContaining({ name: 'More pages', query: 'space = MORE' })])
+    expect(ctx.settings.describe().find(row => row.ns === 'dsh-atlassian-kanban')!.value).toEqual({ ...rawBefore, confluence: { ...rawBefore.confluence, cql: confirmed.confluence.cql } })
   })
 })

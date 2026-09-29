@@ -4,10 +4,10 @@
   "plugins": [
     {
       "name": "@zaimokuza/dsh-acp-adapter",
-      "version": "0.1.7-rc.2.4",
+      "version": "0.2.0-rc.2.0",
       "source": "third_party/plugins/dsh-acp-adapter",
       "origin": {
-        "commit": "6d25e52a83618809d28467b618ebd9d52a24e7b4",
+        "commit": "3403470473ab14d3a420df4d06c30ee47b2640f1",
         "repository": "https://github.com/zaimokuza-yoshiteru/dsh-acp-adapter",
         "changes": [
           "Use the source assets/registry snapshot without a network refresh.",
@@ -15,13 +15,15 @@
           "Use stable relative CSS module IDs and hashes.",
           "Require explicit DSH_UPSTREAM_CHECKOUT for host integration tests.",
           "Use pnpm 11.23.0, matching the desktop build toolchain.",
-          "Remove the unused test import left by README-only check removal.",
-          "Declare pnpm 11 dependency build permissions for clean installs."
+          "Declare pnpm 11 dependency build permissions for clean installs.",
+          "Import the DSH 0.2.0-rc.2 and ACP SDK 1.5.1 runtime adaptation, retaining source-delivery and offline registry adjustments.",
+          "Allow only the 277 exact DSH 0.2.0-rc.2 package versions present in the lockfile through the pnpm minimum-release-age policy.",
+          "Omit three newly added contract specs that depend solely on intentionally excluded upstream README and CI/publish workflow files; retain runtime, permissions and integration coverage."
         ]
       },
       "sourceIncludesLocalChanges": true,
-      "sourceSha256": "198eb71da1a86a12156028ffb997bcf63cb8e9d96361b7c818f9e97bb8bbadf0",
-      "fileCount": 300,
+      "sourceSha256": "1404665fd4416ebed734a608e766f7cba980263536c0e2643c7d11e1d86001c9",
+      "fileCount": 307,
       "retainedDocuments": [
         {
           "path": "LICENSE",
@@ -35,19 +37,20 @@
     },
     {
       "name": "@zaimokuza/dsh-agent-teams-office",
-      "version": "0.1.0-beta.8",
+      "version": "0.1.0-beta.9",
       "source": "third_party/plugins/dsh-agent-teams-office",
       "origin": {
-        "commit": "d2f3beab016039bb91d6068940099e002ecba0fc",
+        "commit": "7ec25ca2f7997f94f3d9ca5a186ce7830d2ff9b6",
         "repository": "https://github.com/zaimokuza-yoshiteru/dsh-agent-teams-office",
         "changes": [
           "Remove ordinary documentation and README pack assertions.",
           "Enumerate source files for typecheck when Git metadata is absent.",
-          "Require explicit DSH_DESKTOP_REPO for desktop integration."
+          "Require explicit DSH_DESKTOP_REPO for desktop integration.",
+          "Import upstream beta.9 DSH 0.2.0-rc.2 compatibility metadata, locked development dependencies and panel visibility integration coverage; preserve the existing Gitless and source-delivery adjustments."
         ]
       },
       "sourceIncludesLocalChanges": true,
-      "sourceSha256": "e212fbe2298f05041a154a6a9d44ad5979bcd4d67240369befedaa3cd5db1831",
+      "sourceSha256": "3275d8dbbb79da751dd6ebff87f6f9a4bf5f9ef978952fcd7040177b9cb7da7a",
       "fileCount": 86,
       "retainedDocuments": [
         {
@@ -82,7 +85,7 @@
     },
     {
       "name": "dsh-boot-ocbc",
-      "version": "0.1.7",
+      "version": "0.1.8",
       "source": "third_party/plugins/dsh-boot-ocbc",
       "origin": {
         "commit": null,
@@ -96,11 +99,12 @@
           "Reject stale packages when source files are added or removed; retain source-free archive verification.",
           "Format the renderer with equivalent emitted JavaScript.",
           "Distribute letter streams across 24 regions with two separated lanes each; use website logo fill #e1251b without residual tracing tint; brighten only the scene layer and retain crisp text.",
-          "Match background black level to the portrait source (#030609) and remove added atmospheric haze and background glow spots."
+          "Match background black level to the portrait source (#030609) and remove added atmospheric haze and background glow spots.",
+          "Declare the verified 0.1.7-rc.2 and target 0.2.0-rc.2 hosts in 0.1.8; retain the complete animation runtime, duration, replay behavior and all visual assets unchanged. Verify real 0.2.0-rc.2 Host load/unload, web routes and complete animation playback in Chromium."
         ]
       },
       "sourceIncludesLocalChanges": true,
-      "sourceSha256": "833c07a57644a3c596acf5a7c7e1d13fdd9b4220538b989e9ede1f461e6ee02b",
+      "sourceSha256": "4693cedb5c88d0c14d53077262e775a27cf43c59ac7eaf75033d5f037dd369a0",
       "fileCount": 157,
       "retainedDocuments": [],
       "excluded": [
@@ -110,7 +114,7 @@
     },
     {
       "name": "dsh-atlassian-kanban",
-      "version": "0.1.0-alpha.9",
+      "version": "0.1.0-alpha.10",
       "source": "third_party/plugins/dsh-atlassian-kanban",
       "origin": {
         "commit": null,
@@ -125,12 +129,15 @@
           "Show connection success without the authenticated account name.",
           "Prefix all tools with kanban_ and update tool guidance and ACP bridge tests.",
           "Add resizable single-line Jira and Bitbucket tables with local column preferences and full-text tooltips.",
-          "Declare the MCP SDK used directly by integration tests."
+          "Declare the MCP SDK used directly by integration tests.",
+          "Contribute fixed DSH Atlassian Kanban guidance through the scoped systemPrompt.section lifecycle; declare the host system-prompt peer and clarify temporary search versus revision-checked query persistence in tool descriptions and schemas.",
+          "Test the real plugin lifecycle and native profile save/readback/restart, stable query IDs and credentials, ACP MCP discovery, temporary searches, save conflicts/failures and existing ask/auto permission decisions. Original sibling plugin sources are not synchronized.",
+          "Build alpha.10 with locked DSH 0.2.0-rc.2 development packages while retaining exact 0.1.7-rc.2 peer compatibility; derive generator target from its pinned dependency. Verify the production Host lifecycle, HMR-backed settings persistence and package; Restore the updated ACP adapter in the desktop bundle and retain native ACP bridge integration coverage."
         ]
       },
       "sourceIncludesLocalChanges": true,
-      "sourceSha256": "348ad2616db7ffab7114adc4b373e13af04986ce144a3e74208de1076ab36d7c",
-      "fileCount": 60,
+      "sourceSha256": "e43428afb2f222df14296a825dde9dded627c57a634b085ea080ae557e75ebbe",
+      "fileCount": 66,
       "retainedDocuments": [],
       "excluded": [
         "README and ordinary development/research/release documents",

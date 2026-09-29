@@ -455,7 +455,7 @@ export async function packageTarget(
     delete buildEnv.DSH_DESKTOP_LOCAL_PLUGINS
     delete targetEnv.DSH_DESKTOP_LOCAL_PLUGINS
     delete downloadEnv.DSH_DESKTOP_LOCAL_PLUGINS
-    await execute(['run', 'build:plugins'], buildEnv, REPOSITORY_ROOT)
+    await execute(['run', 'build:plugins', '--desktop-only'], buildEnv, REPOSITORY_ROOT)
   }
   await execute(['run', 'build:official'], buildEnv, REPOSITORY_ROOT)
   await execute(['run', 'release:pack', '--family', 'dsh', '--out', buildPaths.packedDsh, ...packArguments], buildEnv, REPOSITORY_ROOT)

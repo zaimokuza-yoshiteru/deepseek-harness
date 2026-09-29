@@ -38,7 +38,7 @@ if (mode === 'startup') {
 }
 run(['--dir', 'native/system/packages/entry', 'run', 'build:js'])
 run(['exec', 'vitest', 'run', ...[
-  'npm-environment', 'project-manager', 'distribution', 'shell-environment', 'plugin-seed', 'package-target',
+  'npm-environment', 'project-manager', 'distribution', 'login-shell-environment', 'plugin-seed', 'package-target',
   'prepare-plugin-seed', 'host-process', 'main-startup', 'prepare-package-set', 'locale', 'icons', 'profile-core-cleanup', 'preload-app', 'node-environment',
   'desktop-build-paths', 'development-project', 'installed-update-package-content', 'welcome-startup', 'windows-asar-unpack',
   'portable-config', 'smoke-portable', 'tray-icon', 'quit-confirmation', 'background-notice', 'tray',

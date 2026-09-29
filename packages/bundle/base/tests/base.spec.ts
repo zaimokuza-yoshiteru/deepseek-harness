@@ -36,6 +36,9 @@ describe('dsh-base bundle', () => {
     expect(rows.find(row => row.id === 'session-telemetry-otel')?.config?.['mode']).toEqual({
       __jsExpr: "process.env.DSH_TELEMETRY_MODE || 'FEEDBACK_ONLY'",
     })
+    expect(rows.find(row => row.id === 'session-log-deepseek')?.config?.['enabled']).toEqual({
+      __jsExpr: "process.env.DSH_DESKTOP_INTRANET !== '1'",
+    })
     expect(rows.find(row => row.id === 'hmr')).toMatchObject({
       config: { root: [] },
     })

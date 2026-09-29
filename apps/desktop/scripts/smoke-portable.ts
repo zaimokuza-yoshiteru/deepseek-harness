@@ -19,6 +19,10 @@ import { DESKTOP_PORTABLE_PLUGINS } from '../src/portable-plugins.ts'
 import { smokeDesktopRuntime } from './smoke-runtime.ts'
 import { verifyRuntimeArchive } from './verify-runtime-archive.ts'
 import { assertPackagedWindowsTrayIcon } from './verify-packaged-tray-icon.ts'
+import { resolveDesktopDistributionVersion } from '../../../scripts/desktop-distribution-version.mjs'
+
+const delivery = JSON.parse(readFileSync(new URL('../../../delivery.json', import.meta.url), 'utf8')) as { dshVersion: string; version: string }
+resolveDesktopDistributionVersion(delivery, process.env.DSH_DESKTOP_DISTRIBUTION_VERSION)
 
 const target = process.argv[2]
 if (target !== 'mac-arm64' && target !== 'win-x64') throw new Error('Expected mac-arm64 or win-x64')
@@ -181,21 +185,24 @@ try {
   await manager.applyRelease(true)
   writeFileSync(join(paths.profile, 'cordis.patch.yml'), '- id: webserver\n  config:\n    host: 127.0.0.1\n    port: 0\n')
   const prepared = performance.now()
-  const metadata = spawn(runtime.node, ['--expose-internals', join(import.meta.dirname, '../tests/fixtures/plugin-metadata-smoke.mjs'), runtime.dsh, paths.profile], {
+  const metadata = spawn(runtime.node, ['--expose-internals', join(import.meta.dirname, '../tests/fixtures/plugin-metadata-smoke.mjs'), runtime.dsh, paths.profile,
+    JSON.stringify(DESKTOP_PORTABLE_PLUGINS.map(plugin => plugin.name))], {
     env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: 'inherit',
   })
   const [metadataCode, metadataSignal] = await once(metadata, 'exit')
   assert.equal(metadataSignal, null)
   assert.equal(metadataCode, 0, 'Final plugin metadata must register on the packaged host and client registry')
-  const devinConfig = spawn(runtime.node, ['--expose-internals', join(import.meta.dirname, '../tests/fixtures/devin-config-smoke.mjs'), runtime.dsh, paths.profile], {
-    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: 'inherit',
-  })
-  const [devinCode, devinSignal] = await once(devinConfig, 'exit')
-  assert.equal(devinSignal, null)
-  assert.equal(devinCode, 0, 'Packaged Devin config must support ordinary Windows users and preserve original files')
+  if (DESKTOP_PORTABLE_PLUGINS.some(plugin => plugin.name === '@zaimokuza/dsh-acp-adapter')) {
+    const devinConfig = spawn(runtime.node, ['--expose-internals', join(import.meta.dirname, '../tests/fixtures/devin-config-smoke.mjs'), runtime.dsh, paths.profile], {
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: 'inherit',
+    })
+    const [devinCode, devinSignal] = await once(devinConfig, 'exit')
+    assert.equal(devinSignal, null)
+    assert.equal(devinCode, 0, 'Packaged Devin config must support ordinary Windows users and preserve original files')
+  }
   const hostStart = performance.now()
   await startHost()
-  assert.equal(readDesktopRuntime(runtime.dsh).release.version, '0.1.7-rc.2')
+  assert.equal(readDesktopRuntime(runtime.dsh).release.version, delivery.dshVersion)
   const response = await request(new Request('dsh-app://app/index.html'))
   assert.equal(response.status, 200)
   const html = await response.text()
@@ -210,14 +217,16 @@ try {
     assert.equal(client.status, 200)
     assert.ok((await client.text()).length > 0)
   }
-  const acpRpc = await request(new Request('dsh-app://app/api/dshAcp/health', {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ type: 'client-request', rpcId: 'acp-smoke', method: 'dshAcp/health', payload: { args: {} } }),
-  }))
-  assert.equal(acpRpc.status, 200)
-  const acpResult = await acpRpc.json() as { result: { ok: boolean; value?: { providers: unknown[] } } }
-  assert.equal(acpResult.result.ok, true, JSON.stringify(acpResult))
-  assert.ok(Array.isArray(acpResult.result.value?.providers), 'ACP health must execute successfully')
+  if (DESKTOP_PORTABLE_PLUGINS.some(plugin => plugin.name === '@zaimokuza/dsh-acp-adapter')) {
+    const acpRpc = await request(new Request('dsh-app://app/api/dshAcp/health', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'client-request', rpcId: 'acp-smoke', method: 'dshAcp/health', payload: { args: {} } }),
+    }))
+    assert.equal(acpRpc.status, 200)
+    const acpResult = await acpRpc.json() as { result: { ok: boolean; value?: { providers: unknown[] } } }
+    assert.equal(acpResult.result.ok, true, JSON.stringify(acpResult))
+    assert.ok(Array.isArray(acpResult.result.value?.providers), 'ACP health must execute successfully')
+  }
   await assertOfficeState('unselected')
   await assertBundles()
   await host!.stop()
@@ -265,7 +274,7 @@ try {
   console.log('Packaged legacy profile migration: retired tarballs removed offline; disabled Teams preserved')
   const state = JSON.parse(readFileSync(join(legacyPaths.profile, 'package.json'), 'utf8')) as { dsh: { profile: { bundles: string[] } } }
   assert.equal(state.dsh.profile.bundles.some(name => DESKTOP_AGENT_TEAM_BUNDLES.some(team => team === name)), false)
-  console.log('Native plugin manager, offline Teams toggles, migration and packaged ACP/Office checks passed')
+  console.log('Native plugin manager, offline Teams toggles, migration and active packaged plugin checks passed')
 } finally {
   await host?.stop()
   clearTimeout(timeout)

@@ -1,7 +1,6 @@
 /**
  * Additive ACP composition root. DSH owns the AgentLoop, native ModelPicker,
- * and conversation surface. The native picker remains the default; an
- * opt-in setting enables the adapter's searchable picker enhancement.
+ * and conversation surface, including model search and selection.
  * This plugin also contributes ACP LLM routes and its existing settings/
  * sidecar services through public seams.
  */
@@ -20,10 +19,20 @@ export const name = 'dsh-acp-adapter'
 // composition time prevents a health probe from freezing a false
 // `promptImage: unsupported` result before the host finishes booting.
 // Permission facts are read from the host preset projection before ACP dispatch.
-export const inject = ['llm', 'sessions', 'subprocess', 'dshHomePath', 'attachments', 'sessionProjections', 'permissionPresets']
+export const inject = [
+  'llm',
+  'sessions',
+  'subprocess',
+  'dshHomePath',
+  'attachments',
+  'sessionProjections',
+  'permissionPresets',
+]
 
 export function apply(ctx: Context, config: Config): void {
-  ctx.inject(['settings'], child => { child.effect(() => child.settings.configure({ auto: false }, ctx.fiber)) })
+  ctx.inject(['settings'], (child) => {
+    child.effect(() => child.settings.configure({ auto: false }, ctx.fiber))
+  })
   installInstalledProfileRegistry(ctx, config, { installRemote: true })
   installLegacySettingsImport(ctx)
 }

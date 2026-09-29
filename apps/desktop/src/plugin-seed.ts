@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { cpSync, existsSync, lstatSync, unlinkSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DESKTOP_PACKAGE_SET_FILE, desktopCorePackageSpec, readDesktopCorePackageSet } from './core-package-set.ts'
-import { DESKTOP_PORTABLE_PLUGINS } from './portable-plugins.ts'
+import { DESKTOP_MANAGED_PLUGINS, DESKTOP_PORTABLE_PLUGINS } from './portable-plugins.ts'
 import { desktopProfileBundles, DESKTOP_AGENT_TEAM_BUNDLES } from './profile-defaults.ts'
 import type { DesktopRuntimeDescriptor } from './runtime-tree.ts'
 import { removeOwnedDirectory } from './owned-directory.ts'
@@ -41,7 +41,8 @@ export async function applyPluginSeed(
   const previousSeed = existsSync(join(profile, MARKER))
     ? JSON.parse(readFileSync(join(profile, MARKER), 'utf8')) as { plugins?: string[] } : undefined
   const bundled = new Set<string>([
-    ...DESKTOP_PORTABLE_PLUGINS.map(plugin => plugin.name), ...seedPlugins, ...previousSeed?.plugins ?? [],
+    ...DESKTOP_MANAGED_PLUGINS.map(plugin => plugin.name), ...DESKTOP_PORTABLE_PLUGINS.map(plugin => plugin.name),
+    ...seedPlugins, ...previousSeed?.plugins ?? [],
   ])
   bundled.add('@zaimokuza/dsh-plugin-hub')
   bundled.add('@deepseek-ai/dsh-experimental-agent-team-web-profile')

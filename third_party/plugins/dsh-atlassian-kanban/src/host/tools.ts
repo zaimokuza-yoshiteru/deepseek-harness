@@ -14,7 +14,7 @@ const n = (description: string, required = true): ParameterPropertySpec => ({ ty
 const obj = (description: string, required = true): ParameterPropertySpec => ({ type: 'object', description, additionalProperties: true, ...(required ? { required: true } : {}) })
 const bool = (description: string, required = true): ParameterPropertySpec => ({ type: 'boolean', description, ...(required ? { required: true } : {}) })
 const array = (description: string, items: NonNullable<Extract<ParameterPropertySpec, { type: 'array' }>['items']>, required = true): ParameterPropertySpec => ({ type: 'array', description, items, ...(required ? { required: true } : {}) })
-const queryRowSchema = { type: 'object', additionalProperties: false, properties: { id: { type: 'string', description: 'Optional stable id' }, name: { type: 'string', description: 'Query display name', required: true }, query: { type: 'string', description: 'JQL or CQL expression', required: true } } } as const
+const queryRowSchema = { type: 'object', additionalProperties: false, properties: { id: { type: 'string', description: 'Reuse the saved id from kanban_get_settings when editing or renaming; omit for a new query' }, name: { type: 'string', description: 'Query display name', required: true }, query: { type: 'string', description: 'JQL or CQL expression', required: true } } } as const
 const repoRowSchema = { type: 'object', additionalProperties: false, properties: { id: { type: 'string', description: 'Optional stable id' }, projectKey: { type: 'string', description: 'Bitbucket project key', required: true }, repositorySlug: { type: 'string', description: 'Bitbucket repository slug', required: true } } } as const
 
 const segment = (value: string, label: string) => {
@@ -68,7 +68,7 @@ export function registerTools(ctx: Context, service: AtlassianService): (() => v
     return [...new Set(input as string[])]
   }
 
-  add('kanban_get_settings', 'Read this plugin’s saved Atlassian settings. Credentials are always redacted; use the returned revision for the next configuration update.', {}, async () => service.settings())
+  add('kanban_get_settings', 'Read the DSH Atlassian Kanban board’s saved local configuration and revision; credentials are redacted. Before saving JQL/CQL, read existing IDs and revision here, then use kanban_upsert_queries. Read again after saving to verify the target ID, name and expression before reporting success.', {}, async () => service.settings())
   add('kanban_update_connections', 'Update one or more product base URLs and bearer tokens atomically. Omitted/empty tokens are retained; set clearToken=true to remove a token. The result never contains token values.', {
     expectedRevision: n('Revision from kanban_get_settings'),
     jira: { type: 'object', description: 'Optional Jira connection patch', additionalProperties: false, properties: { baseUrl: s('New base URL, or empty to disable the URL', false), bearerToken: s('New bearer token; never returned', false), clearToken: bool('Explicitly clear the saved token', false) } },
@@ -99,8 +99,8 @@ export function registerTools(ctx: Context, service: AtlassianService): (() => v
   })
   add('kanban_set_preferences', 'Update plugin-wide mention behavior. When refreshMentions is false, @ suggestions use only successful local query cache entries.', { expectedRevision: n('Revision from kanban_get_settings'), refreshMentions: bool('Refresh Atlassian data during @ suggestions') }, async a => service.mutateSettings(revision(a), [{ op: 'set', path: ['refreshMentions'], value: a.refreshMentions }]))
 
-  add('kanban_upsert_queries', 'Add or update named saved Jira JQL or Confluence CQL queries without replacing existing queries. Exact duplicate entries are collapsed; conflicting duplicates reject the entire batch.', {
-    expectedRevision: n('Revision from kanban_get_settings'), product: { type: 'string', enum: ['jira', 'confluence'], description: 'Query product', required: true }, queries: array('Up to 100 named query entries', queryRowSchema),
+  add('kanban_upsert_queries', 'Persist named Jira JQL or Confluence CQL in the DSH Atlassian Kanban board’s local configuration; this does not run a remote search. First call kanban_get_settings, preserve existing IDs, and submit only intended changes with its latest revision. Unmentioned queries and connections are retained. Exact duplicates collapse; conflicting duplicates reject the batch. On revision conflict, re-read and reassess before retrying. After success, call kanban_get_settings again and verify the saved record before reporting it saved.', {
+    expectedRevision: n('Latest revision from kanban_get_settings; a conflict requires re-reading and reassessing the change'), product: { type: 'string', enum: ['jira', 'confluence'], description: 'jira saves JQL in jira.jql; confluence saves CQL in confluence.cql', required: true }, queries: array('1 to 100 intended named query additions or updates; unmentioned saved queries are preserved', queryRowSchema),
   }, async a => {
     const product = a.product as 'jira' | 'confluence'
     if (product !== 'jira' && product !== 'confluence') throw new TypeError('product must be jira or confluence')
@@ -191,7 +191,7 @@ export function registerTools(ctx: Context, service: AtlassianService): (() => v
     }
   }
 
-  add('kanban_jira_search_issues', 'Search Jira issues using JQL. Use a configured saved query id or supply JQL directly.', { jql: s('Jira Query Language expression', false), jqlId: s('Optional configured named JQL id', false), cursor: s('Optional server pagination cursor', false), maxResults: n('Maximum results, clamped to 100', false) }, async (a, signal) => {
+  add('kanban_jira_search_issues', 'Search remote Jira issues for DSH Atlassian Kanban using temporary jql or a saved jqlId. This never saves board configuration; use kanban_upsert_queries with product=jira and verify with kanban_get_settings to save JQL.', { jql: s('Temporary JQL expression; not saved, takes precedence over jqlId', false), jqlId: s('Existing jira.jql id from kanban_get_settings; used when jql is omitted', false), cursor: s('Optional server pagination cursor', false), maxResults: n('Maximum results, clamped to 100', false) }, async (a, signal) => {
     const jql = typeof a.jql === 'string' && a.jql.trim() ? a.jql : undefined
     const saved = !jql && typeof a.jqlId === 'string' ? service.settings().jira.jql.find(q => q.id === a.jqlId)?.query : undefined
     if (!jql && !saved) throw new TypeError('Provide JQL or a valid configured jqlId')
@@ -272,7 +272,7 @@ export function registerTools(ctx: Context, service: AtlassianService): (() => v
   add('kanban_bitbucket_needs_work_pull_request', 'Mark your pull request review as needing work at the supplied version.', { projectKey: s('Configured Bitbucket project key'), repositorySlug: s('Configured repository slug'), pullRequestId: n('Pull request id'), userSlug: s('Current Bitbucket user slug'), version: n('Observed pull request version') }, (a, signal) => api('bitbucket', 'PUT', `${prPath(service, a)}/participants/${segment(String(a.userSlug), 'user slug')}`, signal, new URLSearchParams({ version: String(a.version) }), { status: 'NEEDS_WORK' }))
   add('kanban_bitbucket_decline_pull_request', 'Decline a pull request at the supplied version.', { projectKey: s('Configured Bitbucket project key'), repositorySlug: s('Configured repository slug'), pullRequestId: n('Pull request id'), version: n('Observed pull request version'), comment: s('Optional comment', false) }, (a, signal) => api('bitbucket', 'POST', `${prPath(service, a)}/decline`, signal, new URLSearchParams({ version: String(a.version) }), a.comment ? { comment: String(a.comment) } : {}))
 
-  add('kanban_confluence_search', 'Search Confluence using CQL. Use a configured saved query id or supply CQL directly.', { cql: s('Confluence Query Language expression', false), cqlId: s('Optional configured named CQL id', false), cursor: s('Optional server pagination cursor', false), limit: n('Page size, clamped to 100', false) }, async (a, signal) => {
+  add('kanban_confluence_search', 'Search remote Confluence content for DSH Atlassian Kanban using temporary cql or a saved cqlId. This never saves board configuration; use kanban_upsert_queries with product=confluence and verify with kanban_get_settings to save CQL.', { cql: s('Temporary CQL expression; not saved, takes precedence over cqlId', false), cqlId: s('Existing confluence.cql id from kanban_get_settings; used when cql is omitted', false), cursor: s('Optional server pagination cursor', false), limit: n('Page size, clamped to 100', false) }, async (a, signal) => {
     const cql = typeof a.cql === 'string' && a.cql.trim() ? a.cql : undefined
     const saved = !cql && typeof a.cqlId === 'string' ? service.settings().confluence.cql.find(q => q.id === a.cqlId)?.query : undefined
     if (!cql && !saved) throw new TypeError('Provide CQL or a valid configured cqlId')
