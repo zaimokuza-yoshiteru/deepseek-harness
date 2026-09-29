@@ -15,6 +15,10 @@ on:
         options: [win-x64, mac-arm64]
         default: win-x64
         required: true
+      dependency_audit:
+        description: Verify packaged dependency files with application egress blocked
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -33,6 +37,7 @@ jobs:
       DSH_TELEMETRY_MODE: DISABLED
       DSH_DESKTOP_DISTRIBUTION_VERSION: startup-replay
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      DSH_STARTUP_DEPENDENCY_AUDIT: ${{ inputs.dependency_audit && '1' || '0' }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -66,4 +71,6 @@ jobs:
             .artifacts/startup-timing/result.json
             .artifacts/startup-timing/*.png
             .artifacts/startup-timing/launch-error.txt
+            .artifacts/startup-timing/dependency-audit.json
+            .artifacts/startup-timing/network-guard.json
           if-no-files-found: warn

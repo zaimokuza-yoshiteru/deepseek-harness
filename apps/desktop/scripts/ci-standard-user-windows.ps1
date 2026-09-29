@@ -17,7 +17,7 @@ $node = (Get-Command node).Source
 $pwsh = (Get-Command pwsh).Source
 $script = Join-Path $root 'build.ps1'
 # Values are passed in JSON; no command substitution or credential is written to disk.
-@{ repo = $repo; node = $node; path = $env:PATH; root = $root; version = $env:DSH_DESKTOP_DISTRIBUTION_VERSION; mode = $Mode } |
+@{ repo = $repo; node = $node; path = $env:PATH; root = $root; version = $env:DSH_DESKTOP_DISTRIBUTION_VERSION; mode = $Mode; audit = $env:DSH_STARTUP_DEPENDENCY_AUDIT } |
   ConvertTo-Json | Set-Content (Join-Path $root 'inputs.json')
 @'
 $ErrorActionPreference = 'Stop'
@@ -35,6 +35,7 @@ New-Item -ItemType Directory -Force $env:TEMP, $env:APPDATA, $env:LOCALAPPDATA |
 $env:DSH_DESKTOP_DISTRIBUTION_VERSION = $inputData.version
 $env:DSH_TELEMETRY_MODE = 'DISABLED'
 $env:CSC_IDENTITY_AUTO_DISCOVERY = 'false'
+$env:DSH_STARTUP_DEPENDENCY_AUDIT = $inputData.audit
 # pnpm/action-setup lives in runneradmin's home, which this user cannot read.
 $tooling = Join-Path $env:USERPROFILE 'build-tools'
 $npmCli = Join-Path (Split-Path $inputData.node) 'node_modules\npm\bin\npm-cli.js'
@@ -52,9 +53,37 @@ $process = Start-Process -FilePath $pwsh -ArgumentList @('-NoProfile', '-File', 
   -Credential $credential -LoadUserProfile -WorkingDirectory $repo -PassThru `
   -RedirectStandardOutput $stdout -RedirectStandardError $stderr
 $offset = 0
-while (-not $process.WaitForExit(10000)) {
-  $lines = @(Get-Content $stdout -ErrorAction SilentlyContinue)
-  if ($lines.Count -gt $offset) { $lines[$offset..($lines.Count - 1)]; $offset = $lines.Count }
+$guarded = $false
+$ruleGroup = 'DSH-CI-' + [Guid]::NewGuid().ToString('N')
+$firewallState = @()
+try {
+  while (-not $process.WaitForExit(1000)) {
+    $requestFile = Join-Path $repo '.artifacts/startup-timing/network-guard-request.json'
+    if ($env:DSH_STARTUP_DEPENDENCY_AUDIT -eq '1' -and -not $guarded -and (Test-Path $requestFile)) {
+      $request = Get-Content -Raw $requestFile | ConvertFrom-Json
+      $application = [IO.Path]::GetFullPath($request.application)
+      $allowed = [IO.Path]::GetFullPath((Join-Path $repo '.artifacts/startup-timing')) + [IO.Path]::DirectorySeparatorChar
+      if (-not $application.StartsWith($allowed, [StringComparison]::OrdinalIgnoreCase)) { throw 'Firewall request is outside the CI extraction directory' }
+      $firewallState = @(Get-NetFirewallProfile | Select-Object Name, Enabled)
+      Set-NetFirewallProfile -Profile Domain,Private,Public -Enabled True
+      $programs = @(Get-ChildItem -LiteralPath $application -Recurse -File -Filter '*.exe' | Select-Object -ExpandProperty FullName)
+      if ($programs.Count -eq 0) { throw 'No application executables found for the firewall guard' }
+      foreach ($program in $programs) {
+        New-NetFirewallRule -DisplayName $ruleGroup -Group $ruleGroup -Direction Outbound -Action Block `
+          -Profile Any -Program $program -RemoteAddress '0.0.0.0-126.255.255.255','128.0.0.0-255.255.255.255','::2-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff' | Out-Null
+      }
+      $active = @(Get-NetFirewallRule -PolicyStore ActiveStore -Group $ruleGroup)
+      if ($active.Count -ne $programs.Count -or @($active | Where-Object { $_.Enabled -ne 'True' -or $_.Action -ne 'Block' }).Count -ne 0) { throw 'Firewall guard did not become active' }
+      @{ active = $true; programs = $programs; scope = 'all non-loopback IPv4 and IPv6 destinations'; applicationRunsAsStandardUser = $true } |
+        ConvertTo-Json -Depth 4 | Set-Content (Join-Path $repo '.artifacts/startup-timing/network-guard.json')
+      $guarded = $true
+    }
+    $lines = @(Get-Content $stdout -ErrorAction SilentlyContinue)
+    if ($lines.Count -gt $offset) { $lines[$offset..($lines.Count - 1)]; $offset = $lines.Count }
+  }
+} finally {
+  Get-NetFirewallRule -Group $ruleGroup -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+  foreach ($profile in $firewallState) { Set-NetFirewallProfile -Name $profile.Name -Enabled $profile.Enabled }
 }
 $process.WaitForExit()
 $lines = @(Get-Content $stdout -ErrorAction SilentlyContinue)

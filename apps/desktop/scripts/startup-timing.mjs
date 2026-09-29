@@ -6,6 +6,7 @@ import { cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/pr
 import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import { once } from 'node:events'
+import { startDependencyAudit } from './startup-dependency-audit.mjs'
 
 const desktopRequire = createRequire(new URL('../package.json', import.meta.url))
 const webRequire = createRequire(new URL('../../web/package.json', import.meta.url))
@@ -55,6 +56,8 @@ Object.assign(env, { DSH_HOME: home, DSH_TELEMETRY_MODE: 'DISABLED', DSH_DESKTOP
   npm_config_registry: 'http://127.0.0.1:1/unreachable/', npm_config_userconfig: join(home, 'absent.npmrc') })
 // Exercise the ordinary Windows launch path without a preconfigured DSH_HOME.
 if (target === 'win-x64') delete env.DSH_HOME
+const audit = process.env.DSH_STARTUP_DEPENDENCY_AUDIT === '1'
+  ? await startDependencyAudit(dirname(executable), output, home, env) : undefined
 const save = () => writeFile(join(output, 'result.json'), JSON.stringify(report, null, 2) + '\n')
 const pluginNames = ['@zaimokuza/dsh-acp-adapter', '@zaimokuza/dsh-agent-teams-office', 'dsh-boot-ocbc', 'dsh-atlassian-kanban']
 async function verifyPlugins(app, page, run, kind) {
@@ -129,7 +132,7 @@ async function verifyPlugins(app, page, run, kind) {
   run.plugins.passed = true
   await save()
 }
-const scenarios = ['fresh-profile', 'same-profile-relaunch', ...(target === 'win-x64' ? [
+const scenarios = audit ? ['fresh-profile', 'same-profile-relaunch', 'delete-both'] : ['fresh-profile', 'same-profile-relaunch', ...(target === 'win-x64' ? [
   'delete-both', 'delete-dsh-only', 'delete-desktop-only', 'plugin-list-timeout-retry', 'unicode-space-app-path', 'deep-app-path',
 ] : [])]
 const legacyHome = join(home, '.dsh')
@@ -243,6 +246,7 @@ for (const kind of scenarios) {
       { timeout: 300_000, message: 'The workspace must be visible after startup' }).toBe(true)
     mark('workspaceVisibleMs')
     await verifyPlugins(app, page, run, kind)
+    await audit?.verify(app, profile, kind)
     await settingsLauncher.click()
     if (!intranet) await page.getByRole('menuitem', { name: /^(Settings|设置)$/u, exact: true }).click()
     await page.getByRole('dialog').getByRole('button', { name: /^(General|通用设置)$/u, exact: true }).waitFor({ state: 'visible' })
@@ -286,4 +290,5 @@ for (const kind of scenarios) {
     }
   }
 }
+await audit?.finish()
 console.log(JSON.stringify(report, null, 2))
