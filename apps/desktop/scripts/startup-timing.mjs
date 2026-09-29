@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { createReadStream, existsSync } from 'node:fs'
-import { mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import { once } from 'node:events'
@@ -134,6 +134,7 @@ const scenarios = ['fresh-profile', 'same-profile-relaunch', ...(target === 'win
 ] : [])]
 const legacyHome = join(home, '.dsh')
 const legacySentinel = join(legacyHome, 'ci-sentinel.txt')
+const originalApplication = dirname(executable)
 for (const kind of scenarios) {
   const run = { kind, timings: {}, errors: [], requests: [] }
   report.runs.push(run)
@@ -159,7 +160,17 @@ for (const kind of scenarios) {
       : join(output, 'deep-path', ...Array.from({ length: 6 }, (_, i) => `level-${i}-abcdefghijklm`))
     await mkdir(parent, { recursive: true })
     const destination = join(parent, 'DSH Desktop')
-    await rename(dirname(executable), destination)
+    run.pathPreparation = { destination, status: 'copying' }
+    await save()
+    try {
+      await cp(originalApplication, destination, { recursive: true, errorOnExist: true, force: false })
+      run.pathPreparation.status = 'copied'
+    } catch (error) {
+      run.pathPreparation.status = 'failed'
+      run.failure = error.message
+      await save()
+      throw error
+    }
     executable = join(destination, 'DSH Desktop.exe')
     await rm(dshHome, { recursive: true, force: false, maxRetries: 5, retryDelay: 200 })
   }
