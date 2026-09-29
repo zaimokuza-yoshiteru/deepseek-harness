@@ -138,7 +138,10 @@ async function withBridge(config: AtlassianKanbanConfig, expected: readonly stri
   let lease: Awaited<ReturnType<typeof createTeamBridge>> | undefined
   let client: Client | undefined
   try {
-    lease = await createTeamBridge(bridgeContext, agent.id, { mcpCapabilities: { http: true } })
+    lease = await createTeamBridge(
+      bridgeContext, agent.id, { mcpCapabilities: { http: true } }, undefined, undefined, undefined,
+      ctx.tools.schemas(agent),
+    )
     if (!lease) throw new Error('The real DSH tool registry did not open its ACP MCP bridge')
     const server = lease.servers[0]
     if (!server || !('url' in server)) throw new Error('The ACP bridge did not expose loopback HTTP')

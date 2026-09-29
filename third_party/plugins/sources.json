@@ -132,11 +132,12 @@
           "Declare the MCP SDK used directly by integration tests.",
           "Contribute fixed DSH Atlassian Kanban guidance through the scoped systemPrompt.section lifecycle; declare the host system-prompt peer and clarify temporary search versus revision-checked query persistence in tool descriptions and schemas.",
           "Test the real plugin lifecycle and native profile save/readback/restart, stable query IDs and credentials, ACP MCP discovery, temporary searches, save conflicts/failures and existing ask/auto permission decisions. Original sibling plugin sources are not synchronized.",
-          "Build alpha.10 with locked DSH 0.2.0-rc.2 development packages while retaining exact 0.1.7-rc.2 peer compatibility; derive generator target from its pinned dependency. Verify the production Host lifecycle, HMR-backed settings persistence and package; Restore the updated ACP adapter in the desktop bundle and retain native ACP bridge integration coverage."
+          "Build alpha.10 with locked DSH 0.2.0-rc.2 development packages while retaining exact 0.1.7-rc.2 peer compatibility; derive generator target from its pinned dependency. Verify the production Host lifecycle, HMR-backed settings persistence and package; Restore the updated ACP adapter in the desktop bundle and retain native ACP bridge integration coverage.",
+          "Pass the real visible tool schemas to the updated ACP bridge in all integration call sites; verify discovery, temporary searches, revision-checked saves and ask/auto decisions against the new adapter."
         ]
       },
       "sourceIncludesLocalChanges": true,
-      "sourceSha256": "e43428afb2f222df14296a825dde9dded627c57a634b085ea080ae557e75ebbe",
+      "sourceSha256": "c93918e861545bb55c318ed422876f4d80391866ca2ff4310938892e26c8a169",
       "fileCount": 66,
       "retainedDocuments": [],
       "excluded": [

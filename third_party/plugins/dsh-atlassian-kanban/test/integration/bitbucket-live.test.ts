@@ -143,7 +143,10 @@ active('Bitbucket 10.4.1 plugin tools through the live MCP bridge', () => {
       get(name: string) { return name === 'tools' ? ctx.get('tools') : name === 'agents' ? { get: (id: string) => id === agent.id ? agent : undefined } : ctx.get(name, false) },
       on(name: string, listener: (...args: any[]) => void) { return ctx.on(name, listener) },
     } as unknown as CordisContext
-    const lease = await createTeamBridge(bridgeContext, agent.id, { mcpCapabilities: { http: true } })
+    const lease = await createTeamBridge(
+      bridgeContext, agent.id, { mcpCapabilities: { http: true } }, undefined, undefined, undefined,
+      ctx.tools.schemas(agent),
+    )
     if (!lease) throw new Error('The DSH ACP adapter did not open its MCP bridge.')
     closers.push(() => lease.close())
     const server = lease.servers[0]

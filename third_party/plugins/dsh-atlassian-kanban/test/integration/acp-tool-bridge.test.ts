@@ -71,7 +71,10 @@ describe('Atlassian tools over the native ACP MCP bridge', () => {
       get(name: string) { return services[name] ?? ctx.get(name, false) },
       on(name: string, listener: (...args: any[]) => void) { return ctx.on(name, listener) },
     } as unknown as CordisContext
-    const lease = await createTeamBridge(bridgeContext, agent.id, { mcpCapabilities: { http: true } })
+    const lease = await createTeamBridge(
+      bridgeContext, agent.id, { mcpCapabilities: { http: true } }, undefined, undefined, undefined,
+      ctx.tools.schemas(agent),
+    )
     if (lease === undefined) throw new Error('The adapter did not create an MCP bridge')
     closers.push(() => lease.close())
     const server = lease.servers[0]
@@ -167,7 +170,10 @@ describe('board configuration workflow over ACP', () => {
       on(name: string, listener: (...args: any[]) => void) { return ctx.on(name, listener) },
     } as unknown as CordisContext
     let policy: 'auto' | 'ask' = 'ask'
-    const lease = await createTeamBridge(bridgeContext, agent.id, { mcpCapabilities: { http: true } }, undefined, async () => policy)
+    const lease = await createTeamBridge(
+      bridgeContext, agent.id, { mcpCapabilities: { http: true } }, undefined, async () => policy, undefined,
+      ctx.tools.schemas(agent),
+    )
     if (!lease) throw new Error('Missing MCP bridge')
     closers.push(() => lease.close())
     const server = lease.servers[0]
