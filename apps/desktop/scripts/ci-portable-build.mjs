@@ -47,6 +47,8 @@ run(['exec', 'vitest', 'run', ...[
   .map(name => `packages/boot/app-boot/tests/${name}.spec.ts`),
 'packages/boot/plugin-manager/tests/operations.spec.ts'])
 run(['--dir', 'apps/desktop', 'run', target === 'mac-arm64' ? 'package:portable:mac:arm64' : 'package:portable:win:x64'])
+readFileSync('packages/client/ui-chat/lib/client.js')
+run(['exec', 'vitest', 'run', 'packages/client/ui-chat/tests/running-whale-tail.client.spec.tsx'])
 const directory = join('apps/desktop/.desktop-build/targets', target, 'artifacts')
 const archives = readdirSync(directory).filter(name => name.endsWith('.zip'))
 const archive = `dsh-desktop-${process.env.DSH_DESKTOP_DISTRIBUTION_VERSION}-${target}.zip`

@@ -4,10 +4,10 @@
   "plugins": [
     {
       "name": "@zaimokuza/dsh-acp-adapter",
-      "version": "0.2.0-rc.2.0",
+      "version": "0.2.0-rc.2.1",
       "source": "third_party/plugins/dsh-acp-adapter",
       "origin": {
-        "commit": "3403470473ab14d3a420df4d06c30ee47b2640f1",
+        "commit": "60ba8dd073cd588eb1ac28b290db7962ebb7a1aa",
         "repository": "https://github.com/zaimokuza-yoshiteru/dsh-acp-adapter",
         "changes": [
           "Use the source assets/registry snapshot without a network refresh.",
@@ -16,14 +16,14 @@
           "Require explicit DSH_UPSTREAM_CHECKOUT for host integration tests.",
           "Use pnpm 11.23.0, matching the desktop build toolchain.",
           "Declare pnpm 11 dependency build permissions for clean installs.",
-          "Import the DSH 0.2.0-rc.2 and ACP SDK 1.5.1 runtime adaptation, retaining source-delivery and offline registry adjustments.",
           "Allow only the 277 exact DSH 0.2.0-rc.2 package versions present in the lockfile through the pnpm minimum-release-age policy.",
-          "Omit three newly added contract specs that depend solely on intentionally excluded upstream README and CI/publish workflow files; retain runtime, permissions and integration coverage."
+          "Omit three newly added contract specs that depend solely on intentionally excluded upstream README and CI/publish workflow files; retain runtime, permissions and integration coverage.",
+          "Import the upstream v0.2.0-rc.2.1 runtime and regression-test delta while retaining offline registry, source delivery, and host-integration adaptations."
         ]
       },
       "sourceIncludesLocalChanges": true,
-      "sourceSha256": "1404665fd4416ebed734a608e766f7cba980263536c0e2643c7d11e1d86001c9",
-      "fileCount": 307,
+      "sourceSha256": "a677361e81cd15096501d04edc8e9108cc32a9bb91273c3395851c9ea71b376e",
+      "fileCount": 312,
       "retainedDocuments": [
         {
           "path": "LICENSE",

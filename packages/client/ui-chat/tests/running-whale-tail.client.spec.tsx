@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { cleanup, render } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -60,4 +60,15 @@ describe('RunningWhaleTail', () => {
     }
     expect(duration).toBeCloseTo(3)
   })
+
+  it.skipIf(!existsSync(resolve(import.meta.dirname, '../lib/client.js')))(
+    'embeds the exact APNG in the built client instead of leaving a package-relative image URL',
+    () => {
+      const png = readFileSync(resolve(import.meta.dirname, '../src/client/chat/running-whale@2x.png'))
+      const bundle = readFileSync(resolve(import.meta.dirname, '../lib/client.js'), 'utf8')
+
+      expect(bundle).toContain(`data:image/png;base64,${png.toString('base64')}`)
+      expect(bundle).not.toContain('./running-whale@2x.png')
+    },
+  )
 })

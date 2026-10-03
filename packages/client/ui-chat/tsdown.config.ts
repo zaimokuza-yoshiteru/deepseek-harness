@@ -1,9 +1,12 @@
 import { clientBundle } from '../tsdown.client.ts'
 import { readFile } from 'node:fs/promises'
+import { relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const bundle = clientBundle('@deepseek-ai/dsh-client-ui-chat', ['lib/types/index.js'])
-const stylesheet = fileURLToPath(new URL('./src/client/chat/ChatView.module.css', import.meta.url)).replaceAll('\\', '/')
+const repositoryRoot = fileURLToPath(new URL('../../..', import.meta.url))
+const stylesheet = relative(repositoryRoot, fileURLToPath(new URL('./src/client/chat/ChatView.module.css', import.meta.url)))
+  .split(sep).join('/')
 const whaleImage = fileURLToPath(new URL('./src/client/chat/running-whale@2x.png', import.meta.url))
 
 export default ((options) => bundle(options).map(config => ({
