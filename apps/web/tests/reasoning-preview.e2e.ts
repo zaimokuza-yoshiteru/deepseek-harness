@@ -142,7 +142,7 @@ it('shows completed paragraph first lines across blank lines with a right-edge f
           context.drawImage(image, 0, 0)
           const alpha = context.getImageData(0, 0, canvas.width, canvas.height).data
           let visiblePixels = 0
-          for (let offset = 3; offset < alpha.length; offset += 4) if (alpha[offset] > 0) visiblePixels += 1
+          for (let offset = 3; offset < alpha.length; offset += 4) if (alpha[offset]! > 0) visiblePixels += 1
           const transparent = document.createElement('canvas')
           transparent.width = 28
           transparent.height = 28
