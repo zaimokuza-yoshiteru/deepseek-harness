@@ -12,6 +12,8 @@ export const DESKTOP_BUILD_DIRTY_ENV: 'DSH_DESKTOP_BUILD_DIRTY'
 
 /**
  * Read the checkout's current commit and whether it carries uncommitted changes.
+ * Gitless source archives use their validated source-revision.json identity and
+ * are always marked dirty because the exported tree is filtered.
  * @param repositoryRoot - Directory to inspect.
  * @returns The commit being packaged and whether its tree was modified.
  */

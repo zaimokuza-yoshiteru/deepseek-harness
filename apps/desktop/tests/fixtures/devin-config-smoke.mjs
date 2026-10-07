@@ -39,22 +39,21 @@ const subprocess = { spawn(spec) {
 } }
 try {
   const { prepareDevinMcp } = await import(pathToFileURL(join(installed, 'lib/host/teams/devin-config.js')).href)
-  const { Client } = await loadAdapter('@modelcontextprotocol/sdk/client/index.js')
-  const { StdioClientTransport } = await loadAdapter('@modelcontextprotocol/sdk/client/stdio.js')
-  const { Server } = await loadAdapter('@modelcontextprotocol/sdk/server/index.js')
-  const { StreamableHTTPServerTransport } = await loadAdapter('@modelcontextprotocol/sdk/server/streamableHttp.js')
-  const { ListToolsRequestSchema, CallToolRequestSchema } = await loadAdapter('@modelcontextprotocol/sdk/types.js')
+  const { Client } = await loadAdapter('@modelcontextprotocol/client')
+  const { StdioClientTransport } = await loadAdapter('@modelcontextprotocol/client/stdio')
+  const { Server } = await loadAdapter('@modelcontextprotocol/server')
+  const { NodeStreamableHTTPServerTransport } = await loadAdapter('@modelcontextprotocol/node')
   async function endpoint(name) {
     let calls = 0, active = true
     const http = createServer((req, res) => { void (async () => {
       if (!active) { res.writeHead(410).end(); return }
       const server = new Server({ name, version: '1' }, { capabilities: { tools: {} } })
-      server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [{ name, inputSchema: { type: 'object' } }] }))
-      server.setRequestHandler(CallToolRequestSchema, async request => {
+      server.setRequestHandler('tools/list', async () => ({ tools: [{ name, inputSchema: { type: 'object' } }] }))
+      server.setRequestHandler('tools/call', async request => {
         if (request.params.name !== name) return { isError: true, content: [] }
         calls++; return { content: [{ type: 'text', text: name }] }
       })
-      const transport = new StreamableHTTPServerTransport({ enableJsonResponse: true })
+      const transport = new NodeStreamableHTTPServerTransport({ enableJsonResponse: true })
       res.once('close', () => { void server.close() })
       await server.connect(transport)
       await transport.handleRequest(req, res)

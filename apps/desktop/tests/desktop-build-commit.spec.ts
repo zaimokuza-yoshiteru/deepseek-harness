@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -44,6 +44,45 @@ describe('desktop build commit', () => {
     const packaged = readDesktopBuildCommit(join(import.meta.dirname, '..', '..', '..'))
     expect(packaged.commit).toMatch(/^[0-9a-f]{40}$/u)
     expect(typeof packaged.dirty).toBe('boolean')
+  })
+
+  it('reads a Gitless source archive identity and marks the filtered tree dirty', async () => {
+    const repositoryRoot = await mkdtemp(join(tmpdir(), 'dsh-gitless-build-'))
+    directories.push(repositoryRoot)
+    await writeFile(join(repositoryRoot, 'source-revision.json'), JSON.stringify({
+      commit: COMMIT,
+      sourceRevisionKnown: true,
+    }))
+
+    expect(readDesktopBuildCommit(repositoryRoot)).toEqual({ commit: COMMIT, dirty: true })
+  })
+
+  it.each([
+    ['missing metadata', undefined],
+    ['unknown source revision', { commit: COMMIT, sourceRevisionKnown: false }],
+    ['invalid commit', { commit: 'A'.repeat(40), sourceRevisionKnown: true }],
+  ])('rejects Gitless source archives with %s', async (_reason, revision) => {
+    const repositoryRoot = await mkdtemp(join(tmpdir(), 'dsh-gitless-build-invalid-'))
+    directories.push(repositoryRoot)
+    if (revision !== undefined) {
+      await writeFile(join(repositoryRoot, 'source-revision.json'), JSON.stringify(revision))
+    }
+
+    expect(() => readDesktopBuildCommit(repositoryRoot)).toThrow(/Gitless source archive|sourceRevisionKnown/u)
+  })
+
+  it('does not borrow an enclosing Git checkout identity for a nested Gitless archive', async () => {
+    const checkoutRoot = join(import.meta.dirname, '..', '..', '..')
+    const repositoryRoot = await mkdtemp(join(checkoutRoot, '.tmp-gitless-build-'))
+    directories.push(repositoryRoot)
+    await mkdir(join(repositoryRoot, 'nested'), { recursive: true })
+    const nestedArchiveRoot = join(repositoryRoot, 'nested')
+    await writeFile(join(nestedArchiveRoot, 'source-revision.json'), JSON.stringify({
+      commit: COMMIT,
+      sourceRevisionKnown: true,
+    }))
+
+    expect(readDesktopBuildCommit(nestedArchiveRoot)).toEqual({ commit: COMMIT, dirty: true })
   })
 })
 

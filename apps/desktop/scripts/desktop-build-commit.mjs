@@ -8,6 +8,8 @@
  */
 
 import { execFileSync } from 'node:child_process'
+import { existsSync, readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 
 /** Environment variable that carries the packaged commit. */
 export const DESKTOP_BUILD_COMMIT_ENV = 'DSH_DESKTOP_BUILD_COMMIT'
@@ -17,15 +19,37 @@ export const DESKTOP_BUILD_DIRTY_ENV = 'DSH_DESKTOP_BUILD_DIRTY'
 
 /**
  * Read the checkout's current commit and whether it carries uncommitted changes.
+ * Gitless source archives use their validated source-revision.json identity and
+ * are always marked dirty because the exported tree is filtered.
  * @param {string} repositoryRoot - Directory to inspect.
  * @returns {{ commit: string, dirty: boolean }} The commit being packaged and whether its tree was modified.
  */
 export function readDesktopBuildCommit(repositoryRoot) {
-  const git = (args) => execFileSync('git', args, { cwd: repositoryRoot, encoding: 'utf8' }).trim()
-  return {
-    commit: git(['rev-parse', 'HEAD']),
-    dirty: git(['status', '--porcelain', '--untracked-files=normal']) !== '',
+  const gitDirectory = resolve(repositoryRoot, '.git')
+  if (existsSync(gitDirectory)) {
+    // .git can be either a directory or a worktree pointer file.
+    const git = (args) => execFileSync('git', args, { cwd: repositoryRoot, encoding: 'utf8' }).trim()
+    return {
+      commit: git(['rev-parse', 'HEAD']),
+      dirty: git(['status', '--porcelain', '--untracked-files=normal']) !== '',
+    }
   }
+
+  const revisionPath = resolve(repositoryRoot, 'source-revision.json')
+  if (!existsSync(revisionPath)) {
+    throw new Error(`desktop build commit: Gitless source archive is missing ${revisionPath}`)
+  }
+  let revision
+  try {
+    revision = JSON.parse(readFileSync(revisionPath, 'utf8'))
+  }
+  catch (error) {
+    throw new Error(`desktop build commit: cannot read ${revisionPath}`, { cause: error })
+  }
+  if (revision?.sourceRevisionKnown !== true || typeof revision.commit !== 'string' || !/^[0-9a-f]{40}$/u.test(revision.commit)) {
+    throw new Error(`desktop build commit: ${revisionPath} must contain sourceRevisionKnown=true and a 40-character lowercase commit`)
+  }
+  return { commit: revision.commit, dirty: true }
 }
 
 /**

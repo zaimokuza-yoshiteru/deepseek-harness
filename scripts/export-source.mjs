@@ -39,6 +39,7 @@ const PORTABLE_SMOKE_FIXTURES = new Set([
   'apps/desktop/tests/fixtures/office-conversion-inputs.py',
   'apps/desktop/tests/fixtures/plugin-metadata-smoke.mjs',
   'apps/desktop/tests/fixtures/devin-config-smoke.mjs',
+  'apps/desktop/tests/fixtures/devin-cli.mjs',
   'apps/desktop/tests/fixtures/packaged-profile.mjs',
 ])
 const IS_SUBPROCESS_LOCAL = path => path.split(sep).join('/').replace(/\\/g, '/').replace(/^\.\//, '') === 'packages/subprocess/subprocess-local'

@@ -88,6 +88,7 @@ test('buildable desktop payload keeps only portable packaging smoke fixtures and
     'apps/desktop/tests/fixtures/office-conversion-inputs.py',
     'apps/desktop/tests/fixtures/plugin-metadata-smoke.mjs',
     'apps/desktop/tests/fixtures/devin-config-smoke.mjs',
+    'apps/desktop/tests/fixtures/devin-cli.mjs',
     'apps/desktop/tests/fixtures/packaged-profile.mjs',
   ]
   for (const path of smokeFixtures) assert.ok(inventory.has(path), `portable packaging smoke requires ${path}`)
