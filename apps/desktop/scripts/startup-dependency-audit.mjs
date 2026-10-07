@@ -8,7 +8,20 @@ import { readFile, readdir, rename, writeFile } from 'node:fs/promises'
 import { join, relative } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 
-const names = ['@agentclientprotocol/sdk', '@modelcontextprotocol/sdk', 'zod', 'yaml', '@deepseek-ai/schemastery']
+const names = ['@agentclientprotocol/sdk', '@modelcontextprotocol/client', '@modelcontextprotocol/server',
+  '@modelcontextprotocol/node', '@modelcontextprotocol/core', 'zod', 'yaml', '@deepseek-ai/schemastery']
+
+export function auditDependencyManifests(manifests, requiredNames = names) {
+  return requiredNames.map(name => {
+    const manifest = manifests[name]
+    assert.ok(manifest, `Missing startup dependency manifest: ${name}`)
+    assert.equal(manifest.name, name, `Unexpected package identity for startup dependency: ${name}`)
+    assert.equal(typeof manifest.version, 'string')
+    assert.ok(manifest.version.length > 0, `Missing package version for startup dependency: ${name}`)
+    return { name, version: manifest.version }
+  })
+}
+
 async function fingerprint(root) {
   const hash = createHash('sha256')
   let files = 0, bytes = 0
@@ -33,11 +46,11 @@ export async function startDependencyAudit(application, output, home, env) {
   const seed = join(application, 'resources', 'plugin-seed')
   const report = { seed: [], runs: [], registryRequests: [], cacheIsolated: true }
   const save = () => writeFile(join(output, 'dependency-audit.json'), JSON.stringify(report, null, 2) + '\n')
-  for (const name of names) {
+  const manifests = Object.fromEntries(await Promise.all(names.map(async name => [name,
+    JSON.parse(await readFile(join(seed, 'node_modules', name, 'package.json'), 'utf8'))])))
+  for (const { name, version } of auditDependencyManifests(manifests)) {
     const root = join(seed, 'node_modules', name)
-    const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
-    assert.equal(manifest.name, name)
-    report.seed.push({ name, version: manifest.version, path: relative(application, root), ...await fingerprint(root) })
+    report.seed.push({ name, version, path: relative(application, root), ...await fingerprint(root) })
   }
   await save()
   const { address } = await lookup('registry.npmjs.org', { family: 4 })
