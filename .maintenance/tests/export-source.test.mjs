@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, symlinkSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, symlinkSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
@@ -104,6 +104,14 @@ test('buildable desktop payload keeps only portable packaging smoke fixtures and
     'apps/desktop/scripts/smoke-portable.ts',
     ...smokeFixtures,
   ]) assert.ok(tooling.has(path), `packaging command closure requires ${path}`)
+  for (const path of ['apps/desktop/scripts/node-bin/node', 'apps/desktop/scripts/node-bin/node.cmd']) {
+    assert.ok(inventory.has(path), `portable runtime preparation requires ${path}`)
+    assert.ok(tooling.has(path), `portable runtime build closure requires ${path}`)
+  }
+  if (process.platform !== 'win32') {
+    assert.equal(statSync(join(root, 'apps/desktop/scripts/node-bin/node')).mode & 0o777, 0o755,
+      'the POSIX node wrapper must remain executable in portable source')
+  }
   assert.ok(tooling.has('apps/desktop/scripts/windows-sign.cmd'))
   assert.ok(tooling.has('apps/desktop/scripts/verify-macos-signature.mjs'))
 })

@@ -42,6 +42,10 @@ const PORTABLE_SMOKE_FIXTURES = new Set([
   'apps/desktop/tests/fixtures/devin-cli.mjs',
   'apps/desktop/tests/fixtures/packaged-profile.mjs',
 ])
+const PORTABLE_RUNTIME_ASSETS = new Set([
+  'apps/desktop/scripts/node-bin/node',
+  'apps/desktop/scripts/node-bin/node.cmd',
+])
 const IS_SUBPROCESS_LOCAL = path => path.split(sep).join('/').replace(/\\/g, '/').replace(/^\.\//, '') === 'packages/subprocess/subprocess-local'
 function keepBuildScript(name, rootManifest = false) {
   return rootManifest ? ROOT_BUILD_SCRIPT_NAMES.test(name) : BUILD_SCRIPT_NAMES.test(name)
@@ -98,6 +102,9 @@ export function collectBuildToolingFiles(root) {
   // configured typeRoots, so it is not reachable from a source import.
   const buildSupport = 'scripts/types/client-build-environment/index.d.ts'
   if (existsSync(resolve(root, buildSupport))) included.add(buildSupport)
+  for (const asset of PORTABLE_RUNTIME_ASSETS) {
+    if (existsSync(resolve(root, asset))) included.add(asset)
+  }
   const pending = [...entries]
   const importPattern = /(?:import|export)\s+(?:[^'";]*?\s+from\s*)?['"](\.[^'"]+)['"]|import\(\s*['"](\.[^'"]+)['"]\s*\)|require\(\s*['"](\.[^'"]+)['"]\s*\)/gu
   const enqueuePackageScript = (base, name) => {
