@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { expect, it } from 'vitest'
 import { launchBrowser, newEnglishPage } from './browser.ts'
 import { connectFreshWorkspace, writeComposerDraft } from '#host-support'
-import { launchAdapterWorld } from './scaffold.ts'
+import { launchAdapterWorld, root } from './scaffold.ts'
 
 it('keeps the activity area quiet while the initial ACP binding is committed', async () => {
   const host = await launchAdapterWorld()
@@ -18,7 +18,7 @@ it('keeps the activity area quiet while the initial ACP binding is committed', a
       codex: {
         name: 'Activity startup fixture',
         command: process.execPath,
-        args: [join(process.cwd(), 'test/mock-agent/mock-agent.ts')],
+        args: [join(root, 'test/mock-agent/mock-agent.ts')],
         env: {
           HOME: host.workspaceCwd,
           MOCK_SCENARIO: 'regression',

@@ -1451,7 +1451,11 @@ describe.each(profiles)('native product parity: %s protocol fixture', (profile) 
       document.documentElement.style.zoom = '2'
     })
     const afterZoom = required(await trigger.boundingBox())
-    expect(afterZoom.width).toBeGreaterThan(beforeZoom.width)
+    expect(await page.evaluate(() => getComputedStyle(document.documentElement).zoom)).toBe('2')
+    const triggerOffsetHeight = await trigger.evaluate((element) => (element as HTMLElement).offsetHeight)
+    expect(afterZoom.height).toBeGreaterThan(0)
+    expect(triggerOffsetHeight).toBeGreaterThan(0)
+    expect(Math.abs(afterZoom.height - triggerOffsetHeight * 2)).toBeLessThanOrEqual(1)
 
     await trigger.click()
     const dialog = page.getByRole('dialog')

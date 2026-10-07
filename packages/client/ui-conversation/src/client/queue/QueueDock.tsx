@@ -223,7 +223,9 @@ function ReferenceQueueEditor({ initialText, occurrences, label, onChange, onSav
   const runtime = useMemo(() => {
     const editor = new DraftEditorRuntime({
       onUpdate: () => {
-        const projection = editor.refreshProjection()
+        // refreshProjection returns the previous projection; save from the state it just refreshed.
+        editor.refreshProjection()
+        const projection = editor.projection
         if (isSeeding.current) return
         if (projection.clipboardText === draftRef.current) return
         draftRef.current = projection.clipboardText
@@ -240,7 +242,8 @@ function ReferenceQueueEditor({ initialText, occurrences, label, onChange, onSav
   useLayoutEffect(() => {
     const unregister = runtime.register()
     runtime.restoreDraft(seed.current.text, seed.current.occurrences)
-    const projection = runtime.refreshProjection()
+    runtime.refreshProjection()
+    const projection = runtime.projection
     draftRef.current = projection.clipboardText
     isSeeding.current = false
     return unregister

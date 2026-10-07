@@ -19,11 +19,13 @@
           "Allow only the 277 exact DSH 0.2.0-rc.2 package versions present in the lockfile through the pnpm minimum-release-age policy.",
           "Omit three newly added contract specs that depend solely on intentionally excluded upstream README and CI/publish workflow files; retain runtime, permissions and integration coverage.",
           "Import the upstream v0.2.0-rc.2.1 runtime and regression-test delta while retaining offline registry, source delivery, and host-integration adaptations.",
-          "Import official v0.2.0-rc.2.7 runtime and executable regression-test updates through the exact release commit while retaining DSH 0.2.0-rc.2 peers, offline registry, local host-checkout and source-delivery adjustments. Omit ordinary upstream docs/workflows and CI-only Windows scripts; retain runtime and unit coverage."
+          "Import official v0.2.0-rc.2.7 runtime and executable regression-test updates through the exact release commit while retaining DSH 0.2.0-rc.2 peers, offline registry, local host-checkout and source-delivery adjustments. Omit ordinary upstream docs/workflows and CI-only Windows scripts; retain runtime and unit coverage.",
+          "Bind E2E mock-process and source-probe paths to the exported test root and explicit DSH_UPSTREAM_CHECKOUT, removing cwd assumptions in integrated-host runs.",
+          "Make the native/mock E2E fixture paths independent of process cwd; verify zoom at 200% using computed root zoom and actual rendered-height ratio while retaining recovery focus, bounds and scroll assertions."
         ]
       },
       "sourceIncludesLocalChanges": true,
-      "sourceSha256": "048e55b021c533f12ec89d2417dcfabfdc4bbd9d8401891679c2064b6bd5daaa",
+      "sourceSha256": "a1b19e43c3c63e3c9933f864e67a2e9abba67113db15cdd4a5d74fde6aac498d",
       "fileCount": 370,
       "retainedDocuments": [
         {

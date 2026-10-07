@@ -434,7 +434,7 @@ describe('QueueDock', () => {
     expect(view.queryByText('three')).toBeNull()
   })
 
-  it('projects long reference wires before preview clipping and preserves the locator while editing', async () => {
+  it('projects long reference wires and saves the latest pasted text on Enter', async () => {
     const label = `工程/仓库${'名'.repeat(30)}`
     const locator = 'Bitbucket repository ssh://git.example/组织/仓库.git'
     const wire = `<dsh-reference>${JSON.stringify({ source: 'atlassian', label, text: locator })}</dsh-reference>`
@@ -458,11 +458,34 @@ describe('QueueDock', () => {
     expect(editor.querySelectorAll('[data-composer-chip="queued-wire"]')).toHaveLength(2)
     expect([...editor.querySelectorAll('[data-composer-chip="queued-wire"]')].every(chip => chip.textContent?.includes(label))).toBe(true)
     expect(editor.textContent).not.toContain('<dsh-reference>')
-    fireEvent.click(view.getByLabelText('保存排队消息'))
+    const updatedText = `${text} and last character`
+    const ClipboardEventShim = class extends Event {
+      readonly clipboardData: DataTransfer | null
+      constructor(type: string, init: ClipboardEventInit = {}) {
+        super(type, init)
+        this.clipboardData = init.clipboardData ?? null
+      }
+    }
+    vi.stubGlobal('ClipboardEvent', ClipboardEventShim)
+    try {
+      await act(async () => {
+        fireEvent.paste(editor, {
+          clipboardData: { items: [], getData: () => ' and last character' } as unknown as DataTransfer,
+        })
+      })
+    } finally {
+      vi.unstubAllGlobals()
+    }
+    expect(editor.querySelectorAll('[data-composer-chip="queued-wire"]')).toHaveLength(2)
+    fireEvent.keyDown(editor, { key: 'Enter', shiftKey: true })
+    expect(updateQueue).not.toHaveBeenCalled()
+    fireEvent.keyDown(editor, { key: 'Enter', isComposing: true })
+    expect(updateQueue).not.toHaveBeenCalled()
+    fireEvent.keyDown(editor, { key: 'Enter' })
     await waitFor(() => {
       expect(updateQueue).toHaveBeenCalledWith(iid('long-preview'), {
         kind: 'edit',
-        content: [{ type: 'text', text }],
+        content: [{ type: 'text', text: updatedText }],
       })
     })
   })

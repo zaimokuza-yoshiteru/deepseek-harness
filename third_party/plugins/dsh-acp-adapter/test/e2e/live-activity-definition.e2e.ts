@@ -38,9 +38,11 @@ type ActivitySnapshot = {
   readonly timeline: ConversationTimelineSnapshot
 }
 
+const hostCheckout = process.env.DSH_UPSTREAM_CHECKOUT
+if (hostCheckout === undefined) throw new Error('Set DSH_UPSTREAM_CHECKOUT to a built DSH checkout before running ACP E2E tests.')
 const upstreamAssemblerPath = resolve(
-  process.cwd(),
-  '../reference/deepseek-harness/packages/client/ui-conversation/src/client/conversation/assembler.ts',
+  hostCheckout,
+  'packages/client/ui-conversation/src/client/conversation/assembler.ts',
 )
 const { ConversationNodeAssembler } = (await import(pathToFileURL(upstreamAssemblerPath).href)) as {
   readonly ConversationNodeAssembler: typeof ConversationNodeAssemblerType
