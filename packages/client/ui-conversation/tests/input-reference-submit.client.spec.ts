@@ -4,7 +4,10 @@
  * accepted prompt.
  */
 import { describe, expect, it, vi } from 'vitest'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import type { Context } from '@deepseek-ai/cordis'
+import { projectUserText } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InputTriggerController, SubmitOutcome, PickOutcome } from '../src/client/contract/input.ts'
 import { SessionInputShell } from '../src/client/input/facade.ts'
 import type { DraftAttachmentId } from '../src/client/contract/input.ts'
@@ -69,6 +72,39 @@ describe('reference submission', () => {
     await vi.waitFor(() => {
       expect(sink).toHaveBeenCalledWith(spacedMention, [], 'queue', expect.any(AbortSignal))
     })
+  })
+
+  it('serializes a Kanban reference wire to the sink while its user-text projection preserves the @ label', async () => {
+    const wire = '<dsh-reference>{"source":"atlassian","label":"DSH-22","text":"Jira issue DSH-22"}</dsh-reference>'
+    const sink = vi.fn(() => Promise.resolve<SubmitOutcome>({ kind: 'success' }))
+    const serializeReference = vi.fn(async (_source: string, ref: string) => ref)
+    const inputTriggers = {
+      serializeReference,
+      track: vi.fn(),
+      lexicon: { getSnapshot: () => new Map(), subscribe: () => () => {} },
+    } as unknown as InputTriggerController
+    const shell = new SessionInputShell({
+      actx: {} as Context,
+      inputTriggers: () => inputTriggers,
+      defaultSink: sink,
+      commandAttachments,
+    })
+    shell.setDraft('@DSH-22')
+    expect(shell.insertReference({
+      source: 'atlassian',
+      ref: wire,
+      label: 'DSH-22',
+      clipboardText: wire,
+    }, { start: 0, end: '@DSH-22'.length, draftRev: shell.snapshot.draftRev })).toBe(true)
+    shell.submit()
+    await vi.waitFor(() => { expect(sink).toHaveBeenCalledWith(wire, [], 'queue', expect.any(AbortSignal)) })
+    expect(shell.snapshot.draft).toBe('')
+    expect(serializeReference).toHaveBeenCalledWith('atlassian', wire, expect.any(AbortSignal))
+    const bubble = renderToStaticMarkup(createElement('span', null, projectUserText(wire, [])))
+    expect(bubble).toContain('data-ref-chip="reference"')
+    expect(bubble).toContain('title="Jira issue DSH-22"')
+    expect(bubble).toContain('>DSH-22</span>')
+    expect(bubble).not.toContain('<dsh-reference>')
   })
 
   it('retains the chip on Host failure and clears it only after a later accepted retry', async () => {

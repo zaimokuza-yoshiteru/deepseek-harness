@@ -2,7 +2,7 @@
  * ACP 协议连接（自 acp-client.ts 切出的协议半；进程半——spawn、stdio 泵、
  * stderr 环、拆除梯子、托管范围清理——见 src/runtime/process/agent-process.ts）：
  * `client()` app、v1 initialize 协商、typed 会话方法 RPC、能力记录、probe、
- * 错误六分类。
+ * 错误七分类。
  *
  * - 传输：`@agentclientprotocol/sdk` 1.5.1 的 `client()` API + `ndJsonStream`
  * （自 @deprecated 的 `ClientSideConnection` 迁入：handler 按方法名经
@@ -57,6 +57,7 @@ import * as acp from '@agentclientprotocol/sdk'
 import { AcpAgentProcess } from '../../runtime/process/agent-process.ts'
 import { ACP_SUBPROCESS_UNAVAILABLE_MESSAGE } from '../../runtime/process/subprocess.ts'
 import type { AcpConnectionSpec, AcpProcessExit } from '../../runtime/process/types.ts'
+import { redactSecretText } from '../../contract/redaction.ts'
 import { AcpClientError } from './errors.ts'
 import type {
   AcpSessionNotification,
@@ -185,6 +186,8 @@ export function supportsFork(capabilities: acp.AgentCapabilities | undefined): b
 
 /** ACP `auth_required` 的 JSON-RPC code（SDK `RequestError.authRequired()`，jsonrpc.js）。 */
 const ACP_ERROR_CODE_AUTH_REQUIRED = -32000
+/** Devin CLI 3000.11.3's observed structured resource exhaustion response. */
+const DEVIN_RESOURCE_EXHAUSTED_CODE = -32011
 /** SDK 连接关闭时拒绝挂起请求的文案（实测）。 */
 const CONNECTION_CLOSED_MESSAGE = 'ACP connection closed'
 
@@ -202,6 +205,22 @@ function isAuthenticationRejection(error: acp.RequestError): boolean {
     /failed to authenticate|authentication (?:is )?required|requires authentication|oauth (?:session|token) expired/i.test(
       error.message,
     )
+  )
+}
+
+/**
+ * Devin's observed JSON-RPC vendor extension: code -32011 with its own
+ * `data.errorKind === 'resource_exhausted'`. ACP/JSON-RPC do not standardize
+ * this data member, so require both facts and keep every unknown shape in the
+ * conservative protocol-error fallback. `retryable` is advisory metadata and
+ * never causes automatic retry.
+ */
+function isResourceExhaustion(error: acp.RequestError): boolean {
+  return (
+    error.code === DEVIN_RESOURCE_EXHAUSTED_CODE &&
+    record(error.data) &&
+    Object.hasOwn(error.data, 'errorKind') &&
+    error.data.errorKind === 'resource_exhausted'
   )
 }
 
@@ -287,6 +306,16 @@ export class AcpClientConnection {
   private readonly onCapabilityDegraded: AcpConnectionOptions['onCapabilityDegraded']
   private readonly onProcessWarn: NonNullable<AcpConnectionOptions['onProcessWarn']>
   private readonly activeSessionIds = new Set<string>()
+  /** Known session ids currently being restored. Some Agents consult host FS
+   * while loading their own history; that is a setup operation, not a prompt. */
+  private readonly stagingSessionIds = new Set<string>()
+  /** A terminal prompt response closes its Host-operation generation. It is
+   * reopened only by the next prompt or an explicit session restore. */
+  private readonly terminalPromptSessionIds = new Set<string>()
+  /** Host operations already admitted for a prompt. Retiring the prompt first
+   * closes admission, then waits for these operations before its response can
+   * be projected as terminal. */
+  private readonly pendingPromptHostOperations = new Map<string, Set<Promise<void>>>()
   /** Sessions whose `session/prompt` RPC is currently in flight. Permission
    * requests are valid only inside this exact turn boundary. */
   private readonly activePromptSessionIds = new Set<string>()
@@ -482,6 +511,7 @@ export class AcpClientConnection {
       DEFAULT_SESSION_SETUP_TIMEOUT_MS,
     )
     this.activeSessionIds.add(response.sessionId)
+    this.terminalPromptSessionIds.delete(response.sessionId)
     return response
   }
 
@@ -491,19 +521,25 @@ export class AcpClientConnection {
     params: { cwd?: string; mcpServers?: readonly acp.McpServer[] } = {},
     options: AcpRpcOptions = {},
   ): Promise<acp.LoadSessionResponse> {
-    const response = await this.rpc<acp.LoadSessionResponse>(
-      'session/load',
-      async (agent) =>
-        (await agent.request('session/load', {
-          sessionId,
-          cwd: params.cwd ?? this.spec.cwd,
-          mcpServers: [...(params.mcpServers ?? [])],
-        })) as acp.LoadSessionResponse,
-      options,
-      DEFAULT_SESSION_SETUP_TIMEOUT_MS,
-    )
-    this.activeSessionIds.add(sessionId)
-    return response
+    this.stagingSessionIds.add(sessionId)
+    try {
+      const response = await this.rpc<acp.LoadSessionResponse>(
+        'session/load',
+        async (agent) =>
+          (await agent.request('session/load', {
+            sessionId,
+            cwd: params.cwd ?? this.spec.cwd,
+            mcpServers: [...(params.mcpServers ?? [])],
+          })) as acp.LoadSessionResponse,
+        options,
+        DEFAULT_SESSION_SETUP_TIMEOUT_MS,
+      )
+      this.activeSessionIds.add(sessionId)
+      this.terminalPromptSessionIds.add(sessionId)
+      return response
+    } finally {
+      this.stagingSessionIds.delete(sessionId)
+    }
   }
 
   /**
@@ -516,19 +552,25 @@ export class AcpClientConnection {
     params: { cwd?: string; mcpServers?: readonly acp.McpServer[] } = {},
     options: AcpRpcOptions = {},
   ): Promise<acp.ResumeSessionResponse> {
-    const response = await this.rpc<acp.ResumeSessionResponse>(
-      'session/resume',
-      async (agent) =>
-        (await agent.request('session/resume', {
-          sessionId,
-          cwd: params.cwd ?? this.spec.cwd,
-          mcpServers: [...(params.mcpServers ?? [])],
-        })) as acp.ResumeSessionResponse,
-      options,
-      DEFAULT_SESSION_SETUP_TIMEOUT_MS,
-    )
-    this.activeSessionIds.add(sessionId)
-    return response
+    this.stagingSessionIds.add(sessionId)
+    try {
+      const response = await this.rpc<acp.ResumeSessionResponse>(
+        'session/resume',
+        async (agent) =>
+          (await agent.request('session/resume', {
+            sessionId,
+            cwd: params.cwd ?? this.spec.cwd,
+            mcpServers: [...(params.mcpServers ?? [])],
+          })) as acp.ResumeSessionResponse,
+        options,
+        DEFAULT_SESSION_SETUP_TIMEOUT_MS,
+      )
+      this.activeSessionIds.add(sessionId)
+      this.terminalPromptSessionIds.add(sessionId)
+      return response
+    } finally {
+      this.stagingSessionIds.delete(sessionId)
+    }
   }
 
   /**
@@ -558,6 +600,7 @@ export class AcpClientConnection {
       DEFAULT_SESSION_SETUP_TIMEOUT_MS,
     )
     this.activeSessionIds.add(response.sessionId)
+    this.terminalPromptSessionIds.delete(response.sessionId)
     return response
   }
 
@@ -586,6 +629,8 @@ export class AcpClientConnection {
       )
     } finally {
       this.activeSessionIds.delete(sessionId)
+      this.stagingSessionIds.delete(sessionId)
+      this.terminalPromptSessionIds.delete(sessionId)
       await this.terminalHandlers?.releaseSession?.(sessionId)
     }
   }
@@ -602,6 +647,8 @@ export class AcpClientConnection {
       )
     } finally {
       this.activeSessionIds.delete(sessionId)
+      this.stagingSessionIds.delete(sessionId)
+      this.terminalPromptSessionIds.delete(sessionId)
       await this.terminalHandlers?.releaseSession?.(sessionId)
     }
   }
@@ -653,7 +700,9 @@ export class AcpClientConnection {
     onUpdate?: SessionUpdateListener,
     options: AcpRpcOptions = {},
   ): Promise<acp.PromptResponse> {
+    await this.drainPromptHostOperations(sessionId)
     if (onUpdate !== undefined) this.updateListeners.add(onUpdate)
+    this.terminalPromptSessionIds.delete(sessionId)
     this.activePromptSessionIds.add(sessionId)
     try {
       return await this.rpc(
@@ -663,8 +712,33 @@ export class AcpClientConnection {
       )
     } finally {
       this.activePromptSessionIds.delete(sessionId)
+      this.terminalPromptSessionIds.add(sessionId)
       if (onUpdate !== undefined) this.updateListeners.delete(onUpdate)
+      await this.drainPromptHostOperations(sessionId)
     }
+  }
+
+  private trackPromptHostOperation<T>(sessionId: string, operation: () => Promise<T> | T): Promise<T> {
+    const pending = this.pendingPromptHostOperations.get(sessionId) ?? new Set<Promise<void>>()
+    this.pendingPromptHostOperations.set(sessionId, pending)
+    const result = Promise.resolve().then(operation)
+    const settled = result.then(
+      () => undefined,
+      () => undefined,
+    )
+    pending.add(settled)
+    void settled.then(() => {
+      pending.delete(settled)
+      if (pending.size === 0 && this.pendingPromptHostOperations.get(sessionId) === pending)
+        this.pendingPromptHostOperations.delete(sessionId)
+    })
+    return result
+  }
+
+  private async drainPromptHostOperations(sessionId: string): Promise<void> {
+    const pending = this.pendingPromptHostOperations.get(sessionId)
+    if (pending === undefined) return
+    await Promise.all([...pending])
   }
 
   /** 发送 `session/cancel` 通知。 */
@@ -690,6 +764,12 @@ export class AcpClientConnection {
       try {
         await this.terminalHandlers?.dispose?.()
       } finally {
+        this.activeSessionIds.clear()
+        this.stagingSessionIds.clear()
+        this.terminalPromptSessionIds.clear()
+        this.activePromptSessionIds.clear()
+        this.updateListeners.clear()
+        this.pendingPromptHostOperations.clear()
         // Terminal cleanup is an auxiliary capability. A broken terminal
         // handle must never prevent the owner process from entering the
         // bounded termination ladder.
@@ -880,27 +960,40 @@ export class AcpClientConnection {
         .onRequest('fs/read_text_file', ({ params }) => {
           const handler = this.fileSystemHandlers?.readTextFile
           if (handler === undefined) throw new Error('ACP fs/read_text_file is not available')
-          if (!this.activeSessionIds.has(params.sessionId))
+          const staging = this.stagingSessionIds.has(params.sessionId)
+          if (
+            (!this.activeSessionIds.has(params.sessionId) && !staging) ||
+            (this.terminalPromptSessionIds.has(params.sessionId) && !staging)
+          )
             throw new Error(
-              `ACP fs/read_text_file rejected: session ${params.sessionId} is not owned by this connection`,
+              `ACP fs/read_text_file rejected: session ${params.sessionId} has no active prompt generation`,
             )
-          return handler(params)
+          return this.trackPromptHostOperation(params.sessionId, () => handler(params))
         })
         .onRequest('fs/write_text_file', ({ params }) => {
           const handler = this.fileSystemHandlers?.writeTextFile
           if (handler === undefined) throw new Error('ACP fs/write_text_file is not available')
-          if (!this.activeSessionIds.has(params.sessionId))
+          const staging = this.stagingSessionIds.has(params.sessionId)
+          if (
+            (!this.activeSessionIds.has(params.sessionId) && !staging) ||
+            (this.terminalPromptSessionIds.has(params.sessionId) && !staging)
+          )
             throw new Error(
-              `ACP fs/write_text_file rejected: session ${params.sessionId} is not owned by this connection`,
+              `ACP fs/write_text_file rejected: session ${params.sessionId} has no active prompt generation`,
             )
-          return handler(params)
+          if (staging) throw new Error('ACP fs/write_text_file rejected during session restore')
+          return this.trackPromptHostOperation(params.sessionId, () => handler(params))
         })
         .onRequest('terminal/create', ({ params }) => {
           const handler = this.terminalHandlers?.createTerminal
           if (handler === undefined) throw new Error('ACP terminal/create is not available')
-          if (!this.activeSessionIds.has(params.sessionId))
-            throw new Error(`ACP terminal/create rejected: session ${params.sessionId} is not owned by this connection`)
-          return handler(params)
+          if (
+            this.stagingSessionIds.has(params.sessionId) ||
+            !this.activeSessionIds.has(params.sessionId) ||
+            this.terminalPromptSessionIds.has(params.sessionId)
+          )
+            throw new Error(`ACP terminal/create rejected: session ${params.sessionId} has no active generation`)
+          return this.trackPromptHostOperation(params.sessionId, () => handler(params))
         })
         .onRequest('terminal/output', ({ params }) => {
           const handler = this.terminalHandlers?.terminalOutput
@@ -1114,6 +1207,13 @@ export class AcpClientConnection {
         return new AcpClientError(
           'auth_required',
           `ACP agent "${this.command}" requires authentication (${operation}); sign in with the agent's own tooling or explicitly configure its required credentials in the ACP profile Connection settings. Parent KEY/TOKEN/SECRET/PASSWORD variables are not inherited`,
+          { cause: error },
+        )
+      }
+      if (isResourceExhaustion(error)) {
+        return new AcpClientError(
+          'resource-exhausted',
+          `ACP agent "${this.command}" reported resource exhaustion during ${operation}: ${redactSecretText(error.message)} (JSON-RPC code ${String(error.code)})`,
           { cause: error },
         )
       }

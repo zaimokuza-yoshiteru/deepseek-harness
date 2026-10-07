@@ -431,4 +431,75 @@ describe('web e2e: queue row actions', () => {
       ],
     )
   })
+
+  it.skipIf(MODE === 'record')('keeps complete same-label reference wires atomic through queue preview and edit', async () => {
+    overrideDir = await mkdtemp(join(tmpdir(), 'dsh-web-queue-references-'))
+    const readyFile = join(overrideDir, '.hang-ready')
+    const overridePath = join(overrideDir, 'replay.override.json')
+    const recorded = deriveReplayScript(parseSessionLog(await readFile(FIXTURE, 'utf8')))
+    expect(recorded).toHaveLength(1)
+    await writeFile(overridePath, JSON.stringify([{ kind: 'hang', readyFile }, recorded[0]!]))
+
+    scaffold = await launchWebScaffold({ replayFixture: FIXTURE, replayOverride: overridePath, compareReplaySession: false })
+    browser = await chromium.launch()
+    page = await newEnglishPage(browser)
+    const tripwire = watchConsole(page)
+    await page.goto(scaffold.authenticatedUrl, { waitUntil: 'load' })
+    await page.waitForSelector('[class*="frame"]', { timeout: 30_000 })
+    await connectFreshWorkspace(page, scaffold.workspaceCwd)
+    onTestFailed(() => saveFailureShot(page, 'web-e2e-queue-reference-roundtrip'))
+
+    const input = page.locator('[data-composer-input]').first()
+    await input.fill(ACTIVE_PROMPT)
+    await input.press('Enter')
+    await expect.poll(() => existsSync(readyFile), { timeout: 15_000 }).toBe(true)
+
+    const first = '<dsh-reference>{"source":"atlassian","label":"Same repository","text":"Bitbucket repository https://git.example/team/first.git"}</dsh-reference>'
+    const second = '<dsh-reference>{"source":"atlassian","label":"Same repository","text":"Bitbucket repository ssh://git.example/team/second.git"}</dsh-reference>'
+    const queuedText = `Compare ${first} with ${second} after this ${'detail '.repeat(30)}`
+    const accepted = page.waitForResponse('**/api/session/prompt')
+    await input.fill(queuedText)
+    await input.press('Enter')
+    expect((await accepted).ok()).toBe(true)
+
+    const row = page.locator('[data-queue-dock] li').filter({ has: page.locator('[data-queue-preview] [data-ref-chip="reference"]') })
+    await expect.poll(() => row.locator('[data-ref-chip="reference"]').count()).toBe(2)
+    const previewText = await row.locator('[data-queue-preview]').textContent()
+    expect(previewText).toContain('@Same repository')
+    expect(previewText).not.toContain('<dsh-reference>')
+    expect(previewText).toContain('after this')
+
+    await row.getByRole('button', { name: 'Edit queued message' }).click()
+    const editor = row.getByRole('textbox', { name: 'Edit queued message' })
+    await expect.poll(() => editor.locator('[data-composer-chip="queued-wire"]').count()).toBe(2)
+    expect(await editor.textContent()).not.toContain('<dsh-reference>')
+    await editor.press('Control+End')
+    await editor.pressSequentially(' revised')
+    const editedText = `${queuedText} revised`
+    await expect.poll(() => editor.locator('[data-composer-chip="queued-wire"]').count()).toBe(2)
+    const request = Promise.withResolvers<unknown>()
+    await page.route('**/api/session/updateQueue', async (route) => {
+      request.resolve(route.request().postDataJSON())
+      await route.continue()
+    }, { times: 1 })
+    const mutation = page.waitForResponse('**/api/session/updateQueue')
+    await row.getByRole('button', { name: 'Save queued message' }).click()
+    expect((await mutation).ok()).toBe(true)
+    const outbound = await request.promise
+    const strings: string[] = []
+    const collect = (value: unknown): void => {
+      if (typeof value === 'string') strings.push(value)
+      else if (Array.isArray(value)) value.forEach(collect)
+      else if (typeof value === 'object' && value !== null) Object.values(value).forEach(collect)
+    }
+    collect(outbound)
+    expect(strings).toContain(editedText)
+    const serializedContent = strings.find(value => value === editedText)
+    expect(serializedContent).toContain(first)
+    expect(serializedContent).toContain(second)
+    await expect.poll(() => row.locator('[data-ref-chip="reference"]').count()).toBe(2)
+    expect(await row.locator('[data-queue-preview]').textContent()).not.toContain('<dsh-reference>')
+    expect(tripwire.pageErrors).toEqual([])
+    expect(tripwire.warnings).toEqual([])
+  })
 })

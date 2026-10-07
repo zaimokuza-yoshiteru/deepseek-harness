@@ -5,15 +5,17 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render } from '@testing-library/react'
-import { projectUserText } from '../src/user-text.tsx'
+import { projectUserText, tokenizeUserTextReferences } from '../src/user-text.tsx'
+import type { UserTextReferences } from '../src/user-text.tsx'
 
 const project = (
   text: string,
   labels: readonly string[] = [],
   slashNames: readonly string[] = [],
   slashKind: 'skill' | 'command' = 'skill',
+  references?: UserTextReferences,
 ) =>
-  render(<div data-host>{projectUserText(text, labels, slashNames, slashKind)}</div>).container.querySelector('[data-host]')!
+  render(<div data-host>{projectUserText(text, labels, slashNames, slashKind, references)}</div>).container.querySelector('[data-host]')!
 
 describe('projectUserText', () => {
   it('keeps decorated text inline and preserves whitespace between references', () => {
@@ -40,6 +42,61 @@ describe('projectUserText', () => {
     const host = project('@[a](dsh-session:x)', [])
     expect(host.querySelectorAll('[data-ref-chip]').length).toBe(1)
     expect(host.querySelector('[data-ref-chip="session"]')!.textContent).toBe('a')
+  })
+
+  it('folds a validated generic reference wire to an @ chip and exposes its locator as the title', () => {
+    const locator = 'Confluence content ID 页面 17'
+    const wire = '<dsh-reference>{"source":"atlassian","label":"页面 [中文] / DSH","text":"Confluence content ID 页面 17"}</dsh-reference>'
+    const openFile = vi.fn()
+    const openSkill = vi.fn()
+    const host = project(`查看 ${wire} 完成`, [], [], 'skill', { openFile, openSkill })
+    const chip = host.querySelector('[data-ref-chip="reference"]')!
+    expect(chip.textContent).toBe('@页面 [中文] / DSH')
+    expect(chip.getAttribute('title')).toBe(locator)
+    expect(chip.querySelector('svg')).toBeNull()
+    expect(host.textContent).toBe('查看 @页面 [中文] / DSH 完成')
+    expect(host.querySelector('button')).toBeNull()
+    expect(openFile).not.toHaveBeenCalled()
+    expect(openSkill).not.toHaveBeenCalled()
+  })
+
+  it('leaves legacy locator prose and malformed or unclosed reference wrappers literal', () => {
+    const cases = [
+      'Jira issue DSH-22',
+      '<dsh-reference>{not-json @notes.md}</dsh-reference>',
+      '<dsh-reference>{"source":"Bad Source","label":"@notes.md","text":"locator"}</dsh-reference>',
+      '<dsh-reference>{"source":"atlassian","label":"@notes.md","text":"locator","extra":true}</dsh-reference>',
+      '<dsh-reference>{"source":"atlassian","label":"@notes.md","text":"locator"}',
+    ]
+    const openFile = vi.fn()
+    const openSkill = vi.fn()
+    for (const text of cases) {
+      const host = project(text, [], ['notes'], 'skill', { openFile, openSkill })
+      expect(host.textContent).toBe(text)
+      expect(host.querySelector('[data-ref-chip]')).toBeNull()
+      expect(host.querySelector('button')).toBeNull()
+    }
+    expect(openFile).not.toHaveBeenCalled()
+    expect(openSkill).not.toHaveBeenCalled()
+  })
+
+  it('tokenizes complete reference wires atomically and keeps malformed payloads opaque', () => {
+    const first = '<dsh-reference>{"source":"atlassian","label":"同名 / 页面","text":"issue DSH-1 [x]"}</dsh-reference>'
+    const malformed = '<dsh-reference>{"source":"Bad Source","label":"@notes.md","text":"/review"}</dsh-reference>'
+    const second = '<dsh-reference>{"source":"atlassian","label":"同名 / 页面","text":"issue DSH-2 [y]"}</dsh-reference>'
+    const text = `前文 ${first}\n${malformed} 后文 ${second}`
+    const runs = tokenizeUserTextReferences(text)
+    expect(runs.map(run => run.kind)).toEqual(['plain', 'reference', 'plain', 'opaque', 'plain', 'reference'])
+    const refs = runs.filter(run => run.kind === 'reference')
+    expect(refs.map(run => run.kind === 'reference' ? [run.label, run.text, run.wire] : null)).toEqual([
+      ['同名 / 页面', 'issue DSH-1 [x]', first],
+      ['同名 / 页面', 'issue DSH-2 [y]', second],
+    ])
+    expect(runs.find(run => run.kind === 'opaque')?.wire).toBe(malformed)
+    const host = project(text, [], ['review'])
+    expect(host.textContent).toContain('@notes.md')
+    expect(host.querySelectorAll('[data-ref-chip="reference"]')).toHaveLength(2)
+    expect(host.querySelectorAll('[data-ref-chip="skill"]')).toHaveLength(0)
   })
 
   it('decorates recall-associated labels, files, folders, and quoted paths', () => {

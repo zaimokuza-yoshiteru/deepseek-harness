@@ -116,7 +116,7 @@ import {
 import { createHash } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, readdirSync } from 'node:fs'
 import path from 'node:path'
-import { DatabaseSync, type StatementSync } from 'node:sqlite'
+import { DatabaseSync, type SQLInputValue, type SQLOutputValue, type StatementSync } from 'node:sqlite'
 import type { Context } from '@deepseek-ai/cordis'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type {
@@ -126,6 +126,7 @@ import type {
   AcpSessionForkAuditData,
 } from '../domain/policy/events.ts'
 import { ACP_SNAPSHOT_TOTAL_BYTES, acpOptionsSnapshotOf, toOptionsSnapshotRecord } from './options-snapshot.ts'
+import { ACP_CONFIG_IDENTIFIER_MAX } from '../contract/config-options.ts'
 import type { AcpOptionsSnapshotRecord } from './options-snapshot.ts'
 import { isSensitiveActivityField, redactSecretText } from '../domain/observability/redaction.ts'
 
@@ -133,6 +134,7 @@ import { isSensitiveActivityField, redactSecretText } from '../domain/observabil
 // bounded codec stays an independent persistence concern.
 export {
   ACP_SNAPSHOT_FIELD_MAX,
+  ACP_SNAPSHOT_MODE_DESCRIPTION_MAX,
   ACP_SNAPSHOT_OPTION_LIMIT,
   ACP_SNAPSHOT_TOTAL_BYTES,
   ACP_SNAPSHOT_VALUES_LIMIT,
@@ -183,7 +185,7 @@ export interface AcpDispatchRecord {
 }
 
 export type AcpActivityKind = 'tool' | 'plan' | 'terminal' | 'diff' | 'resource' | 'delegated' | 'other'
-export type AcpActivityStatus = 'running' | 'completed' | 'failed' | 'cancelled'
+export type AcpActivityStatus = 'running' | 'completed' | 'failed' | 'cancelled' | 'unfinished'
 export interface AcpActivityRecord {
   readonly display?: AcpActivityPresentation
   /** First-seen insertion boundary in the native assistant content; absent on legacy records. */
@@ -598,6 +600,7 @@ export interface AcpSidecar {
     afterSeq: number,
     limit?: number,
     filter?: AcpActivityFilter,
+    throughRevision?: number,
   ): Promise<readonly AcpActivityRecord[]>
   /** Current durable activity head. */
   activityHead(sessionId: SessionId, filter?: AcpActivityFilter): Promise<number>
@@ -624,7 +627,7 @@ export interface AcpSidecar {
   /** Read the durable recovery state; missing rows mean healthy/never degraded. */
   readRecoveryState(sessionId: SessionId): Promise<AcpRecoveryState | undefined>
   /** Atomically replace the current recovery state for a DSH session. */
-  writeRecoveryState(state: AcpRecoveryState): Promise<void>
+  writeRecoveryState(state: AcpRecoveryState, options?: { readonly clearDispatch?: true }): Promise<void>
   /**
    * 全量 binding 索引（双绑守卫的唯一消费点 = host composition 的
    * resume 路由）：查 bindings 表全部行，仅语义校验通过（`{status:'ok'}`）者计入
@@ -634,7 +637,27 @@ export interface AcpSidecar {
   /** 该 sessionId 全量合法 entry（按 seq 升序；行级校验失败者跳过并 warn）；库不存在 → 空数组。 */
   list(sessionId: SessionId): Promise<readonly AcpSidecarEntry[]>
   /** Cursor-paged audit read. Only the requested bounded window is decoded. */
-  listPage(sessionId: SessionId, afterSeq: number, limit: number): Promise<readonly AcpSidecarEntry[]>
+  listPage(
+    sessionId: SessionId,
+    afterSeq: number,
+    limit: number,
+    throughSeq?: number,
+  ): Promise<readonly AcpSidecarEntry[]>
+  /** Snapshot-only physical page; advances across malformed stored rows. */
+  listPageScan(
+    sessionId: SessionId,
+    afterSeq: number,
+    limit: number,
+    throughSeq: number,
+  ): Promise<{
+    readonly entries: readonly AcpSidecarEntry[]
+    readonly scannedThrough: number
+    readonly scannedRecords: number
+    readonly unreadableRecords: number
+    readonly hasMore: boolean
+  }>
+  /** Flush queued audit records and return the fixed durable high-water mark. */
+  auditHead(sessionId: SessionId): Promise<number>
   /**
    * 写入（upsert）该会话的 last-known option 快照（输入须先经
    * {@link acpOptionsSnapshotOf} 标准化）。同步 durable；写失败 reject
@@ -869,11 +892,10 @@ interface ActivityRow {
   readonly raw_detail_ref?: unknown
 }
 
-/** 排队中的非审批审计（seq 在入队时分配——与同步写的 seq 分配同源，保追加序）。 */
+/** 排队中的非审批审计；seq 与 record id 在写事务中按数据库事实分配。 */
 interface QueuedAudit {
   readonly sessionId: string
   readonly entry: StampedEntry
-  readonly seq: number
 }
 
 const SCHEMA_SQL = `
@@ -956,6 +978,114 @@ CREATE INDEX IF NOT EXISTS activity_session_anchor_id_revision_desc
   ON activity_journal(dsh_session_id, prompt_anchor_message_id, activity_id, revision_seq DESC);
 `
 
+const ACTIVITY_JOURNAL_CURRENT_SCHEMA = `CREATE TABLE activity_journal (
+  dsh_session_id TEXT NOT NULL,
+  activity_id TEXT NOT NULL,
+  owner_dsh_session_id TEXT NOT NULL,
+  prompt_anchor_message_id TEXT NOT NULL,
+  activity_seq INTEGER NOT NULL,
+  revision_seq INTEGER NOT NULL,
+  time INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  status TEXT NOT NULL,
+  presentation TEXT NOT NULL,
+  raw_detail TEXT,
+  raw_detail_ref TEXT,
+  PRIMARY KEY (dsh_session_id, revision_seq)
+) STRICT`
+
+const ACTIVITY_JOURNAL_BASE_COLUMNS = [
+  'dsh_session_id',
+  'activity_id',
+  'owner_dsh_session_id',
+  'prompt_anchor_message_id',
+  'activity_seq',
+  'revision_seq',
+  'time',
+  'kind',
+  'status',
+  'presentation',
+  'raw_detail',
+  'raw_detail_ref',
+] as const
+const ACTIVITY_JOURNAL_OPTIONAL_COLUMNS = ['content_index', 'display_detail'] as const
+
+function tableColumns(db: DatabaseSync, table: string): Set<string> {
+  return new Set(
+    (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name?: string }>).flatMap((row) =>
+      typeof row.name === 'string' ? [row.name] : [],
+    ),
+  )
+}
+
+function ensureActivityJournalOptionalColumns(db: DatabaseSync): void {
+  const columns = tableColumns(db, 'activity_journal')
+  if (!columns.has('display_detail')) db.exec('ALTER TABLE activity_journal ADD COLUMN display_detail TEXT')
+  if (!columns.has('content_index')) db.exec('ALTER TABLE activity_journal ADD COLUMN content_index INTEGER')
+}
+
+function ensureActivityJournalIndexes(db: DatabaseSync): void {
+  const indexes = [
+    {
+      name: 'activity_session_id_revision_desc',
+      create:
+        'CREATE INDEX IF NOT EXISTS activity_session_id_revision_desc ON activity_journal(dsh_session_id, activity_id, revision_seq DESC)',
+    },
+    {
+      name: 'activity_session_anchor_id_revision_desc',
+      create:
+        'CREATE INDEX IF NOT EXISTS activity_session_anchor_id_revision_desc ON activity_journal(dsh_session_id, prompt_anchor_message_id, activity_id, revision_seq DESC)',
+    },
+  ] as const
+  const findOwner = db.prepare("SELECT tbl_name FROM sqlite_master WHERE type = 'index' AND name = ?")
+  for (const index of indexes) {
+    const owner = findOwner.get(index.name) as { tbl_name?: unknown } | undefined
+    if (owner?.tbl_name === 'activity_journal_legacy') db.exec(`DROP INDEX ${index.name}`)
+    db.exec(index.create)
+  }
+}
+
+/**
+ * Import one legacy journal while the caller holds BEGIN IMMEDIATE. Existing
+ * primary keys are accepted only when every source field maps to the same
+ * stored value; conflicting history stays in the legacy table for later
+ * diagnosis/retry. This function never logs row contents.
+ */
+function copyLegacyActivityRows(db: DatabaseSync): number {
+  const legacyColumns = tableColumns(db, 'activity_journal_legacy')
+  const targetColumns = [
+    ...ACTIVITY_JOURNAL_BASE_COLUMNS,
+    ...ACTIVITY_JOURNAL_OPTIONAL_COLUMNS.filter((column) => legacyColumns.has(column)),
+  ]
+  const source = targetColumns.map((column) => {
+    let expression: string = column
+    if (column === 'revision_seq' && !legacyColumns.has('revision_seq')) expression = 'activity_seq'
+    if (column === 'time' && !legacyColumns.has('time')) expression = '0'
+    if ((column === 'raw_detail' || column === 'raw_detail_ref') && !legacyColumns.has(column)) expression = 'NULL'
+    return `${expression} AS ${column}`
+  })
+  const rows = db.prepare(`SELECT ${source.join(', ')} FROM activity_journal_legacy`).iterate() as IterableIterator<
+    Record<string, SQLOutputValue>
+  >
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO activity_journal (${targetColumns.join(', ')}) VALUES (${targetColumns.map(() => '?').join(', ')})`,
+  )
+  const selectExisting = db.prepare(
+    `SELECT ${targetColumns.join(', ')} FROM activity_journal WHERE dsh_session_id = ? AND revision_seq = ?`,
+  )
+  let conflicts = 0
+  for (const row of rows) {
+    const values = targetColumns.map((column) => row[column] ?? null) as SQLInputValue[]
+    insert.run(...values)
+    const existing = selectExisting.get(row.dsh_session_id ?? null, row.revision_seq ?? null) as
+      Record<string, SQLOutputValue> | undefined
+    if (existing === undefined || !targetColumns.every((column, index) => Object.is(existing[column], values[index]))) {
+      conflicts += 1
+    }
+  }
+  return conflicts
+}
+
 class SidecarStore implements AcpSidecar {
   readonly root: string
   private readonly now: () => number
@@ -990,8 +1120,6 @@ class SidecarStore implements AcpSidecar {
   private stmtUpsertRecoveryState: StatementSync | undefined
   private stmtGetMemberModelSelection: StatementSync | undefined
   private stmtUpsertMemberModelSelection: StatementSync | undefined
-  /** per-session 下一个 seq（懒种子 = 库里 MAX(seq)+1；含队列已占号）。 */
-  private readonly seqCounters = new Map<string, number>()
   private queue: QueuedAudit[] = []
   private queueDrainScheduled = false
   private queueFullWarned = false
@@ -1050,35 +1178,95 @@ class SidecarStore implements AcpSidecar {
         (db.prepare('PRAGMA table_info(dispatch_ledger)').all() as Array<{ name?: string }>).map((row) => row.name),
       )
       if (!dispatchColumns.has('provenance')) db.exec('ALTER TABLE dispatch_ledger ADD COLUMN provenance TEXT')
+      let activityLegacyConflictCount = 0
       const activitySql = (
         db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'activity_journal'").get() as
           { sql?: unknown } | undefined
       )?.sql
       if (typeof activitySql === 'string' && !activitySql.includes('PRIMARY KEY (dsh_session_id, revision_seq)')) {
-        db.exec('ALTER TABLE activity_journal RENAME TO activity_journal_legacy')
-        db.exec(`CREATE TABLE activity_journal (
-          dsh_session_id TEXT NOT NULL, activity_id TEXT NOT NULL, owner_dsh_session_id TEXT NOT NULL,
-          prompt_anchor_message_id TEXT NOT NULL, activity_seq INTEGER NOT NULL, revision_seq INTEGER NOT NULL,
-          time INTEGER NOT NULL, kind TEXT NOT NULL, status TEXT NOT NULL, presentation TEXT NOT NULL,
-          raw_detail TEXT, raw_detail_ref TEXT, PRIMARY KEY (dsh_session_id, revision_seq)
-        ) STRICT`)
-        const columns = new Set(
-          (db.prepare('PRAGMA table_info(activity_journal_legacy)').all() as Array<{ name?: string }>).map(
-            (row) => row.name,
-          ),
-        )
-        const time = columns.has('time') ? 'time' : '0'
-        const revision = columns.has('revision_seq') ? 'revision_seq' : 'activity_seq'
-        db.exec(`INSERT INTO activity_journal (dsh_session_id, activity_id, owner_dsh_session_id, prompt_anchor_message_id, activity_seq, revision_seq, time, kind, status, presentation, raw_detail, raw_detail_ref)
-          SELECT dsh_session_id, activity_id, owner_dsh_session_id, prompt_anchor_message_id, activity_seq, ${revision}, ${time}, kind, status, presentation, raw_detail, raw_detail_ref FROM activity_journal_legacy`)
-        db.exec('DROP TABLE activity_journal_legacy')
+        db.exec('BEGIN IMMEDIATE')
+        try {
+          const activitySqlNow = (
+            db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'activity_journal'").get() as
+              { sql?: unknown } | undefined
+          )?.sql
+          if (
+            typeof activitySqlNow === 'string' &&
+            !activitySqlNow.includes('PRIMARY KEY (dsh_session_id, revision_seq)')
+          ) {
+            db.exec('ALTER TABLE activity_journal RENAME TO activity_journal_legacy')
+            db.exec(ACTIVITY_JOURNAL_CURRENT_SCHEMA)
+            ensureActivityJournalOptionalColumns(db)
+            const conflicts = copyLegacyActivityRows(db)
+            if (conflicts === 0) db.exec('DROP TABLE activity_journal_legacy')
+            ensureActivityJournalIndexes(db)
+            activityLegacyConflictCount = conflicts
+            db.exec('COMMIT')
+          } else {
+            db.exec('COMMIT')
+          }
+        } catch (error) {
+          try {
+            db.exec('ROLLBACK')
+          } catch {
+            /* preserve original */
+          }
+          throw error
+        }
       }
-      const activityColumns = new Set(
-        (db.prepare('PRAGMA table_info(activity_journal)').all() as Array<{ name?: string }>).map((row) => row.name),
-      )
-      if (!activityColumns.has('display_detail')) db.exec('ALTER TABLE activity_journal ADD COLUMN display_detail TEXT')
-      if (!activityColumns.has('content_index'))
-        db.exec('ALTER TABLE activity_journal ADD COLUMN content_index INTEGER')
+      // Recovery after a prior interrupted migration. Check under the write lock
+      // again before copying or dropping the retained legacy table.
+      ensureActivityJournalOptionalColumns(db)
+      const legacyRow = db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'activity_journal_legacy'")
+        .get()
+      const newActivitySql = (
+        db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'activity_journal'").get() as
+          { sql?: unknown } | undefined
+      )?.sql
+      if (
+        legacyRow !== undefined &&
+        typeof newActivitySql === 'string' &&
+        newActivitySql.includes('PRIMARY KEY (dsh_session_id, revision_seq)')
+      ) {
+        db.exec('BEGIN IMMEDIATE')
+        try {
+          const legacyExists = db
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'activity_journal_legacy'")
+            .get()
+          const currentSql = (
+            db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'activity_journal'").get() as
+              { sql?: unknown } | undefined
+          )?.sql
+          if (
+            legacyExists !== undefined &&
+            typeof currentSql === 'string' &&
+            currentSql.includes('PRIMARY KEY (dsh_session_id, revision_seq)')
+          ) {
+            ensureActivityJournalOptionalColumns(db)
+            const conflicts = copyLegacyActivityRows(db)
+            if (conflicts === 0) db.exec('DROP TABLE activity_journal_legacy')
+            ensureActivityJournalIndexes(db)
+            activityLegacyConflictCount = conflicts
+            db.exec('COMMIT')
+          } else {
+            db.exec('COMMIT')
+          }
+        } catch (error) {
+          try {
+            db.exec('ROLLBACK')
+          } catch {
+            /* preserve original */
+          }
+          throw error
+        }
+      }
+      ensureActivityJournalOptionalColumns(db)
+      if (activityLegacyConflictCount > 0) {
+        this.warn(
+          `dsh-acp sidecar: retained ${String(activityLegacyConflictCount)} conflicting legacy activity journal row(s); original rows remain available`,
+        )
+      }
     } catch (error: unknown) {
       try {
         db?.close()
@@ -1191,135 +1379,76 @@ class SidecarStore implements AcpSidecar {
     }
   }
 
-  /** 下一个 per-session seq（懒种子 = 库里 MAX(seq)+1）。 */
+  /** 下一个 per-session seq；调用方须已持有 SQLite 写事务。 */
   private nextSeq(sessionId: string): number {
-    let next = this.seqCounters.get(sessionId)
-    if (next === undefined) {
-      const row = this.stmtMaxSeq?.get(sessionId) as { max_seq: number | null } | undefined
-      next = (row?.max_seq ?? 0) + 1
-    }
-    this.seqCounters.set(sessionId, next + 1)
-    return next
-  }
-
-  /** Permission writes serialize through SQLite and account for local queued seq reservations. */
-  private nextPermissionSeq(sessionId: string): number {
     const row = this.stmtMaxSeq?.get(sessionId) as { max_seq: number | null } | undefined
-    const databaseNext = (row?.max_seq ?? 0) + 1
-    const localNext = this.seqCounters.get(sessionId)
-    const next = Math.max(databaseNext, localNext ?? databaseNext)
-    this.seqCounters.set(sessionId, next + 1)
-    return next
+    return (row?.max_seq ?? 0) + 1
   }
 
   /**
-   * 同步落库（binding/permission 专用路径）：decided 先去重预检（已存在 → 跳过并
-   * 正常返回， 幂等语义）；非 decided 的 recordId 撞名追加 -2/-3… 序号（先查
-   * 后插，同进程同步执行无竞争）。binding 同时 upsert 最新索引表。
+   * 同步落库：序号、内容 ID 与 decided 去重都在数据库写锁内分配；binding
+   * 同时 upsert 最新索引表。
    */
   private insertSync(sessionId: string, entry: StampedEntry): void {
     const db = this.ensureDb()
     const ids = deriveAcpIds(entry.kind, entry.data)
     const dedupeKey = decidedDedupeKeyOf(entry.kind, entry.data)
     const payload = stableStringify(entry.data)
-    if (entry.kind === 'permission') {
-      // Approval audit is low volume. Serialize dedupe inspection and durable
-      // sequence allocation so a stale per-connection counter cannot drop a
-      // distinct decision through an unrelated UNIQUE(seq) conflict.
-      db.exec('BEGIN IMMEDIATE')
-      try {
-        if (dedupeKey !== undefined && this.stmtHasDedupe?.get(sessionId, dedupeKey) !== undefined) {
-          db.exec('COMMIT')
-          return // 重连重放：已存在即跳过
-        }
-        const seq = this.nextPermissionSeq(sessionId)
-        const recordId = dedupeKey ?? this.nextAuditIdentityWithSeq(sessionId, entry, seq).recordId
-        const result =
-          dedupeKey === undefined
-            ? this.stmtInsert?.run(
-                recordId,
-                sessionId,
-                seq,
-                entry.time,
-                entry.kind,
-                ids.acpProviderId ?? null,
-                ids.acpSessionId ?? null,
-                null,
-                payload,
-              )
-            : this.stmtInsertIgnore?.run(
-                recordId,
-                sessionId,
-                seq,
-                entry.time,
-                entry.kind,
-                ids.acpProviderId ?? null,
-                ids.acpSessionId ?? null,
-                dedupeKey,
-                payload,
-              )
-        // This targeted conflict can only mean the exact decided dedupe index.
-        if (result !== undefined && Number(result.changes) === 0) {
-          db.exec('COMMIT')
-          return
-        }
+    db.exec('BEGIN IMMEDIATE')
+    let transactionOpen = true
+    try {
+      if (entry.kind === 'permission' && dedupeKey !== undefined && this.stmtHasDedupe?.get(sessionId, dedupeKey)) {
         db.exec('COMMIT')
-      } catch (error) {
+        transactionOpen = false
+        return
+      }
+      if (entry.kind === 'binding') this.assertBindingTransition(sessionId, entry)
+      const identity = this.nextAuditIdentity(sessionId, entry)
+      const seq = identity.seq
+      const recordId = dedupeKey ?? identity.recordId
+      const result =
+        entry.kind === 'permission' && dedupeKey !== undefined
+          ? this.stmtInsertIgnore?.run(
+              recordId,
+              sessionId,
+              seq,
+              entry.time,
+              entry.kind,
+              ids.acpProviderId ?? null,
+              ids.acpSessionId ?? null,
+              dedupeKey,
+              payload,
+            )
+          : this.stmtInsert?.run(
+              recordId,
+              sessionId,
+              seq,
+              entry.time,
+              entry.kind,
+              ids.acpProviderId ?? null,
+              ids.acpSessionId ?? null,
+              null,
+              payload,
+            )
+      if (result !== undefined && Number(result.changes) === 0) {
+        db.exec('COMMIT')
+        transactionOpen = false
+        return
+      }
+      if (entry.kind === 'binding')
+        this.stmtUpsertBinding?.run(sessionId, entry.time, ids.acpProviderId ?? null, ids.acpSessionId ?? null, payload)
+      db.exec('COMMIT')
+      transactionOpen = false
+    } catch (error: unknown) {
+      if (transactionOpen) {
         try {
           db.exec('ROLLBACK')
         } catch {
           /* preserve original */
         }
-        // Keep the local reservation after rollback; a queued non-approval audit may own an earlier seq.
-        throw error
       }
-      return
+      throw error
     }
-    if (entry.kind === 'binding') {
-      // binding 是恢复索引，不是可被任意最新写覆盖的普通审计行。把迁移校验、
-      // audit 追加和最新索引更新放进同一个 IMMEDIATE 事务：错误 provider 或错误
-      // generation 即使来自另一进程，也不能先污染 audit 或覆盖正确索引。
-      db.exec('BEGIN IMMEDIATE')
-      try {
-        this.assertBindingTransition(sessionId, entry)
-        const { seq, recordId } = this.nextAuditIdentity(sessionId, entry)
-        this.stmtInsert?.run(
-          recordId,
-          sessionId,
-          seq,
-          entry.time,
-          entry.kind,
-          ids.acpProviderId ?? null,
-          ids.acpSessionId ?? null,
-          null,
-          payload,
-        )
-        this.stmtUpsertBinding?.run(sessionId, entry.time, ids.acpProviderId ?? null, ids.acpSessionId ?? null, payload)
-        db.exec('COMMIT')
-      } catch (error: unknown) {
-        try {
-          db.exec('ROLLBACK')
-        } catch {
-          /* 原错误优先 */
-        }
-        // nextSeq 的内存种子可能已在失败事务内前移；丢弃后从 durable MAX 重种。
-        this.seqCounters.delete(sessionId)
-        throw error
-      }
-      return
-    }
-    const { seq, recordId } = this.nextAuditIdentity(sessionId, entry)
-    this.stmtInsert?.run(
-      recordId,
-      sessionId,
-      seq,
-      entry.time,
-      entry.kind,
-      ids.acpProviderId ?? null,
-      ids.acpSessionId ?? null,
-      null,
-      payload,
-    )
   }
 
   /** 为一条非去重审计分配 seq 与无碰撞 record id。 */
@@ -1417,7 +1546,7 @@ class SidecarStore implements AcpSidecar {
       }
       return
     }
-    this.queue.push({ sessionId, entry, seq: this.nextSeq(sessionId) })
+    this.queue.push({ sessionId, entry })
     if (!this.queueDrainScheduled) {
       this.queueDrainScheduled = true
       queueMicrotask(() => {
@@ -1427,47 +1556,79 @@ class SidecarStore implements AcpSidecar {
     }
   }
 
-  /** 队列批量落库（单事务）；失败 → 整批丢弃 + warn 计数（非审批审计不阻塞主链路）。 */
+  /** 队列批量落库（单事务）；失败 → 逐条重试，仅丢弃仍失败的条目 + warn 计数（非审批审计不阻塞主链路）。 */
   private drainQueue(): void {
     if (this.queue.length === 0) return
+    const db = this.ensureDb()
     const batch = this.queue
     this.queue = []
     this.queueFullWarned = false
-    const db = this.ensureDb()
-    db.exec('BEGIN')
+    let transactionOpen = false
     try {
-      for (const item of batch) {
-        const ids = deriveAcpIds(item.entry.kind, item.entry.data)
-        const base = contentRecordIdBase(item.entry.kind, item.entry.time, item.entry.data)
-        let recordId = base
-        for (let suffix = 2; ; suffix += 1) {
-          if (this.stmtHasRecordId?.get(item.sessionId, recordId) === undefined) break
-          recordId = `${base}-${String(suffix)}`
-        }
-        this.stmtInsert?.run(
-          recordId,
-          item.sessionId,
-          item.seq,
-          item.entry.time,
-          item.entry.kind,
-          ids.acpProviderId ?? null,
-          ids.acpSessionId ?? null,
-          null,
-          stableStringify(item.entry.data),
-        )
-      }
+      db.exec('BEGIN IMMEDIATE')
+      transactionOpen = true
+      for (const item of batch) this.insertQueuedAudit(item)
       db.exec('COMMIT')
+      transactionOpen = false
     } catch (error: unknown) {
-      try {
-        db.exec('ROLLBACK')
-      } catch {
-        /* 连接级失败时 ROLLBACK 也可能抛，尽力而为 */
+      if (transactionOpen) {
+        try {
+          db.exec('ROLLBACK')
+        } catch {
+          /* preserve original */
+        }
       }
-      this.droppedEntries += batch.length
+      // Fall back to per-item writes so a single poisoned item doesn't drop the
+      // whole batch. Each item gets its own BEGIN/COMMIT; failures cause a
+      // ROLLBACK for that item only and are counted as dropped.
+      let dropped = 0
+      for (const item of batch) {
+        let itemTransactionOpen = false
+        try {
+          db.exec('BEGIN IMMEDIATE')
+          itemTransactionOpen = true
+          this.insertQueuedAudit(item)
+          db.exec('COMMIT')
+          itemTransactionOpen = false
+        } catch {
+          if (itemTransactionOpen) {
+            try {
+              db.exec('ROLLBACK')
+            } catch {
+              /* best effort */
+            }
+          }
+          dropped += 1
+        }
+      }
+      if (dropped === 0) return
+      this.droppedEntries += dropped
       this.warn(
-        `dsh-acp sidecar: failed to flush ${String(batch.length)} queued audit record(s); dropping them (${errorMessage(error)})`,
+        `dsh-acp sidecar: failed to flush ${String(dropped)} queued audit record(s); dropping them (${errorMessage(error)})`,
       )
     }
+  }
+
+  private insertQueuedAudit(item: QueuedAudit): void {
+    const ids = deriveAcpIds(item.entry.kind, item.entry.data)
+    const base = contentRecordIdBase(item.entry.kind, item.entry.time, item.entry.data)
+    const seq = this.nextSeq(item.sessionId)
+    let recordId = base
+    for (let suffix = 2; ; suffix += 1) {
+      if (this.stmtHasRecordId?.get(item.sessionId, recordId) === undefined) break
+      recordId = `${base}-${String(suffix)}`
+    }
+    this.stmtInsert?.run(
+      recordId,
+      item.sessionId,
+      seq,
+      item.entry.time,
+      item.entry.kind,
+      ids.acpProviderId ?? null,
+      ids.acpSessionId ?? null,
+      null,
+      stableStringify(item.entry.data),
+    )
   }
 
   /** WAL checkpoint + wal/shm 权限位兜底（flush/dispose 的周期 sync 点；维护性动作，失败仅 warn——已 commit 的数据不受影响）。 */
@@ -1490,8 +1651,10 @@ class SidecarStore implements AcpSidecar {
       data: entry.data,
     } as StampedEntry
     try {
-      if (ACP_SIDECAR_SYNC_KINDS.includes(entry.kind)) this.insertSync(sessionId as string, stamped)
-      else this.enqueueAudit(sessionId as string, stamped)
+      if (ACP_SIDECAR_SYNC_KINDS.includes(entry.kind)) {
+        if (this.queue.length > 0) this.drainQueue()
+        this.insertSync(sessionId as string, stamped)
+      } else this.enqueueAudit(sessionId as string, stamped)
       return Promise.resolve()
     } catch (error: unknown) {
       return Promise.reject(error instanceof Error ? error : new Error(errorMessage(error)))
@@ -1789,19 +1952,26 @@ class SidecarStore implements AcpSidecar {
     afterSeq: number,
     limit = 100,
     filter?: AcpActivityFilter,
+    throughRevision?: number,
   ): Promise<readonly AcpActivityRecord[]> {
     assertSafeSessionId(sessionId)
     if (!Number.isSafeInteger(afterSeq) || afterSeq < 0)
       throw new TypeError('dsh-acp activity cursor must be a non-negative integer')
     if (!Number.isSafeInteger(limit) || limit < 1)
       throw new TypeError('dsh-acp activity limit must be a positive integer')
+    if (throughRevision !== undefined && (!Number.isSafeInteger(throughRevision) || throughRevision < afterSeq))
+      throw new TypeError('dsh-acp activity snapshot head is invalid')
     try {
       const db = this.openIfExists()
       if (db === undefined) return Promise.resolve([])
       const rows =
-        filter === undefined || (filter.ownerDshSessionId === undefined && filter.promptAnchorMessageId === undefined)
-          ? ((this.stmtActivityPage?.all(sessionId, afterSeq, Math.min(limit, 200)) ?? []) as unknown as ActivityRow[])
-          : this.activityPageRows(db, sessionId, afterSeq, Math.min(limit, 200), filter)
+        throughRevision !== undefined
+          ? this.activityPageRows(db, sessionId, afterSeq, Math.min(limit, 200), filter ?? {}, throughRevision)
+          : filter === undefined ||
+              (filter.ownerDshSessionId === undefined && filter.promptAnchorMessageId === undefined)
+            ? ((this.stmtActivityPage?.all(sessionId, afterSeq, Math.min(limit, 200)) ??
+                []) as unknown as ActivityRow[])
+            : this.activityPageRows(db, sessionId, afterSeq, Math.min(limit, 200), filter)
       return Promise.resolve(rows.map(rowToActivity).filter((row): row is AcpActivityRecord => row !== undefined))
     } catch (error) {
       return Promise.reject(error instanceof Error ? error : new Error(errorMessage(error)))
@@ -1929,8 +2099,16 @@ class SidecarStore implements AcpSidecar {
     afterSeq: number,
     limit: number,
     filter: AcpActivityFilter,
+    throughRevision?: number,
   ): ActivityRow[] {
     const { where, params } = activityFilterSql(sessionId, filter)
+    if (throughRevision !== undefined) {
+      return db
+        .prepare(
+          `SELECT * FROM activity_journal WHERE ${where} AND revision_seq > ? AND revision_seq <= ? ORDER BY revision_seq ASC LIMIT ?`,
+        )
+        .all(...params, afterSeq, throughRevision, limit) as unknown as ActivityRow[]
+    }
     return db
       .prepare(`SELECT * FROM activity_journal WHERE ${where} AND revision_seq > ? ORDER BY revision_seq ASC LIMIT ?`)
       .all(...params, afterSeq, limit) as unknown as ActivityRow[]
@@ -2014,11 +2192,17 @@ class SidecarStore implements AcpSidecar {
     }
   }
 
-  writeRecoveryState(state: AcpRecoveryState): Promise<void> {
+  writeRecoveryState(state: AcpRecoveryState, options?: { readonly clearDispatch?: true }): Promise<void> {
     assertSafeSessionId(state.dshSessionId)
     const validated = toRecoveryState(state)
     if (validated === undefined)
       throw new TypeError(`dsh-acp sidecar: malformed recovery state for session ${JSON.stringify(state.dshSessionId)}`)
+    if (
+      options?.clearDispatch === true &&
+      (validated.kind !== 'healthy' ||
+        (validated.lastUserAction !== 'retry-original' && validated.lastUserAction !== 'rebind-blank'))
+    )
+      throw new TypeError('dsh-acp sidecar: dispatch can only be cleared with an explicit healthy recovery action')
     try {
       const db = this.ensureDb()
       db.exec('BEGIN IMMEDIATE')
@@ -2030,6 +2214,7 @@ class SidecarStore implements AcpSidecar {
           validated.lastUserAction ?? null,
           stableStringify(validated),
         )
+        if (options?.clearDispatch === true) this.stmtDeleteDispatch?.run(validated.dshSessionId)
         db.exec('COMMIT')
       } catch (error: unknown) {
         try {
@@ -2093,17 +2278,29 @@ class SidecarStore implements AcpSidecar {
     }
   }
 
-  listPage(sessionId: SessionId, afterSeq: number, limit: number): Promise<readonly AcpSidecarEntry[]> {
+  listPage(
+    sessionId: SessionId,
+    afterSeq: number,
+    limit: number,
+    throughSeq?: number,
+  ): Promise<readonly AcpSidecarEntry[]> {
     assertSafeSessionId(sessionId)
     if (!Number.isSafeInteger(afterSeq) || afterSeq < 0)
       throw new TypeError('dsh-acp sidecar: audit cursor must be a non-negative integer')
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
       throw new TypeError('dsh-acp sidecar: audit page size must be between 1 and 100')
+    if (throughSeq !== undefined && (!Number.isSafeInteger(throughSeq) || throughSeq < afterSeq))
+      throw new TypeError('dsh-acp sidecar: audit snapshot head is invalid')
     try {
       this.drainQueue()
       const db = this.openIfExists()
       if (db === undefined) return Promise.resolve([])
-      const rows = (this.stmtListPage?.all(sessionId, afterSeq, limit) ?? []) as unknown as AuditRow[]
+      const rows =
+        throughSeq === undefined
+          ? ((this.stmtListPage?.all(sessionId, afterSeq, limit) ?? []) as unknown as AuditRow[])
+          : (db
+              .prepare('SELECT * FROM audit WHERE dsh_session_id = ? AND seq > ? AND seq <= ? ORDER BY seq ASC LIMIT ?')
+              .all(sessionId, afterSeq, throughSeq, limit) as unknown as AuditRow[])
       const entries: AcpSidecarEntry[] = []
       let skipped = 0
       for (const row of rows) {
@@ -2121,6 +2318,59 @@ class SidecarStore implements AcpSidecar {
     }
   }
 
+  async listPageScan(
+    sessionId: SessionId,
+    afterSeq: number,
+    limit: number,
+    throughSeq: number,
+  ): Promise<{
+    readonly entries: readonly AcpSidecarEntry[]
+    readonly scannedThrough: number
+    readonly scannedRecords: number
+    readonly unreadableRecords: number
+    readonly hasMore: boolean
+  }> {
+    assertSafeSessionId(sessionId)
+    if (!Number.isSafeInteger(afterSeq) || afterSeq < 0)
+      throw new TypeError('dsh-acp sidecar: audit cursor must be a non-negative integer')
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
+      throw new TypeError('dsh-acp sidecar: audit page size must be between 1 and 100')
+    if (!Number.isSafeInteger(throughSeq) || throughSeq < afterSeq)
+      throw new TypeError('dsh-acp sidecar: audit snapshot head is invalid')
+    this.drainQueue()
+    const db = this.openIfExists()
+    if (db === undefined)
+      return { entries: [], scannedThrough: afterSeq, scannedRecords: 0, unreadableRecords: 0, hasMore: false }
+    const rows = db
+      .prepare('SELECT * FROM audit WHERE dsh_session_id = ? AND seq > ? AND seq <= ? ORDER BY seq ASC LIMIT ?')
+      .all(sessionId, afterSeq, throughSeq, limit) as unknown as AuditRow[]
+    const entries: AcpSidecarEntry[] = []
+    let unreadableRecords = 0
+    for (const row of rows) {
+      const entry = rowToEntry(row)
+      if (entry === undefined) unreadableRecords += 1
+      else entries.push(entry)
+    }
+    const scannedThrough = rows.at(-1)?.seq ?? afterSeq
+    const hasMore =
+      scannedThrough < throughSeq &&
+      db
+        .prepare('SELECT 1 AS present FROM audit WHERE dsh_session_id = ? AND seq > ? AND seq <= ? LIMIT 1')
+        .get(sessionId, scannedThrough, throughSeq) !== undefined
+    if (unreadableRecords > 0)
+      this.warn(`dsh-acp sidecar: skipped ${String(unreadableRecords)} malformed audit row(s) in support snapshot`)
+    return { entries, scannedThrough, scannedRecords: rows.length, unreadableRecords, hasMore }
+  }
+
+  async auditHead(sessionId: SessionId): Promise<number> {
+    assertSafeSessionId(sessionId)
+    await this.flush()
+    const db = this.openIfExists()
+    if (db === undefined) return 0
+    const row = this.stmtMaxSeq?.get(sessionId) as { max_seq?: number | bigint | null } | undefined
+    return Number(row?.max_seq ?? 0)
+  }
+
   async readModeIntent(sessionId: SessionId): Promise<AcpModeIntent | undefined> {
     assertSafeSessionId(sessionId)
     const row = this.openIfExists()
@@ -2131,7 +2381,12 @@ class SidecarStore implements AcpSidecar {
 
   async writeModeIntent(sessionId: SessionId, intent: AcpModeIntent): Promise<void> {
     assertSafeSessionId(sessionId)
-    if (!intent.modeId || intent.modeId.length > 128 || !intent.bindingKey || intent.bindingKey.length > 8192)
+    if (
+      !intent.modeId ||
+      intent.modeId.length > ACP_CONFIG_IDENTIFIER_MAX ||
+      !intent.bindingKey ||
+      intent.bindingKey.length > 8192
+    )
       throw new TypeError('Invalid ACP mode intent')
     this.ensureDb()
       .prepare(
@@ -2311,7 +2566,13 @@ const ACP_ACTIVITY_KINDS: readonly AcpActivityKind[] = [
   'delegated',
   'other',
 ]
-const ACP_ACTIVITY_STATUSES: readonly AcpActivityStatus[] = ['running', 'completed', 'failed', 'cancelled']
+const ACP_ACTIVITY_STATUSES: readonly AcpActivityStatus[] = [
+  'running',
+  'completed',
+  'failed',
+  'cancelled',
+  'unfinished',
+]
 
 function isActivityKind(value: unknown): value is AcpActivityKind {
   return typeof value === 'string' && ACP_ACTIVITY_KINDS.includes(value as AcpActivityKind)
@@ -2322,7 +2583,7 @@ function isActivityStatus(value: unknown): value is AcpActivityStatus {
 }
 
 function isTerminalActivityStatus(value: AcpActivityStatus): boolean {
-  return value === 'completed' || value === 'failed' || value === 'cancelled'
+  return value === 'completed' || value === 'failed' || value === 'cancelled' || value === 'unfinished'
 }
 
 function validateActivityFilter(filter: AcpActivityFilter): void {

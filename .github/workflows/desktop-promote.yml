@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       source_run:
-        description: Successful Desktop portable branch run ID
+        description: Successful full Desktop portable run ID (enable macOS and source for a manual run)
         required: true
         type: string
       tag:
@@ -55,7 +55,7 @@ jobs:
           run = json.load(open('/tmp/source-run.json'))
           assert run['status'] == 'completed' and run['conclusion'] == 'success'
           assert run['head_sha'] == os.environ['SOURCE_SHA']
-          assert run['event'] == 'push' and run['head_branch'] == 'desktop'
+          assert run['event'] in ['push', 'workflow_dispatch'] and run['head_branch'] == 'desktop'
           assert run['path'] == '.github/workflows/desktop-portable.yml'
           assert run['repository']['full_name'] == os.environ['GH_REPO']
           PY
@@ -121,32 +121,55 @@ jobs:
           source_manifest = json.loads(source_manifest_bytes)
           assert source_manifest['commit'] == source_sha
           assert source_manifest['distributionVersion'] == tag
-          assert source_manifest['testsIncluded'] is True
+          payload_kind = source_manifest.get('payloadKind', 'with-tests')
+          assert payload_kind in ['buildable', 'with-tests']
+          assert source_manifest['testsIncluded'] is (payload_kind == 'with-tests')
           manifest_paths = {entry['path'] for entry in source_manifest['files']}
           assert manifest_paths == set(members) - {'source-files.json'}
           for entry in source_manifest['files']:
               assert not pathlib.PurePosixPath(entry['path']).is_absolute() and '..' not in pathlib.PurePosixPath(entry['path']).parts
               assert entry['path'] in members
               assert hashlib.sha256(members[entry['path']]).hexdigest() == entry['sha256'], entry['path']
+              if 'payloadKind' in source_manifest or 'mode' in entry:
+                  assert type(entry.get('mode')) is int and 0 <= entry['mode'] <= 0o777, entry['path']
+                  assert payload[entry['path']].mode & 0o777 == entry['mode'], entry['path']
+
+          if 'filteredPayloadSha256' in source_manifest:
+              payload_digest = hashlib.sha256()
+              for path in sorted(manifest_paths - {'source-revision.json'}):
+                  data = members[path]
+                  payload_digest.update(f'{len(path.encode())}:{path}{len(data)}:'.encode())
+                  payload_digest.update(data)
+              assert payload_digest.hexdigest() == source_manifest['filteredPayloadSha256']
 
           excluded = {'node_modules', 'lib', 'dist', '.local', '.git', '.cache', '.typert', '.DS_Store'}
           def source_digest(source):
               assert source.startswith('third_party/plugins/') and '..' not in pathlib.PurePosixPath(source).parts
-              prefix = source.rstrip('/') + '/'
+              source_root = pathlib.Path('..', source)
+              assert source_root.is_dir()
               files = []
-              for path, data in members.items():
-                  if path.startswith(prefix):
-                      relative = path[len(prefix):]
-                      parts = pathlib.PurePosixPath(relative).parts
-                      if any(part in excluded for part in parts) or relative.endswith('.tsbuildinfo'):
-                          continue
-                      files.append((relative, data))
+              for path in source_root.rglob('*'):
+                  relative = path.relative_to(source_root).as_posix()
+                  parts = pathlib.PurePosixPath(relative).parts
+                  if any(part in excluded for part in parts) or relative.endswith('.tsbuildinfo'):
+                      continue
+                  assert not path.is_symlink(), relative
+                  if path.is_file():
+                      files.append((relative, path.read_bytes()))
               assert files, source
               digest = hashlib.sha256()
               for path, data in sorted(files, key=lambda item: item[0]):
                   digest.update(f'{len(path.encode())}:{path}{len(data)}:'.encode())
                   digest.update(data)
               return digest.hexdigest()
+
+          if payload_kind == 'buildable':
+              full_records = source_manifest['sourcesJsonFullPluginSha256']
+              checkout_records = json.load(open('../third_party/plugins/sources.json'))['plugins']
+              expected_records = [{key: plugin[key] for key in ['name', 'source', 'version', 'sourceSha256']} for plugin in checkout_records]
+              assert full_records == expected_records
+              for plugin in full_records:
+                  assert source_digest(plugin['source']) == plugin['sourceSha256'], plugin['name']
 
           for archive_name in sorted(expected_zips):
               target = 'mac-arm64' if 'mac-arm64' in archive_name else 'win-x64'

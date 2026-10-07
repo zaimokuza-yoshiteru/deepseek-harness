@@ -3,10 +3,10 @@ import type { BitbucketRepositoryRef, NamedQuery } from '../shared/config.ts'
 import type { InputTriggerSource } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
 
 type RefValue =
-  | { readonly kind: 'jira'; readonly key: string }
+  | { readonly kind: 'jira'; readonly key: string; readonly label?: string }
   | { readonly kind: 'repo'; readonly repositoryId: string; readonly label: string; readonly cloneUrl: string }
-  | { readonly kind: 'pr'; readonly repositoryId: string; readonly projectKey: string; readonly repositorySlug: string; readonly id: number }
-  | { readonly kind: 'confluence'; readonly id: string }
+  | { readonly kind: 'pr'; readonly repositoryId: string; readonly projectKey: string; readonly repositorySlug: string; readonly id: number; readonly label?: string }
+  | { readonly kind: 'confluence'; readonly id: string; readonly label?: string }
 type ScopeValue = { readonly kind: 'scope'; readonly product: 'jira' | 'repo' | 'pr' | 'confluence'; readonly id?: string }
 
 /** The shared @ menu starts locally with four scopes; network reads wait for one explicit configured scope. */
@@ -65,20 +65,22 @@ export function createAtlassianReferenceSource(remote: AtlassianKanbanRemote, t:
       if (value.kind === 'scope') {
         return { text: value.id === undefined ? `@${value.product}:` : `@${value.product}:${value.id}:`, continue: true }
       }
+      value = { ...value, label: candidate.name }
+      const ref = JSON.stringify(value)
       return {
         insert: {
-          source: 'atlassian', ref: JSON.stringify(value), label: candidate.name, clipboardText: source.codec!.clipboardText(JSON.stringify(value)),
+          source: 'atlassian', ref, label: candidate.name, clipboardText: source.codec!.clipboardText(ref),
         },
       }
     },
     codec: {
       clipboardText: ref => {
         const parsed = parseRef(ref)
-        return parsed === null ? ref : locator(parsed)
+        return parsed === null ? ref : referenceWire(parsed)
       },
       async serialize(ref) {
         const parsed = parseRef(ref)
-        return parsed === null ? ref : locator(parsed)
+        return parsed === null ? ref : referenceWire(parsed)
       },
     },
   }
@@ -168,7 +170,24 @@ function sectionForProduct(product: ScopeValue['product'], t: (key: string) => s
   }
 }
 function parseRef(ref: string): RefValue | null {
-  try { const parsed = JSON.parse(ref) as RefValue; return ['jira', 'repo', 'pr', 'confluence'].includes(parsed.kind) ? parsed : null } catch { return null }
+  try {
+    const parsed: unknown = JSON.parse(ref)
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null
+    const value = parsed as Record<string, unknown>
+    if (value.label !== undefined && typeof value.label !== 'string') return null
+    switch (value.kind) {
+      case 'jira': return typeof value.key === 'string' && value.key !== '' ? value as RefValue : null
+      case 'repo': return typeof value.repositoryId === 'string' && value.repositoryId !== ''
+        && typeof value.label === 'string' && value.label !== ''
+        && typeof value.cloneUrl === 'string' && value.cloneUrl !== '' ? value as RefValue : null
+      case 'pr': return typeof value.repositoryId === 'string' && value.repositoryId !== ''
+        && typeof value.projectKey === 'string' && value.projectKey !== ''
+        && typeof value.repositorySlug === 'string' && value.repositorySlug !== ''
+        && Number.isSafeInteger(value.id) && (value.id as number) > 0 ? value as RefValue : null
+      case 'confluence': return typeof value.id === 'string' && value.id !== '' ? value as RefValue : null
+      default: return null
+    }
+  } catch { return null }
 }
 function locator(value: RefValue): string {
   switch (value.kind) {
@@ -176,6 +195,19 @@ function locator(value: RefValue): string {
     case 'repo': return `Bitbucket repository ${value.label} (clone URL: ${value.cloneUrl})`
     case 'pr': return `Bitbucket pull request ${value.projectKey}/${value.repositorySlug}#${value.id}`
     case 'confluence': return `Confluence content ID ${value.id}`
+  }
+}
+function referenceWire(value: RefValue): string {
+  const label = value.label || defaultLabel(value)
+  const payload = JSON.stringify({ source: 'atlassian', label, text: locator(value) }).replace(/</gu, '\\u003c')
+  return `<dsh-reference>${payload}</dsh-reference>`
+}
+function defaultLabel(value: RefValue): string {
+  switch (value.kind) {
+    case 'jira': return value.key
+    case 'repo': return value.label
+    case 'pr': return `#${value.id}`
+    case 'confluence': return value.id
   }
 }
 function string(value: unknown): string { return typeof value === 'string' || typeof value === 'number' ? String(value) : '' }

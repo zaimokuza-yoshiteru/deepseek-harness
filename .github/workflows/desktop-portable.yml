@@ -8,6 +8,14 @@ on:
       version:
         description: Optional desktop build version (defaults to delivery.json)
         required: false
+      build_macos:
+        description: Also build macOS in CI instead of using a locally verified package
+        type: boolean
+        default: false
+      build_source:
+        description: Also package the source archive in CI instead of packaging it locally
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -21,19 +29,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - target: mac-arm64
-            runner: macos-15
-            shell: bash
-            script: package:portable:mac:arm64
-          - target: win-x64
-            runner: windows-2025
-            shell: pwsh
-            script: package:portable:win:x64
-    runs-on: ${{ matrix.runner }}
+        target: ${{ inputs.build_macos && fromJSON('["win-x64", "mac-arm64"]') || fromJSON('["win-x64"]') }}
+    runs-on: ${{ matrix.target == 'win-x64' && 'windows-2025' || 'macos-15' }}
     defaults:
       run:
-        shell: ${{ matrix.shell }}
+        shell: ${{ matrix.target == 'win-x64' && 'pwsh' || 'bash' }}
     env:
       DSH_TELEMETRY_MODE: DISABLED
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
@@ -87,6 +87,7 @@ jobs:
           if-no-files-found: warn
 
   source:
+    if: github.event_name == 'workflow_dispatch' && inputs.build_source
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
@@ -110,7 +111,7 @@ jobs:
       - uses: pnpm/action-setup@v4
       - name: Install source build tools
         run: pnpm install --frozen-lockfile
-      - name: Package complete source
+      - name: Package minimal buildable source
         run: node scripts/package-source.mjs
       - uses: actions/upload-artifact@v4
         with:

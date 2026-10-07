@@ -57,7 +57,7 @@ export type ActivityLabel = (kind: ActionKind) => string;
 export type ViewMode = 'team' | 'pixel';
 export interface SceneActivities { reset: boolean; label: ActivityLabel; tools: ToolActivity; tasks: OfficeTask[] }
 export interface OfficeScene {
-  update(members: OfficeMember[], label: StatusLabel, selected: string | null): void;
+  update(members: OfficeMember[], label: StatusLabel, selected: string | null, canvasLabel: string): void;
   activities(events: OfficeActivity[], options: SceneActivities): void;
   setActive(active: boolean): void;
   fit(): void;

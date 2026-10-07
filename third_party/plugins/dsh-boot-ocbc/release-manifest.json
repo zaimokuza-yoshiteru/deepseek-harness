@@ -127,7 +127,7 @@
     "lib/boot.js": "2cc46be6d899b8a70fc1c28e4504f3d8d623c719571b8ae5dd400b253e418c32",
     "lib/client.js": "a05eefcce71ae11da5d4d0a50d75845445f16c66ed10a2ead8640c00c78617af",
     "lib/index.js": "06e959069ec9422e86784aa3ad9a84dc79110ce04e06107cfac7ff8e32fca79f",
-    "lib/renderer.js": "2d4c20e555f22e103ad7e49bb523de97d7fe8a604518a41d5ca8c484ecef519b",
+    "lib/renderer.js": "38d51e2b7e83809d0c51d078c060220d42d7439c00c41b40476fd5baf5448642",
     "lib/source-files.mjs": "ed024033f7be3476740b5c474c362c60fd2e77fb2dc9284965ab2aa3d1db5537",
     "lib/verify-package.mjs": "14ea3d9494c4d2ac28cfb0012b1f558eb50adb9f570ac52af5db2c63a7f0ae97",
     "package.json": "e1f17e8d9bcda1f9e2ae82d1befa465ac752ff1b6543ad3cde1b48901484b289"
@@ -151,7 +151,7 @@
     "src/local-motion.ts": "342b0be13c1729f925edc00c00572cd5d8781e22279eb1b5b9662c056028ae00",
     "src/ocbc-logo-06.ts": "8e8db6d5b820aab8c0f1211a8b4a11ada847a055d0565e9c7f3ce7d7d6af663d",
     "src/panel.ts": "fe1535146c599802fcf5194354360d4cd57018343b9c8450ad3609ac719f232d",
-    "src/renderer.ts": "fdea05c4ccf9c8483eb6473aebbf2b030ca16d69e7611d32a7530c8906a24626",
+    "src/renderer.ts": "3f74cd1322b86a43c9a393c7720e36e518eb23c136d9e818471e94a7ca96399e",
     "tsconfig.json": "93aec8e43ea37b27c4ea1ac8994a2bacfda8807a6bd442e0310b29328a918e0b"
   }
 }

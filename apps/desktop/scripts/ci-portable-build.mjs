@@ -56,6 +56,11 @@ if (archives.length !== 1 || archives[0] !== archive) throw new Error('Expected 
 // Exercise the recipient's complete ZIP at an independent extraction path. The native Windows
 // Office engine still fails from the deep CI build directory; see the portable guide's path limitation.
 run(['exec', 'tsx', 'apps/desktop/scripts/smoke-portable.ts', target, join(directory, archive)])
+// The portable smoke verifies these built client bytes in the ZIP. Exercise the
+// same CSS through the real Chat composition; DOM/source checks cannot prove a
+// decoded animation is visible on the recipient's platform.
+run(['--dir', 'apps/web', 'exec', 'playwright', 'install', 'chromium'])
+run(['exec', 'vitest', 'run', '--config', 'vitest.web.config.ts', 'apps/web/tests/reasoning-preview.e2e.ts'])
 const hash = createHash('sha256')
 for await (const bytes of createReadStream(join(directory, archive))) hash.update(bytes)
 const sha256 = hash.digest('hex')

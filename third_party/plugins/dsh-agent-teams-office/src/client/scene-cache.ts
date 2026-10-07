@@ -1,7 +1,7 @@
 import { asError, type OfficeScene, type SceneFactory, type OfficeSnapshot, type OfficeActivity, type StatusLabel, type ActivityLabel, type ViewMode, type Cursor } from '../types.ts';
 export interface OfficeState { snapshot: OfficeSnapshot | null; selected: string | null; focused: string | null; sceneError: Error | null; ready: boolean; view: ViewMode }
 export interface SceneMount { visible(value: boolean): void; detach(): void }
-export interface OfficeRecord { key: string; subscribe(listener: () => void): () => void; getSnapshot(): OfficeState; select(id: string | null): void; cursor(): Cursor | null; snapshot(value: OfficeSnapshot): void; update(members: OfficeSnapshot['members'], labels: StatusLabel, activityLabel: ActivityLabel): void; setView(view: ViewMode): void; fit(): void; focus(id: string): void; mount(element: HTMLElement, signal: AbortSignal): SceneMount; retry(): void; dispose(): void }
+export interface OfficeRecord { key: string; subscribe(listener: () => void): () => void; getSnapshot(): OfficeState; select(id: string | null): void; cursor(): Cursor | null; snapshot(value: OfficeSnapshot): void; update(members: OfficeSnapshot['members'], labels: StatusLabel, activityLabel: ActivityLabel, canvasLabel: string): void; setView(view: ViewMode): void; fit(): void; focus(id: string): void; mount(element: HTMLElement, signal: AbortSignal): SceneMount; retry(): void; dispose(): void }
 import { createActivityInbox } from './activities.ts';
 /** Keep each office's canvas and UI state alive for its native sidebar tab lifetime. */
 export function createSceneCache(createScene: SceneFactory, createHost = () => document.createElement('div')) {
@@ -39,8 +39,8 @@ export function createSceneCache(createScene: SceneFactory, createHost = () => d
         activities.push(...fresh); activities = activities.slice(-64);
         publish({ snapshot: value });
       },
-      update(members, labels, activityLabel) {
-        scene?.update(members, labels, state.selected);
+      update(members, labels, activityLabel, canvasLabel) {
+        scene?.update(members, labels, state.selected, canvasLabel);
         if (scene) {
           scene.activities?.(activities, { reset: resetActivities, label: activityLabel, tools: state.snapshot?.tools ?? {}, tasks: state.snapshot?.tasks ?? [] });
           activities = []; resetActivities = false;

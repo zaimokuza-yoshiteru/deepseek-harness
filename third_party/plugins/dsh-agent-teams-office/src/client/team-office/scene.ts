@@ -134,7 +134,7 @@ export async function createTeamOfficeScene(element: HTMLElement, onSelect: (id:
     renderer.setClearColor('#e9e5dc'); renderer.outputColorSpace=THREE.SRGBColorSpace;
     renderer.toneMapping=THREE.ACESFilmicToneMapping; renderer.toneMappingExposure=1.1;
     renderer.shadowMap.enabled=true; renderer.shadowMap.type=THREE.VSMShadowMap;
-    const canvas=renderer.domElement; canvas.className='office-3d-canvas'; canvas.tabIndex=0; canvas.setAttribute('aria-label','DSH team office · 16 teammates + Lead');
+    const canvas=renderer.domElement; canvas.className='office-3d-canvas'; canvas.tabIndex=0;
     listen(canvas, 'pointerdown', down); listen(canvas, 'pointerup', up); listen(canvas, 'pointermove', move);
     listen(canvas, 'keydown', key);
     canvas.addEventListener('webglcontextlost', lost);
@@ -181,7 +181,8 @@ export async function createTeamOfficeScene(element: HTMLElement, onSelect: (id:
         const index=seats.get(id); if(index===undefined) return false;
         following=id; follow.start(model.characters[index].avatar.position); return true;
       },
-      update(values,statusLabel,id) {
+      update(values,statusLabel,id,canvasLabel) {
+        canvas.setAttribute('aria-label',canvasLabel);
         const next=assignTeamSeats(seats,values);
         // Reset only newly occupied seats; polling/reordering retains motion and identity.
         for(const [memberId,index] of next) if(seats.get(memberId)!==index) motions[index]=createTeamMotion(index);

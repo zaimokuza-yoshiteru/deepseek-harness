@@ -434,14 +434,37 @@ describe('QueueDock', () => {
     expect(view.queryByText('three')).toBeNull()
   })
 
-  it('flattens and caps previews at 200 code points while preserving complete editable text', () => {
-    const text = `  before   ${'🙂'.repeat(201)}  after`
+  it('projects long reference wires before preview clipping and preserves the locator while editing', async () => {
+    const label = `工程/仓库${'名'.repeat(30)}`
+    const locator = 'Bitbucket repository ssh://git.example/组织/仓库.git'
+    const wire = `<dsh-reference>${JSON.stringify({ source: 'atlassian', label, text: locator })}</dsh-reference>`
+    const secondLocator = 'Bitbucket repository https://git.example/组织/另一个仓库.git'
+    const secondWire = `<dsh-reference>${JSON.stringify({ source: 'atlassian', label, text: secondLocator })}</dsh-reference>`
+    const text = `  before   ${wire}  same label ${secondWire}  ${'🙂'.repeat(201)}  after`
     const snap = snapshotWith([row('long-preview', text)])
     const source = liveSession(snap)
-    const view = render(<QueueDock {...kitFor(snap)} useSession={source.useSession} useProjection={source.useProjection} />)
-    expect(view.getByText(`before ${'🙂'.repeat(193)}…`)).toBeTruthy()
+    const updateQueue = vi.fn(() => Promise.resolve())
+    const view = render(
+      <QueueDock {...kitFor(snap, { updateQueue })} useSession={source.useSession} useProjection={source.useProjection} />,
+    )
+    const preview = view.container.querySelector('[data-queue-preview]')!
+    expect([...preview.querySelectorAll('[data-ref-chip="reference"]')].map(chip => chip.textContent)).toEqual([`@${label}`, `@${label}`])
+    expect(preview.textContent).not.toContain('<dsh-reference>')
+    expect(preview.textContent).not.toContain('after')
+    expect(Array.from(preview.textContent ?? '').length).toBeLessThanOrEqual(200)
     fireEvent.click(view.getByLabelText('编辑排队消息'))
-    expect((view.getByRole('textbox') as HTMLTextAreaElement).value).toBe(text)
+    const editor = view.getByRole('textbox', { name: '编辑排队消息' })
+    expect(editor.getAttribute('contenteditable')).toBe('true')
+    expect(editor.querySelectorAll('[data-composer-chip="queued-wire"]')).toHaveLength(2)
+    expect([...editor.querySelectorAll('[data-composer-chip="queued-wire"]')].every(chip => chip.textContent?.includes(label))).toBe(true)
+    expect(editor.textContent).not.toContain('<dsh-reference>')
+    fireEvent.click(view.getByLabelText('保存排队消息'))
+    await waitFor(() => {
+      expect(updateQueue).toHaveBeenCalledWith(iid('long-preview'), {
+        kind: 'edit',
+        content: [{ type: 'text', text }],
+      })
+    })
   })
 
   it('keeps line breaks while re-editing a multiline queued message', async () => {

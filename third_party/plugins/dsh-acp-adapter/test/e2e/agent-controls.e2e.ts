@@ -9,7 +9,9 @@ import { connectFreshWorkspace, writeComposerDraft } from '#host-support'
 import { launchAdapterWorld, root } from './scaffold.ts'
 
 // These use the real host and plugin UI. Only the ACP peer is deterministic/keyless.
-describe.each(['kimi', 'devin', 'codex', 'claude'])('Agent controls: %s', (profile) => {
+const profiles = ['kimi', 'devin', 'codex', 'claude', 'codebuddy'] as const
+
+describe.each(profiles)('Agent controls: %s', (profile) => {
   it.each(['response', 'deferred'])(
     'shows %s options during the first turn, follows changes and unlocks on stop',
     async (delivery) => {
@@ -28,6 +30,7 @@ describe.each(['kimi', 'devin', 'codex', 'claude'])('Agent controls: %s', (profi
               name: `Fixture ${profile}`,
               command: process.execPath,
               args: [join(root, 'test/mock-agent/mock-agent.ts')],
+              runtime: profile,
               env: {
                 HOME: host.workspaceCwd,
                 MOCK_SCENARIO: 'regression',
@@ -245,6 +248,14 @@ describe.each(['kimi', 'devin', 'codex', 'claude'])('Agent controls: %s', (profi
         // layout update. Wait for native idle UI before clicking the menu anchor.
         await stop.waitFor({ state: 'hidden' })
         await page.getByRole('button', { name: 'Send message', exact: true }).waitFor()
+        if (profile === 'codebuddy') {
+          // CodeBuddy retires its process after a confirmed cancellation. A
+          // renderer reload must still show the same-session controls, and an
+          // explicit mode change must reconnect that binding without a prompt.
+          await page.reload()
+          await controls().waitFor()
+          await expect.poll(() => controls().innerText()).toMatch(/plan/i)
+        }
         phase = 'stopped options'
         await openControls()
         await expect.poll(() => ask.isDisabled()).toBe(false)

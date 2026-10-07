@@ -23,13 +23,14 @@ it('adds catalog presets, preserves edited defaults, and runs a generic Agent th
     const addButton = detail.getByRole('button', { name: 'Add agent', exact: true })
     await addButton.click()
     const menu = page.getByRole('menu')
-    await menu.getByText('Verified adapters · 4', { exact: true }).waitFor()
+    await menu.getByText('Verified adapters · 5', { exact: true }).waitFor()
     await menu.getByText(/^Catalog entries · Unverified ·/).waitFor()
     expect(await detail.getByRole('textbox').count()).toBe(0)
     expect(await menu.getByRole('textbox').count()).toBe(0)
     const items = await menu.getByRole('menuitem').allTextContents()
-    expect(items.slice(0, 4).map((text) => text.split(' · ')[0])).toEqual([
+    expect(items.slice(0, 5).map((text) => text.split(' · ')[0])).toEqual([
       'Devin',
+      'Codebuddy Code',
       'Codex',
       'Kimi CLI',
       'Claude Agent',
@@ -157,7 +158,7 @@ it('adds catalog presets, preserves edited defaults, and runs a generic Agent th
     await detail.getByLabel('Arguments', { exact: true }).fill(join(root, 'test/mock-agent/mock-agent.ts'))
     await detail.getByLabel('Environment', { exact: true }).fill('FAST_AGENT_MODEL=my-choice\nMOCK_SCENARIO=regression')
     await detail.getByRole('button', { name: 'Save', exact: true }).click()
-    await detail.getByText('Saved.', { exact: true }).waitFor()
+    await page.getByRole('alert').filter({ hasText: 'Saved' }).waitFor()
     const saved = (
       host.ctx.settings.describe().find((row) => row.ns === 'dsh-acp-adapter')?.value as {
         agents: Record<string, AcpAgentConfig>
@@ -183,7 +184,7 @@ it('adds catalog presets, preserves edited defaults, and runs a generic Agent th
     await page.getByRole('button', { name: '关闭', exact: true }).click()
     detail = await openAcpPluginDetail(page, 'zh')
     await detail.getByRole('button', { name: '添加 agent', exact: true }).click()
-    await page.getByRole('menu').getByText('已验证适配 · 4', { exact: true }).waitFor()
+    await page.getByRole('menu').getByText('已验证适配 · 5', { exact: true }).waitFor()
     await page
       .getByRole('menu')
       .getByText(/^目录收录 · 未验证 ·/)
@@ -222,6 +223,14 @@ it('adds catalog presets, preserves edited defaults, and runs a generic Agent th
           .findLast((event) => event.type === 'turn/end'),
       ).data.reason.kind,
     ).toBe('completed')
+    detail = await openAcpPluginDetail(page)
+    const profile = page.locator('[data-dsh-acp-agent="my-fast"]')
+    await profile.getByRole('button', { name: 'Delete', exact: true }).first().click()
+    await profile.getByText(/^Delete agent ".+"\? Its model route is removed with it\.$/).waitFor()
+    await profile.getByRole('button', { name: 'Delete', exact: true }).last().click()
+    await page.getByRole('alert').filter({ hasText: 'Deleted' }).waitFor()
+    await backToPluginList(detail)
+    await page.getByRole('alert').filter({ hasText: 'Deleted' }).waitFor()
     expect(errors).toEqual([])
   } finally {
     await browser?.close()

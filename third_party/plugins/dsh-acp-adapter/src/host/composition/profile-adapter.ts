@@ -2,13 +2,14 @@
 /// <reference types="node" />
 
 import { activityPresentation, type AcpActivityPresentation } from '../../domain/policy/activity-presentation.ts'
-import { modeIntentBindingKey } from '../../persistence/sidecar.ts'
+import { ACP_ACTIVITY_RAW_MAX, modeIntentBindingKey } from '../../persistence/sidecar.ts'
 import { teamModeChoices } from '../../contract/session-modes.ts'
 import { projectNativeAgentAccess } from './native-agent-access.ts'
 
 import fs from 'node:fs'
 import path from 'node:path'
 import type * as acp from '@agentclientprotocol/sdk'
+import type { Context } from '@deepseek-ai/cordis'
 import { admitEncodedImages } from '@deepseek-ai/dsh-attachment'
 import type { AttachmentStore, ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import { LlmAdapter, LlmError } from '@deepseek-ai/dsh-llm'
@@ -26,7 +27,11 @@ import { AcpStubAdapter, reasoningInfoFromConfigOptions } from './llm-stub.ts'
 import type { AcpProbeCacheEntry } from './llm-stub.ts'
 import type { AcpStubAgentConfig } from '../../domain/session/agent-config.ts'
 import type { SubprocessSeamResolution } from '../../runtime/process/subprocess.ts'
-import { AcpSessionRuntime } from '../../runtime/session/session-runtime.ts'
+import {
+  AcpSessionRefreshAbortedError,
+  AcpSessionRefreshRetryError,
+  AcpSessionRuntime,
+} from '../../runtime/session/session-runtime.ts'
 import type { AcpRuntimeContextUsage } from '../../runtime/session/session-runtime.ts'
 import {
   acpLaunchEnvironment,
@@ -45,7 +50,11 @@ import { admitCurrentStep } from '../../domain/session/current-step-admission.ts
 import { AcpAdmissionError } from '../../domain/session/current-step-admission.ts'
 import type { CurrentStepProof, SessionLike } from '../../domain/session/current-step-admission.ts'
 import { ExternalDelegationNormalizer } from '../../domain/subagent/external-delegation.ts'
-import type { ExternalDelegationObservation } from '../../domain/subagent/external-delegation.ts'
+import {
+  EXTERNAL_DELEGATION_PENDING_LIMIT,
+  type ExternalDelegationLiveFact,
+  type ExternalDelegationObservation,
+} from '../../domain/subagent/external-delegation.ts'
 import { acpCanonicalHash16 } from '../../persistence/sidecar.ts'
 import { acpOptionsSnapshotOf } from '../../persistence/options-snapshot.ts'
 import type {
@@ -70,12 +79,76 @@ import { createAcpNativeElicitationHandler } from '../../domain/policy/elicitati
 import type { AcpNativeUserQuestionService } from '../../domain/policy/elicitation.ts'
 import { isAcpModelOrReasoningOption, normalizeAcpConfigOptionKey } from '../../contract/config-options.ts'
 import { AcpClientError } from '../../protocol/v1/errors.ts'
+import {
+  assertHostExecutionQuiescent,
+  clearHostExecutionOwners,
+  clearSharedRecoveryFallback,
+  getSharedRecoveryFallback,
+  retainHostExecutionOwner,
+  setSharedRecoveryFallback,
+} from './host-execution-owners.ts'
+import { AcpHostSettlementError } from '../../runtime/session/mcp-lease.ts'
 import { AcpSteeringRequestError } from '../../protocol/v1/connection.ts'
 import type { AcpSessionNotification } from '../../protocol/v1/types.ts'
 import { nonTextContentFallback } from '../../domain/session/assistant-content.ts'
 import type { AcpNonTextContent } from '../../domain/session/assistant-content.ts'
 import { AcpToolCallReducer } from './tool-call-reducer.ts'
 import type { AcpToolCallPatch, AcpToolCallSnapshot } from './tool-call-reducer.ts'
+import {
+  AcpLocalSettlementError,
+  localSettlementStatus as readLocalSettlementStatus,
+  observeLocalSettlement,
+  registerLocalSettlementSink,
+  settleLocally,
+  settlePendingLocally,
+  waitForLocalSettlement,
+} from './local-settlement.ts'
+import type { AcpLocalSettlementStatus } from './local-settlement.ts'
+
+function abortReason(signal: AbortSignal): unknown {
+  return signal.reason ?? new DOMException('Aborted', 'AbortError')
+}
+
+async function awaitWithSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  let onAbort: (() => void) | undefined
+  const aborted = new Promise<never>((_, reject) => {
+    onAbort = () => reject(abortReason(signal))
+    signal.addEventListener('abort', onAbort, { once: true })
+    if (signal.aborted) onAbort()
+  })
+  try {
+    return await Promise.race([promise, aborted])
+  } finally {
+    if (onAbort !== undefined) signal.removeEventListener('abort', onAbort)
+  }
+}
+
+export type AcpLocalSettlementViewStatus = AcpLocalSettlementStatus | 'finishing-tools'
+
+interface BindingSettlementTarget {
+  readonly profileId: string
+  readonly agentSessionId: string
+  readonly generation: number
+  readonly bindingEpoch: number
+  readonly basePromptOrdinal: number
+  readonly targetPromptOrdinal: number
+  readonly baseDshCommittedSeq: number
+}
+
+interface BindingSettlementCommit extends BindingSettlementTarget {
+  readonly dshCommittedSeq: number
+}
+
+interface AcpLocalSettlementSink {
+  settleDispatch(sessionId: string, key: string): Promise<void>
+  readDispatch(sessionId: string, key: string): ReturnType<DispatchLedger['read']>
+  writeRuntimeSnapshot(sessionId: string, snapshot: ReturnType<typeof acpOptionsSnapshotOf>): Promise<void>
+  refreshBindingHead(
+    sessionId: string,
+    session: SessionLike | undefined,
+    target: BindingSettlementCommit,
+  ): Promise<AcpBindingData | undefined>
+}
 
 type AcpAttachmentStore = Pick<AttachmentStore, 'readImage' | 'imageLimits'> &
   Partial<Pick<AttachmentStore, 'saveImages'>>
@@ -251,11 +324,12 @@ function activityStatus(value: unknown, fallback: AcpActivityStatus = 'running')
   if (value === 'completed') return 'completed'
   if (value === 'failed') return 'failed'
   if (value === 'cancelled') return 'cancelled'
+  if (value === 'unfinished') return 'unfinished'
   return fallback
 }
 
 function isTerminalActivityStatus(value: AcpActivityStatus): boolean {
-  return value === 'completed' || value === 'failed' || value === 'cancelled'
+  return value === 'completed' || value === 'failed' || value === 'cancelled' || value === 'unfinished'
 }
 
 interface NormalizedActivity {
@@ -315,6 +389,7 @@ function activitiesForNotification(
   notification: AcpSessionNotification,
   fallbackId: string,
   toolCall?: AcpToolCallSnapshot,
+  externalDelegations: readonly ExternalDelegationLiveFact[] = [],
 ): readonly NormalizedActivity[] {
   const update = notification.update as unknown as Record<string, unknown>
   const type = update.sessionUpdate
@@ -339,19 +414,22 @@ function activitiesForNotification(
         kind: 'tool',
         status,
         presentation: title,
-        rawDetail: activityRawDetail({
-          toolKind: detail.kind,
-          toolName: detail.name,
-          rawInput: detail.rawInput,
-          rawOutput: detail.rawOutput,
-          locations: detail.locations,
-          content: detail.content,
-        }),
+        rawDetail: toolActivityRawDetail(
+          {
+            toolKind: detail.kind,
+            toolName: detail.name,
+            rawInput: detail.rawInput,
+            rawOutput: detail.rawOutput,
+            locations: detail.locations,
+            content: detail.content,
+          },
+          externalDelegations,
+        ),
       },
     ]
     if (Array.isArray(detail.content)) {
       for (const [index, content] of detail.content.entries()) {
-        const normalized = normalizeActivityContent(`tool:${toolId}:${String(index)}`, content, status)
+        const normalized = normalizeActivityContent(`part:${toolId}:${String(index)}`, content, status)
         if (normalized !== undefined) result.push(normalized)
       }
     }
@@ -440,6 +518,81 @@ function activitiesForNotification(
   ]
 }
 
+function withExternalDelegations(
+  activity: NormalizedActivity,
+  delegations: readonly ExternalDelegationLiveFact[],
+): NormalizedActivity {
+  if (activity.kind !== 'tool' || delegations.length === 0) return activity
+  let detail: unknown = activity.rawDetail
+  try {
+    detail = JSON.parse(activity.rawDetail ?? 'null') as unknown
+  } catch {
+    /* Preserve the existing detail as a value if it was not valid JSON. */
+  }
+  const detailRecord = isPlainRecord(detail) ? detail : { toolDetail: detail }
+  return {
+    ...activity,
+    rawDetail: toolActivityRawDetail(detailRecord, delegations),
+  }
+}
+
+function toolActivityRawDetail(
+  detail: Record<string, unknown>,
+  delegations: readonly ExternalDelegationLiveFact[],
+): string {
+  if (delegations.length === 0) return activityRawDetail(detail)
+  const externalDelegationDetails = compactExternalDelegationDetails(delegations)
+  const rawDetail = activityRawDetail({ ...detail, externalDelegations: externalDelegationDetails })
+  if (rawDetail.length <= ACP_ACTIVITY_RAW_MAX) return rawDetail
+  const compact = (labelLimit: number, toolNameLimit: number, toolKindLimit: number): string =>
+    activityRawDetail({
+      ...(typeof detail.toolKind === 'string'
+        ? { toolKind: boundedExternalPreview(detail.toolKind, toolKindLimit) }
+        : {}),
+      ...(typeof detail.toolName === 'string'
+        ? { toolName: boundedExternalPreview(detail.toolName, toolNameLimit) }
+        : {}),
+      externalDelegations: compactExternalDelegationDetails(delegations, labelLimit),
+      detailsOmitted: true,
+    })
+  for (const [labelLimit, toolNameLimit, toolKindLimit] of [
+    [24, 96, 32],
+    [8, 32, 16],
+  ] as const) {
+    const fallback = compact(labelLimit, toolNameLimit, toolKindLimit)
+    if (fallback.length <= ACP_ACTIVITY_RAW_MAX) return fallback
+  }
+  // All bounded Agent-controlled strings can be omitted if escaping still made
+  // the verbose fallback unexpectedly large; every child status remains.
+  return activityRawDetail({
+    externalDelegations: compactExternalDelegationDetails(delegations, 0),
+    detailsOmitted: true,
+  })
+}
+
+/** The row owns the exact source tool id, so its persisted child facts need only
+ * the small fields the read-only presentation consumes. Keep Agent labels as
+ * verbatim metadata until this display boundary, then cap them for both the
+ * 16 KiB activity envelope and the native tool name. */
+function compactExternalDelegationDetails(
+  delegations: readonly ExternalDelegationLiveFact[],
+  labelLimit = 96,
+): readonly { readonly label: string; readonly status: ExternalDelegationLiveFact['status'] }[] {
+  return delegations.map(({ label, status }) => ({
+    label: boundedExternalPreview(label, labelLimit),
+    status,
+  }))
+}
+
+function boundedExternalPreview(value: string, maxCodePoints: number): string {
+  const safe = redactSecretText(value).replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ')
+  return Array.from(safe, (point) =>
+    point.length === 1 && point.charCodeAt(0) >= 0xd800 && point.charCodeAt(0) <= 0xdfff ? '�' : point,
+  )
+    .slice(0, maxCodePoints)
+    .join('')
+}
+
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -484,6 +637,8 @@ export interface AcpProfileRuntime {
     signal?: AbortSignal,
     onReplay?: (notification: AcpSessionNotification) => void,
   ): Promise<'reused' | 'resumed' | 'loaded'>
+  /** Retire a cancelled vendor process after its response and local settlement complete. */
+  retireCancelledSession?(): Promise<void>
   readonly acpSessionId?: string | undefined
   readonly agentInfo?: acp.Implementation | null | undefined
   readonly agentCapabilities?: acp.AgentCapabilities | undefined
@@ -493,7 +648,16 @@ export interface AcpProfileRuntime {
   readonly currentModeId?: string | undefined
   readonly modes?: acp.SessionModeState | undefined
   readonly contextUsage?: AcpRuntimeContextUsage | undefined
+  readonly lastRestoreRefreshedCancelledSession?: boolean | undefined
+  readonly cancelledSessionRefreshPending?: boolean | undefined
+  readonly cancelledSessionRefreshBindingId?: string | undefined
   readonly isBusy?: boolean
+  hasPendingHostCalls?(): boolean
+  hasUncommittedHostFeedback?(): boolean
+  hasRetainedHostFeedback?(): boolean
+  waitForHostCallsSettled?(): Promise<void>
+  readonly hostSettlementPending?: boolean
+  flushHostFeedback?(): Promise<void>
   readonly canSteer?: boolean
   /**
    * Implementations that send steering must call `onDispatch` immediately
@@ -510,6 +674,8 @@ export interface AcpProfileRuntime {
     onUpdate: (notification: AcpSessionNotification) => void,
     signal?: AbortSignal,
     onTeamReport?: () => void,
+    onTurnConcluded?: () => void,
+    onSuccessfulToolResult?: () => void,
   ): Promise<acp.PromptResponse>
   close(): Promise<void>
 }
@@ -522,6 +688,19 @@ export interface AcpNativeQuestionBinding {
   readonly locale?: string
 }
 
+interface UserModeChoice {
+  readonly kind: 'legacy' | 'config'
+  readonly id: string
+  readonly value?: string | boolean
+}
+
+interface ConfirmedUserModeSelection extends UserModeChoice {
+  readonly bindingKey: string
+  readonly agentSessionId: string
+  readonly owner: object
+  readonly needsRestore: boolean
+}
+
 /** One independent adapter and runtime per configured ACP profile. */
 export class AcpProfileAdapter extends LlmAdapter {
   private probeGeneration: ProfileGeneration | undefined
@@ -530,10 +709,21 @@ export class AcpProfileAdapter extends LlmAdapter {
   private readonly nextGenerations = new Map<string, number>()
   private readonly admittedToolSchemas = new Map<string, readonly ToolSchema[] | undefined>()
   private readonly admittedToolSchemaOwners = new Map<string, object>()
+  /** Explicit user choices survive a same-process CodeBuddy cancel/reload only. */
+  private readonly confirmedUserModes = new Map<string, ConfirmedUserModeSelection>()
   private claudeDraftDegradationReported = false
   private readonly ledger: DispatchLedger
+  private readonly settlementSink: AcpLocalSettlementSink
+  private settlementOwnerDisposer: (() => Promise<void>) | undefined
+  private readonly settlementCloseController = new AbortController()
+  private readonly settlementSessionWaitControllers = new Map<
+    string,
+    Set<{ readonly owner: object | undefined; readonly controller: AbortController }>
+  >()
   private readonly handoffs = new Map<string, HandoffOwner>()
   private readonly inMemoryRecoveryRequired = new Map<string, number>()
+  private readonly inMemoryRecoveryStates = new Map<string, AcpRecoveryState>()
+  private readonly sessionControlWrites = new Map<string, Promise<void>>()
 
   constructor(
     readonly profileId: string,
@@ -570,9 +760,17 @@ export class AcpProfileAdapter extends LlmAdapter {
     ) => Promise<import('../../runtime/session/mcp-lease.ts').AcpMcpLease | undefined>,
     private readonly mcpKey?: (sessionId: string, schemas?: readonly ToolSchema[]) => unknown,
     private readonly controlsChanged?: (sessionId: string) => void,
+    private readonly hostRoot?: Context,
   ) {
     super()
     this.ledger = new DispatchLedger(ledgerStore)
+    this.settlementSink = this.localSettlementSink()
+    this.settlementOwnerDisposer = registerLocalSettlementSink(
+      this.hostRoot ?? this,
+      this.profileId,
+      this,
+      this.settlementSink,
+    )
     this.probeGeneration = this.generationOfSnapshot(snapshotProfile(readConfig()))
   }
 
@@ -684,6 +882,11 @@ export class AcpProfileAdapter extends LlmAdapter {
 
   /** Narrow session-scoped control/read surface for the additive Agent dock. */
   async agentSessionSnapshot(sessionId: string): Promise<AgentSessionSnapshotView> {
+    await this.waitForSessionControlWrite(sessionId)
+    return await this.readAgentSessionSnapshotView(sessionId)
+  }
+
+  private async readAgentSessionSnapshotView(sessionId: string): Promise<AgentSessionSnapshotView> {
     const snapshot = await this.readAgentSessionSnapshot(sessionId)
     const binding = await this.sidecar?.readLatestBinding(sessionId as never)
     const intent = await this.sidecar?.readModeIntent(sessionId as never)
@@ -712,6 +915,10 @@ export class AcpProfileAdapter extends LlmAdapter {
 
   /** In-memory fail-closed fallback exposed through the existing recovery snapshot seam. */
   recoveryStateFallback(sessionId: string): AcpRecoveryState | undefined {
+    const shared = this.hostRoot === undefined ? undefined : getSharedRecoveryFallback(this.hostRoot, sessionId)
+    if (shared !== undefined) return shared
+    const retained = this.inMemoryRecoveryStates.get(sessionId)
+    if (retained !== undefined) return retained
     const updatedAt = this.inMemoryRecoveryRequired.get(sessionId)
     if (updatedAt === undefined) return undefined
     return {
@@ -723,27 +930,48 @@ export class AcpProfileAdapter extends LlmAdapter {
     }
   }
 
+  /** Read-only UI state for local writes after a confirmed remote terminal. */
+  localSettlementStatus(sessionId: string): AcpLocalSettlementViewStatus | undefined {
+    const root = this.hostRoot ?? this
+    observeLocalSettlement(root, sessionId, this, () => this.controlsChanged?.(sessionId))
+    const localStatus = readLocalSettlementStatus(root, sessionId)
+    if (localStatus !== undefined) return localStatus
+    const runtime = this.runtimeForSession(sessionId)
+    if (runtime?.hostSettlementPending === true) return 'finishing-tools'
+    return undefined
+  }
+
   /** Mode changes for dormant members are durable settings; they never create a session or send a prompt. */
   async setTeamMemberMode(sessionId: string, modeId: string): Promise<AgentSessionSnapshotView> {
-    const snapshot = await this.agentSessionSnapshot(sessionId)
-    const choice = teamModeChoices(snapshot).find((choice) => choice.id === modeId)
-    if (!snapshot.modeWritable || choice === undefined || this.sidecar === undefined)
+    if (this.sidecar === undefined)
       throw new LlmError('This member mode cannot be changed', 'ACP_SESSION_OPTIONS_READ_ONLY')
-    const binding = await this.sidecar.readLatestBinding(sessionId as never)
-    if (binding?.status !== 'ok')
-      throw new LlmError('The original ACP binding is unavailable', 'ACP_BINDING_UNAVAILABLE')
-    const currentRuntime = this.runtimeForSession(sessionId)
-    if (currentRuntime?.isBusy || (snapshot.freshness === 'stale' && currentRuntime !== undefined))
-      throw new LlmError('Member started running; retry after it settles', 'ACP_SESSION_OPTIONS_READ_ONLY')
-    const intent = { bindingKey: modeIntentBindingKey(binding.binding), modeId }
-    // Save before contacting the Agent: a disconnected write remains visible and is retried before the next prompt.
-    await this.sidecar.writeModeIntent(sessionId as never, intent)
-    try {
-      if (snapshot.freshness === 'live' && currentRuntime && !currentRuntime.isBusy)
-        await this.applyMemberMode(sessionId, currentRuntime)
-    } finally {
-      this.controlsChanged?.(sessionId)
-    }
+    await this.serializeSessionControlWrite(sessionId, async () => {
+      const current = await this.readAgentSessionSnapshotView(sessionId)
+      const currentChoice = teamModeChoices(current).find((candidate) => candidate.id === modeId)
+      if (!current.modeWritable || currentChoice === undefined)
+        throw new LlmError('This member mode cannot be changed', 'ACP_SESSION_OPTIONS_READ_ONLY')
+      if (this.handoffs.has(sessionId))
+        throw new LlmError('Member started running; retry after it settles', 'ACP_SESSION_OPTIONS_READ_ONLY')
+      const binding = await this.sidecar!.readLatestBinding(sessionId as never)
+      if (binding?.status !== 'ok' || binding.binding.provider !== `acp-${this.profileId}`)
+        throw new LlmError('The original ACP binding is unavailable', 'ACP_BINDING_UNAVAILABLE')
+      const currentRuntime = this.runtimeForSession(sessionId)
+      if (currentRuntime?.isBusy || (current.freshness === 'stale' && currentRuntime !== undefined))
+        throw new LlmError('Member started running; retry after it settles', 'ACP_SESSION_OPTIONS_READ_ONLY')
+      const intent = { bindingKey: modeIntentBindingKey(binding.binding), modeId }
+      // Save before contacting the Agent: a disconnected write remains visible and is retried before the next prompt.
+      await this.sidecar!.writeModeIntent(sessionId as never, intent)
+      try {
+        if (current.freshness === 'live' && currentRuntime && !currentRuntime.isBusy) {
+          await this.restoreCancelledRuntimeForControl(sessionId, currentRuntime)
+          if (this.runtimeForSession(sessionId) !== currentRuntime || Boolean(currentRuntime.isBusy))
+            throw new LlmError('Member started running; retry after it settles', 'ACP_SESSION_OPTIONS_READ_ONLY')
+          await this.applyMemberMode(sessionId, currentRuntime)
+        }
+      } finally {
+        this.controlsChanged?.(sessionId)
+      }
+    })
     return await this.agentSessionSnapshot(sessionId)
   }
 
@@ -779,6 +1007,14 @@ export class AcpProfileAdapter extends LlmAdapter {
         throw new LlmError('Agent did not confirm the saved member mode', 'ACP_CONFIG_SYNC_FAILED')
     }
     await this.persistRuntimeSnapshot(sessionId, runtime)
+    this.rememberConfirmedUserMode(
+      sessionId,
+      runtime,
+      choice.write.kind === 'mode'
+        ? { kind: 'legacy', id: choice.write.id }
+        : { kind: 'config', id: choice.write.id, value: choice.write.value },
+      binding.binding,
+    )
     // Consume only the confirmed choice. A later user selection must survive this completion.
     await this.sidecar?.clearModeIntent(sessionId as never, intent)
     this.controlsChanged?.(sessionId)
@@ -795,21 +1031,21 @@ export class AcpProfileAdapter extends LlmAdapter {
     if (snapshot === undefined)
       throw new LlmError('No last-known Agent session controls are available', 'ACP_SESSION_OPTIONS_UNAVAILABLE')
     const configOptions = snapshot.options.map((option) =>
-      option.values === null
+      typeof option.value === 'boolean'
         ? {
             type: 'boolean' as const,
             id: option.id,
             name: option.name,
             ...(option.category === null ? {} : { category: option.category }),
-            currentValue: typeof option.value === 'boolean' ? option.value : false,
+            currentValue: option.value,
           }
         : {
             type: 'select' as const,
             id: option.id,
             name: option.name,
             ...(option.category === null ? {} : { category: option.category }),
-            currentValue: typeof option.value === 'string' ? option.value : '',
-            options: option.values.map((value) => ({
+            currentValue: option.value,
+            options: (option.values ?? []).map((value) => ({
               value,
               name:
                 (normalizeAcpConfigOptionKey(option.id) === 'mode' ||
@@ -844,45 +1080,271 @@ export class AcpProfileAdapter extends LlmAdapter {
   }
 
   async setAgentSessionOption(sessionId: string, request: AgentSessionOptionWrite): Promise<AgentSessionSnapshotView> {
-    const runtime = this.runtimeForSession(sessionId)
-    if (runtime === undefined || runtime.isBusy === true)
-      throw new LlmError('Agent session is not live or is currently running', 'ACP_SESSION_OPTIONS_READ_ONLY')
-    if (request.kind === 'mode') {
-      if (runtime.setMode === undefined)
-        throw new LlmError('This Agent does not expose mode controls', 'ACP_CONFIG_UNSUPPORTED')
-      if (runtime.modes === undefined || !runtime.modes.availableModes.some((mode) => mode.id === request.id))
-        throw new LlmError(`Agent mode "${request.id}" is not available`, 'ACP_CONFIG_UNSUPPORTED')
-      await runtime.setMode(request.id)
-    } else {
-      const option = runtime.configOptions?.find((candidate) => candidate.id === request.id)
-      if (option === undefined || isAcpModelOrReasoningOption(option)) {
-        throw new LlmError('Model and reasoning controls are managed by the DSH model picker', 'ACP_CONFIG_UNSUPPORTED')
+    return await this.serializeSessionControlWrite(sessionId, async () => {
+      const runtime = this.runtimeForSession(sessionId)
+      if (runtime === undefined || runtime.isBusy === true || this.handoffs.has(sessionId))
+        throw new LlmError('Agent session is not live or is currently running', 'ACP_SESSION_OPTIONS_READ_ONLY')
+      await this.restoreCancelledRuntimeForControl(sessionId, runtime)
+      if (this.runtimeForSession(sessionId) !== runtime || Boolean(runtime.isBusy))
+        throw new LlmError(
+          'Agent session changed or started running; retry after it settles',
+          'ACP_SESSION_OPTIONS_READ_ONLY',
+        )
+      const selectionBeforeWrite = this.modeSelectionForRequest(runtime, request)
+      const selectionBindingBefore =
+        selectionBeforeWrite === undefined ? undefined : await this.readBindingForUserMode(sessionId)
+      if (selectionBeforeWrite !== undefined && selectionBindingBefore === undefined)
+        throw new LlmError('The ACP session binding is unavailable for this mode change', 'ACP_BINDING_UNAVAILABLE')
+      if (request.kind === 'mode') {
+        if (runtime.setMode === undefined)
+          throw new LlmError('This Agent does not expose mode controls', 'ACP_CONFIG_UNSUPPORTED')
+        if (runtime.modes === undefined || !runtime.modes.availableModes.some((mode) => mode.id === request.id))
+          throw new LlmError(`Agent mode "${request.id}" is not available`, 'ACP_CONFIG_UNSUPPORTED')
+        await runtime.setMode(request.id)
+      } else {
+        const option = runtime.configOptions?.find((candidate) => candidate.id === request.id)
+        if (option === undefined || isAcpModelOrReasoningOption(option)) {
+          throw new LlmError(
+            'Model and reasoning controls are managed by the DSH model picker',
+            'ACP_CONFIG_UNSUPPORTED',
+          )
+        }
+        if (
+          option.type === 'select' &&
+          (typeof request.value !== 'string' || !this.selectValues(option).has(request.value))
+        )
+          throw new LlmError(`Agent option "${request.id}" does not allow that value`, 'ACP_CONFIG_UNSUPPORTED')
+        if (option.type === 'boolean' && typeof request.value !== 'boolean')
+          throw new LlmError(`Agent option "${request.id}" expects a boolean`, 'ACP_CONFIG_UNSUPPORTED')
+        if (runtime.setConfigOption === undefined)
+          throw new LlmError('This Agent does not expose session controls', 'ACP_CONFIG_UNSUPPORTED')
+        await runtime.setConfigOption(request.id, request.value)
       }
       if (
-        option.type === 'select' &&
-        (typeof request.value !== 'string' || !this.selectValues(option).has(request.value))
-      )
-        throw new LlmError(`Agent option "${request.id}" does not allow that value`, 'ACP_CONFIG_UNSUPPORTED')
-      if (option.type === 'boolean' && typeof request.value !== 'boolean')
-        throw new LlmError(`Agent option "${request.id}" expects a boolean`, 'ACP_CONFIG_UNSUPPORTED')
-      if (runtime.setConfigOption === undefined)
-        throw new LlmError('This Agent does not expose session controls', 'ACP_CONFIG_UNSUPPORTED')
-      await runtime.setConfigOption(request.id, request.value)
-    }
+        request.kind === 'mode' ||
+        runtime.configOptions?.some(
+          (option) =>
+            option.id === request.id &&
+            (normalizeAcpConfigOptionKey(option.id) === 'mode' ||
+              normalizeAcpConfigOptionKey(option.category ?? '') === 'mode'),
+        )
+      ) {
+        const intent = await this.sidecar?.readModeIntent(sessionId as never)
+        if (intent !== undefined) await this.sidecar?.clearModeIntent(sessionId as never, intent)
+      }
+      await this.persistRuntimeSnapshot(sessionId, runtime)
+      if (selectionBeforeWrite !== undefined) {
+        if (!this.confirmedModeSelection(runtime, selectionBeforeWrite))
+          throw new LlmError('Agent did not confirm the selected mode', 'ACP_CONFIG_SYNC_FAILED')
+        const bindingAfter = await this.readBindingForUserMode(sessionId)
+        if (
+          bindingAfter === undefined ||
+          modeIntentBindingKey(bindingAfter) !== modeIntentBindingKey(selectionBindingBefore!)
+        )
+          throw new LlmError('The ACP session binding changed while saving its mode', 'ACP_BINDING_UNAVAILABLE')
+        this.rememberConfirmedUserMode(sessionId, runtime, selectionBeforeWrite, bindingAfter)
+      }
+      return this.liveAgentSessionSnapshot(sessionId, runtime)
+    })
+  }
+
+  private modeSelectionForRequest(
+    runtime: AcpProfileRuntime,
+    request: AgentSessionOptionWrite,
+  ): UserModeChoice | undefined {
+    if (request.kind === 'mode') return { kind: 'legacy', id: request.id }
+    const option = runtime.configOptions?.find((candidate) => candidate.id === request.id)
     if (
-      request.kind === 'mode' ||
-      runtime.configOptions?.some(
-        (option) =>
-          option.id === request.id &&
-          (normalizeAcpConfigOptionKey(option.id) === 'mode' ||
-            normalizeAcpConfigOptionKey(option.category ?? '') === 'mode'),
-      )
-    ) {
-      const intent = await this.sidecar?.readModeIntent(sessionId as never)
-      if (intent !== undefined) await this.sidecar?.clearModeIntent(sessionId as never, intent)
+      option === undefined ||
+      (normalizeAcpConfigOptionKey(option.id) !== 'mode' &&
+        normalizeAcpConfigOptionKey(option.category ?? '') !== 'mode')
+    )
+      return undefined
+    if (typeof request.value !== 'string') return undefined
+    return { kind: 'config', id: request.id, value: request.value }
+  }
+
+  private async readBindingForUserMode(sessionId: string): Promise<AcpBindingData | undefined> {
+    const lookup = await this.sidecar?.readLatestBinding(sessionId as never)
+    if (
+      lookup?.status !== 'ok' ||
+      lookup.binding.provider !== `acp-${this.profileId}` ||
+      lookup.binding.profileId !== this.profileId
+    )
+      return undefined
+    return lookup.binding
+  }
+
+  private rememberConfirmedUserMode(
+    sessionId: string,
+    runtime: AcpProfileRuntime,
+    selection: UserModeChoice,
+    binding: AcpBindingData,
+  ): void {
+    const owner = this.runtimeOwners.get(runtime)
+    if (owner === undefined) {
+      this.confirmedUserModes.delete(sessionId)
+      return
     }
-    await this.persistRuntimeSnapshot(sessionId, runtime)
-    return this.liveAgentSessionSnapshot(sessionId, runtime)
+    this.confirmedUserModes.set(sessionId, {
+      ...selection,
+      bindingKey: modeIntentBindingKey(binding),
+      agentSessionId: binding.agentSessionId,
+      owner,
+      needsRestore: false,
+    })
+  }
+
+  private markConfirmedUserModeForRestore(sessionId: string, runtime: AcpProfileRuntime): void {
+    if (runtime.cancelledSessionRefreshPending !== true) return
+    const selection = this.confirmedUserModes.get(sessionId)
+    if (
+      selection === undefined ||
+      selection.agentSessionId !== runtime.cancelledSessionRefreshBindingId ||
+      selection.owner !== this.runtimeOwners.get(runtime)
+    )
+      return
+    // A vendor may change modes while handling the turn. Preserve only the
+    // last mode the user explicitly selected; never overwrite a newer Agent
+    // mode update with that older choice after the cancelled session reloads.
+    if (!this.confirmedModeSelection(runtime, selection)) {
+      this.confirmedUserModes.delete(sessionId)
+      return
+    }
+    this.confirmedUserModes.set(sessionId, { ...selection, needsRestore: true })
+  }
+
+  private confirmedModeSelection(runtime: AcpProfileRuntime, selection: UserModeChoice): boolean {
+    if (selection.kind === 'legacy') return (runtime.currentModeId ?? runtime.modes?.currentModeId) === selection.id
+    return (
+      runtime.configOptions?.some((option) => option.id === selection.id && option.currentValue === selection.value) ===
+      true
+    )
+  }
+
+  private async restoreConfirmedUserMode(
+    sessionId: string,
+    runtime: AcpProfileRuntime,
+    binding: AcpBindingData,
+  ): Promise<boolean> {
+    const selection = this.confirmedUserModes.get(sessionId)
+    if (selection === undefined) return true
+    if (
+      selection.bindingKey !== modeIntentBindingKey(binding) ||
+      selection.agentSessionId !== binding.agentSessionId ||
+      selection.owner !== this.runtimeOwners.get(runtime)
+    ) {
+      this.confirmedUserModes.delete(sessionId)
+      return true
+    }
+    if (!selection.needsRestore) return true
+    if (selection.kind === 'legacy') {
+      if (!runtime.modes?.availableModes.some((mode) => mode.id === selection.id)) return false
+      if ((runtime.currentModeId ?? runtime.modes.currentModeId) !== selection.id) {
+        if (runtime.setMode === undefined) return false
+        await runtime.setMode(selection.id)
+      }
+    } else {
+      const option = runtime.configOptions?.find((candidate) => candidate.id === selection.id)
+      if (option === undefined || option.type !== 'select' || !this.selectValues(option).has(String(selection.value)))
+        return false
+      if (option.currentValue !== selection.value) {
+        if (runtime.setConfigOption === undefined) return false
+        await runtime.setConfigOption(selection.id, selection.value!)
+      }
+    }
+    if (!this.confirmedModeSelection(runtime, selection)) return false
+    this.confirmedUserModes.set(sessionId, { ...selection, needsRestore: false })
+    return true
+  }
+
+  private async restoreCancelledRuntimeForControl(sessionId: string, runtime: AcpProfileRuntime): Promise<void> {
+    if (runtime.cancelledSessionRefreshPending !== true) return
+    if (runtime.restore === undefined || this.sidecar === undefined)
+      throw new LlmError(
+        'The cancelled ACP session cannot be restored for this control change',
+        'ACP_BINDING_UNAVAILABLE',
+      )
+    const lookup = await this.sidecar.readLatestBinding(sessionId as never)
+    const profile = this.readConfig()
+    if (
+      lookup?.status !== 'ok' ||
+      lookup.binding.provider !== `acp-${this.profileId}` ||
+      lookup.binding.profileId !== this.profileId ||
+      lookup.binding.agentSessionId !== runtime.cancelledSessionRefreshBindingId ||
+      profile === undefined ||
+      !acpLaunchFingerprintsCompatible(lookup.binding.launchFingerprint, await this.launchFingerprint(profile))
+    )
+      throw new LlmError(
+        'The original ACP session binding is unavailable for this control change',
+        'ACP_BINDING_UNAVAILABLE',
+      )
+    const binding = lookup.binding
+    const recovery = this.recoveryStateFallback(sessionId) ?? (await this.sidecar.readRecoveryState(sessionId as never))
+    if (recovery !== undefined && recovery.kind !== 'healthy')
+      throw new LlmError(
+        'The ACP session must be recovered before its controls can be changed',
+        'ACP_RECOVERY_REQUIRED',
+      )
+    const session = this.sessionOf(sessionId)
+    const expectedOwner = session?.identity ?? session
+    if (expectedOwner !== undefined && this.runtimeOwners.get(runtime) !== expectedOwner)
+      throw new LlmError(
+        'The ACP session owner changed before its controls could be restored',
+        'ACP_BINDING_UNAVAILABLE',
+      )
+    await runtime.restore({ agentSessionId: binding.agentSessionId })
+    const latest = await this.sidecar.readLatestBinding(sessionId as never)
+    const latestRecovery =
+      this.recoveryStateFallback(sessionId) ?? (await this.sidecar.readRecoveryState(sessionId as never))
+    if (
+      this.runtimeForSession(sessionId) !== runtime ||
+      runtime.isBusy === true ||
+      (expectedOwner !== undefined && this.runtimeOwners.get(runtime) !== expectedOwner) ||
+      (latestRecovery !== undefined && latestRecovery.kind !== 'healthy') ||
+      latest?.status !== 'ok' ||
+      latest.binding.provider !== binding.provider ||
+      latest.binding.agentSessionId !== binding.agentSessionId ||
+      latest.binding.generation !== binding.generation ||
+      latest.binding.bindingEpoch !== binding.bindingEpoch
+    )
+      throw new LlmError('The ACP session changed while restoring its controls', 'ACP_SESSION_OPTIONS_READ_ONLY')
+  }
+
+  private async serializeSessionControlWrite<T>(sessionId: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.sessionControlWrites.get(sessionId) ?? Promise.resolve()
+    let release!: () => void
+    const tail = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    this.sessionControlWrites.set(sessionId, tail)
+    await previous
+    try {
+      return await operation()
+    } finally {
+      release()
+      if (this.sessionControlWrites.get(sessionId) === tail) this.sessionControlWrites.delete(sessionId)
+    }
+  }
+
+  private async waitForSessionControlWrite(sessionId: string, signal?: AbortSignal): Promise<void> {
+    const pending = this.sessionControlWrites.get(sessionId)
+    if (pending === undefined) return
+    if (signal?.aborted === true) signal.throwIfAborted()
+    if (signal === undefined) return await pending
+    let onAbort: (() => void) | undefined
+    try {
+      await Promise.race([
+        pending,
+        new Promise<never>((_, reject) => {
+          onAbort = () => reject(signal.reason ?? new DOMException('Aborted', 'AbortError'))
+          signal.addEventListener('abort', onAbort, { once: true })
+        }),
+      ])
+      signal.throwIfAborted()
+    } finally {
+      if (onAbort !== undefined) signal.removeEventListener('abort', onAbort)
+    }
   }
 
   private runtimeForSession(sessionId: string): AcpProfileRuntime | undefined {
@@ -958,13 +1420,22 @@ export class AcpProfileAdapter extends LlmAdapter {
     }
   }
 
-  private async persistRuntimeSnapshot(sessionId: string, runtime: AcpProfileRuntime): Promise<void> {
-    if (this.runtimeForSession(sessionId) !== runtime) return
-    this.controlsChanged?.(sessionId)
-    if (this.sidecar === undefined) return
+  private async persistRuntimeSnapshot(sessionId: string, runtime: AcpProfileRuntime, strict = false): Promise<void> {
+    if (this.runtimeForSession(sessionId) !== runtime) {
+      if (strict) throw new Error('ACP runtime changed before its terminal snapshot could be persisted')
+      return
+    }
+    if (!strict) this.controlsChanged?.(sessionId)
+    if (this.sidecar === undefined) {
+      if (strict) throw new Error('ACP sidecar is unavailable for terminal snapshot persistence')
+      return
+    }
     try {
       const profile = snapshotProfile(this.readConfig())
-      if (profile === undefined) return
+      if (profile === undefined) {
+        if (strict) throw new Error('ACP profile is unavailable for terminal snapshot persistence')
+        return
+      }
       await this.sidecar.writeOptionSnapshot(
         sessionId as never,
         acpOptionsSnapshotOf(
@@ -988,7 +1459,8 @@ export class AcpProfileAdapter extends LlmAdapter {
           },
         ),
       )
-    } catch {
+    } catch (error) {
+      if (strict) throw error
       /* last-known presentation is best effort */
     }
   }
@@ -1139,6 +1611,43 @@ export class AcpProfileAdapter extends LlmAdapter {
       if (options.purpose !== undefined)
         throw new LlmError('ACP does not execute auxiliary title or compaction requests', 'ACP_AUXILIARY_CALL')
       const key = String(options.sessionId ?? '')
+      if (key.length > 0) {
+        const session = self.sessionOf(key)
+        const sessionOwner = session === undefined ? undefined : (session.identity ?? session)
+        const settlementWait = self.settlementWaitSignal(key, sessionOwner, options.signal)
+        const settlementSignal = settlementWait.signal
+        try {
+          if (settlementSignal.aborted) throw abortReason(settlementSignal)
+          const settleExisting = settlePendingLocally(self.hostRoot ?? self, key, self.settlementSink, self.profileId)
+          try {
+            await awaitWithSignal(settleExisting, settlementSignal)
+          } catch (error) {
+            if (settlementSignal.aborted) throw abortReason(settlementSignal)
+            if (!(error instanceof AcpLocalSettlementError)) throw error
+            await waitForLocalSettlement(self.hostRoot ?? self, key, settlementSignal)
+          }
+          if (settlementSignal.aborted) throw abortReason(settlementSignal)
+        } finally {
+          settlementWait.dispose()
+        }
+      }
+      const sharedFallback = self.hostRoot === undefined ? undefined : getSharedRecoveryFallback(self.hostRoot, key)
+      if (sharedFallback !== undefined && sharedFallback.kind !== 'healthy')
+        throw new LlmError(
+          sharedFallback.detail ?? 'ACP session requires recovery before another prompt',
+          'ACP_RECOVERY_REQUIRED',
+        )
+      if (self.hostRoot !== undefined) {
+        try {
+          assertHostExecutionQuiescent(self.hostRoot, key)
+        } catch (error) {
+          throw new LlmError(
+            'ACP Host tool execution is still active; recovery must wait for it to settle',
+            'ACP_RECOVERY_REQUIRED',
+            { cause: error },
+          )
+        }
+      }
       if (self.inMemoryRecoveryRequired.has(key))
         throw new LlmError('ACP steering outcome requires explicit recovery before continuing', 'ACP_RECOVERY_REQUIRED')
       const carry: StreamChunk[] = []
@@ -1175,27 +1684,19 @@ export class AcpProfileAdapter extends LlmAdapter {
           const localFailure = error instanceof SteeringFailure && !error.remoteRequestSent
           const remoteRequestSent = !localFailure
           if (remoteRequestSent) {
+            const recovery: AcpRecoveryState = {
+              dshSessionId: key,
+              kind: 'outcome-unknown',
+              cause: 'load-failed',
+              detail: 'ACP steering acceptance could not be confirmed; inspect the Agent session before retrying',
+              provider: options.provider,
+              updatedAt: Date.now(),
+            }
             try {
               if (self.sidecar === undefined) throw new Error('ACP sidecar is unavailable')
-              await self.sidecar.writeRecoveryState({
-                dshSessionId: key,
-                kind: 'outcome-unknown',
-                cause: 'load-failed',
-                detail: 'ACP steering acceptance could not be confirmed; inspect the Agent session before retrying',
-                provider: options.provider,
-                updatedAt: Date.now(),
-              })
+              await self.sidecar.writeRecoveryState(recovery)
             } catch {
-              // If durable state cannot record the uncertainty, keep a bounded
-              // session-local gate until the user completes explicit recovery.
-              if (!self.inMemoryRecoveryRequired.has(key)) {
-                self.inMemoryRecoveryRequired.set(key, Date.now())
-                try {
-                  self.controlsChanged?.(key)
-                } catch {
-                  /* recovery notification is best effort and cannot alter the gate */
-                }
-              }
+              self.rememberRecoveryFallback(recovery)
             }
             await retire(owner).catch(() => undefined)
           }
@@ -1228,17 +1729,18 @@ export class AcpProfileAdapter extends LlmAdapter {
         stream.attach(self.executionStream(options, generation, stream, indices.size))
         self.handoffs.set(key, owner)
         const captured = owner
-        const cleanup = async (): Promise<void> => {
+        const cleanup = async (abandonSettlementWait = false): Promise<void> => {
           if (self.handoffs.get(key) !== captured || !stream.suspended) return
           try {
-            await stream.drain()
+            if (abandonSettlementWait) await stream.drainAfterAbandon()
+            else await stream.drain()
           } finally {
             self.detachHandoffOwner(key, captured)
           }
         }
         const view = self.sessionOf(key)
         const offEnd = view?.watchTurnEnd?.(() => {
-          void cleanup().catch(() => {
+          void cleanup(true).catch(() => {
             try {
               self.log?.('ACP suspended stream cleanup failed')
             } catch {
@@ -1246,7 +1748,7 @@ export class AcpProfileAdapter extends LlmAdapter {
             }
           })
         })
-        const offRoute = view?.watchRouteChange?.(options.provider, cleanup)
+        const offRoute = view?.watchRouteChange?.(options.provider, () => cleanup(true))
         owner.off = () => {
           try {
             offEnd?.()
@@ -1255,11 +1757,19 @@ export class AcpProfileAdapter extends LlmAdapter {
           }
         }
       }
+      const segment = owner.stream.segment()[Symbol.asyncIterator]()
       try {
-        yield* owner.stream.segment()
+        for (;;) {
+          const next = await segment.next()
+          if (next.done) break
+          yield next.value
+          if (next.value.type === 'finish') await owner.stream.acknowledgeTerminalFinish()
+        }
       } finally {
-        if (!owner.stream.suspended) {
-          self.detachHandoffOwner(key, owner)
+        try {
+          await segment.return?.(undefined)
+        } finally {
+          if (!owner.stream.suspended) self.detachHandoffOwner(key, owner)
         }
       }
     })()
@@ -1292,6 +1802,7 @@ export class AcpProfileAdapter extends LlmAdapter {
       }
       const sessionKey = String(options.sessionId ?? '')
       if (sessionKey.length === 0) throw new LlmError('ACP requires a DSH session id', 'ACP_SESSION_UNAVAILABLE')
+      await self.waitForSessionControlWrite(sessionKey, options.signal)
       if (self.sidecar === undefined)
         throw new LlmError(
           'ACP sidecar is unavailable; the Agent binding cannot be made durable',
@@ -1309,6 +1820,11 @@ export class AcpProfileAdapter extends LlmAdapter {
         if (error instanceof AcpAdmissionError) throw new LlmError(error.message, error.code)
         throw error
       }
+      const captureRemoteCancellationHook = (proof: CurrentStepProof | undefined) =>
+        proof === undefined
+          ? undefined
+          : session?.captureRemoteCancelledTurn?.({ turn: proof.turn, step: proof.step, startSeq: proof.startSeq })
+      let remoteCancellationHook = captureRemoteCancellationHook(admissionProof)
       // Only admitted model requests may change the native tool directory.
       // Missing schemas are retained as missing and therefore fail closed.
       self.admittedToolSchemas.set(sessionKey, options.tools)
@@ -1350,6 +1866,10 @@ export class AcpProfileAdapter extends LlmAdapter {
         )
       self.runtimes.set(runtimeKey, runtime)
       if (session !== undefined) self.runtimeOwners.set(runtime, session.identity ?? session)
+      let retainHealthyRuntimeAfterNotDispatched = false
+      let retainCancelledRuntimeForRefreshRetry = false
+      let bindingForModeRestore: AcpBindingData | undefined
+      let terminalSettlementLifetime: (() => void) | undefined
       try {
         let validatedPrompt: acp.ContentBlock[]
         // Capability negotiation is deliberately before session/new, restore,
@@ -1419,6 +1939,8 @@ export class AcpProfileAdapter extends LlmAdapter {
           )
         }
         const binding = existingBinding?.status === 'ok' ? existingBinding.binding : undefined
+        bindingForModeRestore = binding
+        if (binding === undefined) self.confirmedUserModes.delete(sessionKey)
         const currentFingerprint = await self.launchFingerprint(profile)
         const canonicalCwd = self.canonicalCwd(session?.header?.cwd)
         if (binding !== undefined) {
@@ -1479,17 +2001,39 @@ export class AcpProfileAdapter extends LlmAdapter {
             })
             // Replay is staging/audit only. It is intentionally not compared to,
             // or appended over, DSH history; a provider may project it differently.
-            await self.sidecar?.append(sessionKey as never, {
-              kind: 'replay-assessment',
-              data: {
-                status: 'not-compared',
-                method,
-                detail: `ACP session ${method} (${String(replayUpdates)} staged updates, ${String(replayChars)} text characters)`,
-                acpSessionId: binding.agentSessionId,
-                generation: binding.generation,
-              },
-            })
+            try {
+              await self.sidecar?.append(sessionKey as never, {
+                kind: 'replay-assessment',
+                data: {
+                  status: 'not-compared',
+                  method,
+                  detail: `ACP session ${method} (${String(replayUpdates)} staged updates, ${String(replayChars)} text characters)`,
+                  acpSessionId: binding.agentSessionId,
+                  generation: binding.generation,
+                },
+              })
+            } catch (error) {
+              if (!runtime.lastRestoreRefreshedCancelledSession) throw error
+              // Replay assessment is staging-only evidence. A local audit write
+              // cannot invalidate a successful same-session refresh.
+            }
           } catch (error: unknown) {
+            const cancelledRefreshPending = runtime.cancelledSessionRefreshPending === true
+            if (
+              (error instanceof AcpSessionRefreshRetryError || error instanceof AcpSessionRefreshAbortedError) &&
+              cancelledRefreshPending
+            ) {
+              // The previous prompt has a confirmed cancelled terminal and its
+              // result is already settled. Keep the original binding/runtime
+              // marker so a later user request can retry session/load without
+              // creating a recovery gate or dispatching this prompt.
+              retainCancelledRuntimeForRefreshRetry = true
+              throw new LlmError(error.message, error.code, { cause: error })
+            }
+            if (options.signal?.aborted === true && cancelledRefreshPending) {
+              retainCancelledRuntimeForRefreshRetry = true
+              throw abortReason(options.signal)
+            }
             await self.releaseRuntime(runtimeKey, runtime)
             const detail = `ACP session restore failed: ${error instanceof Error ? error.message : String(error)}`
             const missing = /(?:session[_ -]?)?(?:not[ -]?found|unknown[_ -]?session)|does not exist/i.test(detail)
@@ -1667,6 +2211,7 @@ export class AcpProfileAdapter extends LlmAdapter {
             }
             try {
               await self.sidecar.append(sessionKey as never, { kind: 'binding', data: bindingData })
+              bindingForModeRestore = bindingData
               if (forkOutcome !== undefined && forkReason !== undefined) {
                 await self.sidecar.append(sessionKey as never, {
                   kind: 'session-fork',
@@ -1703,12 +2248,36 @@ export class AcpProfileAdapter extends LlmAdapter {
         // only after setup/restore has established the session, but before the
         // dispatch WAL: a rejected or unconfirmed change must cause zero WAL and
         // zero prompt, never a silent request with a different model/effort.
+        const savedMode = self.confirmedUserModes.get(sessionKey)
+        const restoreSavedMode =
+          savedMode?.needsRestore === true &&
+          bindingForModeRestore !== undefined &&
+          savedMode.bindingKey === modeIntentBindingKey(bindingForModeRestore) &&
+          savedMode.agentSessionId === bindingForModeRestore.agentSessionId
+        if (
+          savedMode !== undefined &&
+          bindingForModeRestore !== undefined &&
+          (savedMode.bindingKey !== modeIntentBindingKey(bindingForModeRestore) ||
+            savedMode.agentSessionId !== bindingForModeRestore.agentSessionId)
+        )
+          self.confirmedUserModes.delete(sessionKey)
         try {
           await self.convergeConfig(runtime, options)
           await self.applyMemberMode(sessionKey, runtime)
+          if (restoreSavedMode) {
+            // A mode is restored only after the same-bound session was loaded.
+            // If it disappeared from the Agent's supported choices, keep the
+            // live controls available and send no prompt under a different mode.
+            retainHealthyRuntimeAfterNotDispatched = true
+            if (!(await self.restoreConfirmedUserMode(sessionKey, runtime, bindingForModeRestore!)))
+              throw new LlmError(
+                'The Agent no longer supports the selected mode. Choose a supported mode to continue; no prompt was sent.',
+                'ACP_CONFIG_UNSUPPORTED',
+              )
+          }
           await self.persistRuntimeSnapshot(sessionKey, runtime)
         } catch (error: unknown) {
-          await self.releaseRuntime(runtimeKey, runtime)
+          if (!restoreSavedMode) await self.releaseRuntime(runtimeKey, runtime)
           if (error instanceof LlmError) throw error
           throw new LlmError(
             `ACP session configuration could not be applied: ${error instanceof Error ? error.message : String(error)}`,
@@ -1716,6 +2285,7 @@ export class AcpProfileAdapter extends LlmAdapter {
             { cause: error },
           )
         }
+        const bindingSettlementTarget = await self.readBindingSettlementTarget(sessionKey)
         try {
           await self.ledger.begin({
             key: dispatchKey,
@@ -1748,6 +2318,93 @@ export class AcpProfileAdapter extends LlmAdapter {
             'ACP_RECOVERY_REQUIRED',
           )
         }
+        let localSettlementTask: ((sink: AcpLocalSettlementSink) => Promise<void>) | undefined
+        let committedBindingAfterSettle: AcpBindingData | undefined
+        const settleKnownRemoteTerminal = (): Promise<AcpBindingData | undefined> => {
+          if (localSettlementTask === undefined) {
+            const dshCommittedSeq = Math.max(
+              Math.max((session?.seq ?? 0) - 1, 0),
+              bindingSettlementTarget?.baseDshCommittedSeq ?? 0,
+            )
+            const bindingCommit: BindingSettlementCommit | undefined =
+              bindingSettlementTarget === undefined ? undefined : { ...bindingSettlementTarget, dshCommittedSeq }
+            let feedbackFlushed = false
+            let ledgerSettled = false
+            let runtimeSnapshotPersisted = false
+            let bindingHeadRefreshed = bindingCommit === undefined
+            let runtimeSnapshotCaptureFailed = false
+            let runtimeSnapshot: ReturnType<typeof acpOptionsSnapshotOf> | undefined
+            try {
+              runtimeSnapshot = acpOptionsSnapshotOf(
+                runtime.configOptions,
+                runtime.currentModeId,
+                profileLaunchIdentityHash(self.profileId, profile),
+                Date.now(),
+                {
+                  contextUsage: runtime.contextUsage === undefined ? null : runtime.contextUsage,
+                  modes:
+                    runtime.modes === undefined
+                      ? null
+                      : {
+                          currentModeId: runtime.modes.currentModeId,
+                          availableModes: runtime.modes.availableModes.map((mode) => ({
+                            id: mode.id,
+                            name: mode.name,
+                            ...(mode.description === undefined ? {} : { description: mode.description }),
+                          })),
+                        },
+                },
+              )
+            } catch {
+              runtimeSnapshotCaptureFailed = true
+              self.log?.('ACP_RUNTIME_SNAPSHOT_PROJECTION_FAILED')
+            }
+            localSettlementTask = async (sink: AcpLocalSettlementSink) => {
+              if (!feedbackFlushed) {
+                if (runtime.flushHostFeedback !== undefined) await runtime.flushHostFeedback()
+                else if (runtime.hostSettlementPending === true)
+                  throw new Error('ACP runtime retained Host feedback without a local flush operation')
+                feedbackFlushed = true
+              }
+              if (!ledgerSettled) {
+                try {
+                  await sink.settleDispatch(sessionKey, dispatchKey)
+                } catch (error) {
+                  const settled = await sink.readDispatch(sessionKey, dispatchKey)
+                  if (settled?.state !== 'settled') throw error
+                }
+                ledgerSettled = true
+              }
+              if (!runtimeSnapshotPersisted) {
+                // Projection-invalid runtime metadata is a presentation failure,
+                // not a failed local write. Preserve the last valid snapshot.
+                if (runtimeSnapshotCaptureFailed) runtimeSnapshotPersisted = true
+              }
+              if (!runtimeSnapshotPersisted) {
+                if (runtimeSnapshot === undefined)
+                  throw new Error('ACP sidecar is unavailable for terminal snapshot persistence')
+                await sink.writeRuntimeSnapshot(sessionKey, runtimeSnapshot)
+                runtimeSnapshotPersisted = true
+              }
+              if (!bindingHeadRefreshed && bindingCommit !== undefined) {
+                committedBindingAfterSettle = await sink.refreshBindingHead(sessionKey, session, bindingCommit)
+                bindingHeadRefreshed = true
+              }
+            }
+          }
+          const task = localSettlementTask
+          if (task === undefined) throw new Error('ACP local settlement task was not initialized')
+          return settleLocally(
+            self.hostRoot ?? self,
+            sessionKey,
+            dispatchKey,
+            task,
+            self,
+            () => self.controlsChanged?.(sessionKey),
+            self.settlementSink,
+            self.profileId,
+          ).then(() => committedBindingAfterSettle)
+        }
         const queue: StreamChunk[] = []
         let activityFallbackSeq = 0
         let activityWriteTail = Promise.resolve()
@@ -1755,6 +2412,43 @@ export class AcpProfileAdapter extends LlmAdapter {
         const externalDelegations: ExternalDelegationObservation[] = []
         const profileKind = effectiveRuntimeOf(self.profileId, profile) ?? self.profileId
         const delegationNormalizer = new ExternalDelegationNormalizer(profileKind)
+        const externalFactsByTool = new Map<string, Map<string, ExternalDelegationLiveFact>>()
+        const toolActivityBases = new Map<string, NormalizedActivity>()
+        let externalFactCount = 0
+        const rememberExternalFact = (fact: ExternalDelegationLiveFact): void => {
+          const toolCallId = fact.sourceToolCallId
+          if (toolCallId === undefined) return
+          let facts = externalFactsByTool.get(toolCallId)
+          if (facts === undefined) {
+            if (externalFactCount >= EXTERNAL_DELEGATION_PENDING_LIMIT) return
+            facts = new Map()
+            externalFactsByTool.set(toolCallId, facts)
+          }
+          if (!facts.has(fact.vendorDelegationKey)) {
+            if (externalFactCount >= EXTERNAL_DELEGATION_PENDING_LIMIT) return
+            externalFactCount += 1
+          }
+          facts.set(fact.vendorDelegationKey, fact)
+        }
+        const factsForTool = (toolCallId: string): readonly ExternalDelegationLiveFact[] => [
+          ...(externalFactsByTool.get(toolCallId)?.values() ?? []),
+        ]
+        const factFromObservation = (
+          observation: ExternalDelegationObservation,
+          observedAt: number,
+        ): ExternalDelegationLiveFact | undefined => {
+          if (observation.sourceToolCallId === undefined) return undefined
+          return {
+            profileKind: observation.profileKind,
+            vendorDelegationKey: observation.vendorDelegationKey,
+            ...(observation.vendorChildId === undefined ? {} : { vendorChildId: observation.vendorChildId }),
+            sourceToolCallId: observation.sourceToolCallId,
+            label: observation.label,
+            status: observation.status,
+            observedStartedAt: observation.timing.observedStartedAt,
+            observedAt,
+          }
+        }
         const toolChildren = new Map<string, Map<number, NormalizedActivity>>()
         // Tool ids are session-scoped, while sparse patch state belongs to this
         // one prompt projection.  Never carry a partially observed call into a
@@ -1802,7 +2496,7 @@ export class AcpProfileAdapter extends LlmAdapter {
           })
           activityFallbackSeq += 1
         }
-        const settleRunningActivities = (status: 'completed' | 'failed' | 'cancelled'): void => {
+        const settleRunningActivities = (status: 'completed' | 'failed' | 'cancelled' | 'unfinished'): void => {
           for (const activity of currentActivities.values()) {
             if (activity.kind !== 'plan' && !isTerminalActivityStatus(activity.status))
               scheduleActivity({ ...activity, status })
@@ -1811,6 +2505,7 @@ export class AcpProfileAdapter extends LlmAdapter {
         let wake: (() => void) | undefined
         let done = false
         let failure: unknown
+        let cancelledRuntimeRetirement: Promise<void> | undefined
         let visibleContentEmitted = false
         const unsupportedChunkContents: Array<{ type: string; reason: string }> = []
         let unsupportedChunkContentsTruncated = false
@@ -1914,11 +2609,14 @@ export class AcpProfileAdapter extends LlmAdapter {
         const toolContentBoundaries = new Map<string, boolean>()
         const onUpdate = (notification: AcpSessionNotification): void => {
           const update = notification.update
-          const delegation = delegationNormalizer.acceptNotification(notification, Date.now())
+          const observedAt = Date.now()
+          const delegation = delegationNormalizer.acceptNotification(notification, observedAt)
           if (delegation !== undefined) externalDelegations.push(delegation)
+          const completedFact = delegation === undefined ? undefined : factFromObservation(delegation, observedAt)
           // Native child notifications are evidence for the projected child,
           // never assistant/tool output of the root DSH turn.
           if (runtime.acpSessionId !== undefined && notification.sessionId !== runtime.acpSessionId) return
+          if (completedFact !== undefined) rememberExternalFact(completedFact)
           const isToolUpdate = update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update'
           const toolId =
             isToolUpdate && typeof update.toolCallId === 'string'
@@ -1949,18 +2647,13 @@ export class AcpProfileAdapter extends LlmAdapter {
             }
             toolContentBoundaries.set(toolId, terminal)
           }
-          const normalized = activitiesForNotification(
-            notification,
-            `${String(notification.sessionId)}:${String(activityFallbackSeq + 1)}`,
-            toolCall,
-          )
           if (isToolUpdate && toolCall !== undefined) {
             const previousChildren = toolChildren.get(toolId) ?? new Map<number, NormalizedActivity>()
             const nextChildren = new Map<number, NormalizedActivity>()
             const status = activityStatus(toolCall.status)
             if (Array.isArray(toolCall.content)) {
               for (const [index, item] of toolCall.content.entries()) {
-                const child = normalizeActivityContent(`tool:${toolId}:${String(index)}`, item, status)
+                const child = normalizeActivityContent(`part:${toolId}:${String(index)}`, item, status)
                 if (child !== undefined) nextChildren.set(index, child)
               }
             }
@@ -1977,10 +2670,38 @@ export class AcpProfileAdapter extends LlmAdapter {
             }
             toolChildren.set(toolId, nextChildren)
           }
+          if (toolCall !== undefined) {
+            const terminal = activityStatus(toolCall.status)
+            if (terminal === 'completed' || terminal === 'failed' || terminal === 'cancelled') {
+              for (const fact of delegationNormalizer.resolveToolCall(toolId, terminal, observedAt))
+                rememberExternalFact(fact)
+            } else {
+              for (const fact of delegationNormalizer.liveForToolCall(toolId)) rememberExternalFact(fact)
+            }
+          }
+          if (toolCall === undefined && completedFact?.sourceToolCallId !== undefined) {
+            const sourceToolCallId = completedFact.sourceToolCallId
+            scheduleContent(() => {
+              const base = toolActivityBases.get(sourceToolCallId)
+              const current = base === undefined ? undefined : currentActivities.get(base.activityId)
+              if (base === undefined || current === undefined) return
+              scheduleActivity(
+                withExternalDelegations({ ...base, status: current.status }, factsForTool(sourceToolCallId)),
+              )
+            })
+          }
+          const externalFacts = toolCall === undefined ? [] : factsForTool(toolId)
+          const normalized = activitiesForNotification(
+            notification,
+            `${String(notification.sessionId)}:${String(activityFallbackSeq + 1)}`,
+            toolCall,
+            externalFacts,
+          )
           scheduleContent(() => {
             const plan = normalized.find((activity) => activity.kind === 'plan')?.display?.plan
             if (plan !== undefined) session?.publishPlan?.(plan)
             for (const activity of normalized) {
+              if (activity.kind === 'tool' && toolCall !== undefined) toolActivityBases.set(toolId, activity)
               const parentOwner = isToolUpdate ? activityOwners.get(`tool:${toolId}`) : undefined
               if (!activityOwners.has(activity.activityId) && parentOwner !== undefined)
                 activityOwners.set(activity.activityId, parentOwner)
@@ -2015,17 +2736,48 @@ export class AcpProfileAdapter extends LlmAdapter {
             })
           }
         }
+        const finishExternalDelegations = (): void => {
+          for (const fact of delegationNormalizer.finishPrompt(Date.now())) {
+            rememberExternalFact(fact)
+            const toolCallId = fact.sourceToolCallId
+            const base = toolCallId === undefined ? undefined : toolActivityBases.get(toolCallId)
+            const current = base === undefined ? undefined : currentActivities.get(base.activityId)
+            if (toolCallId === undefined || base === undefined || current === undefined) continue
+            scheduleActivity(withExternalDelegations({ ...base, status: current.status }, factsForTool(toolCallId)))
+          }
+        }
         // Interrupt only the ACP execution. The native turn remains alive and
         // owns the queued message, its pre-step hooks, and its eventual commit.
         // No second prompt may cross the wire before the first one settles.
         const inputAbort = new AbortController()
         const promptSignal =
           options.signal === undefined ? inputAbort.signal : AbortSignal.any([options.signal, inputAbort.signal])
+        const terminalSettlementWait = self.settlementWaitSignal(
+          sessionKey,
+          session === undefined ? undefined : (session.identity ?? session),
+          options.signal,
+        )
+        terminalSettlementLifetime = terminalSettlementWait.dispose
+        const terminalSettlementClose = new AbortController()
+        const terminalSettlementSignal = AbortSignal.any([
+          terminalSettlementWait.signal,
+          terminalSettlementClose.signal,
+        ])
         let interruptedForInput = false
         let remoteSettled = false
         let teammateReportEligible = true
         let teammateReportConfirmed = false
-        handoff.cancel = () => inputAbort.abort(new Error('ACP stream consumer ended'))
+        let turnConclusionEligible = true
+        let turnConclusionConfirmed = false
+        let successfulToolResultEligible = true
+        let successfulToolResultConfirmed = false
+        handoff.cancel = () => {
+          inputAbort.abort(new Error('ACP stream consumer ended'))
+        }
+        const settlementAbandonReason = new DOMException('ACP stream consumer ended', 'AbortError')
+        handoff.abandon = () => {
+          terminalSettlementClose.abort(settlementAbandonReason)
+        }
         const watchInput = (): (() => void) | undefined =>
           session?.watchSteering?.(() => {
             if (remoteSettled || promptSignal.aborted) return
@@ -2069,11 +2821,17 @@ export class AcpProfileAdapter extends LlmAdapter {
           const previousSegment = contentSegment
           const previousReportEligible = teammateReportEligible
           const previousReportConfirmed = teammateReportConfirmed
+          const previousTurnConclusionEligible = turnConclusionEligible
+          const previousTurnConclusionConfirmed = turnConclusionConfirmed
+          const previousSuccessfulToolResultEligible = successfulToolResultEligible
+          const previousSuccessfulToolResultConfirmed = successfulToolResultConfirmed
+          const previousRemoteCancellationHook = remoteCancellationHook
           let projectedAtDispatch = false
           let segmentBoundaryVersion = contentBreakVersion
           let segmentBoundaryIndex = nextContentIndex
           const applyProjectionAtDispatch = (): void => {
             projectedAtDispatch = true
+            remoteCancellationHook = captureRemoteCancellationHook(nextProof)
             currentAnchor = nextProof!.anchorMessageId
             // A pending pull may contain the old segment's final text. It will
             // occupy a block in the next native reply before injected output.
@@ -2087,12 +2845,21 @@ export class AcpProfileAdapter extends LlmAdapter {
             segmentBoundaryIndex = nextContentIndex
             teammateReportEligible = false
             teammateReportConfirmed = false
+            turnConclusionEligible = false
+            turnConclusionConfirmed = false
+            successfulToolResultEligible = false
+            successfulToolResultConfirmed = false
           }
           const restoreProjection = (): void => {
+            remoteCancellationHook = previousRemoteCancellationHook
             currentAnchor = previousAnchor
             activityIndexOffset = previousOffset
             teammateReportEligible = previousReportEligible
             teammateReportConfirmed = previousReportConfirmed
+            turnConclusionEligible = previousTurnConclusionEligible
+            turnConclusionConfirmed = previousTurnConclusionConfirmed
+            successfulToolResultEligible = previousSuccessfulToolResultEligible
+            successfulToolResultConfirmed = previousSuccessfulToolResultConfirmed
             // Restore the prior text segment only when nothing arrived after
             // the request boundary; never revisit an index already emitted.
             if (
@@ -2127,225 +2894,449 @@ export class AcpProfileAdapter extends LlmAdapter {
         }
         // This callback is host-owned evidence from a completed native send_message.
         // Steering a newly admitted request disables the evidence for this prompt.
-        const promptResult = runtime.prompt(prompt, onUpdate, promptSignal, () => {
-          if (teammateReportEligible) teammateReportConfirmed = true
-        })
+        const promptResult = runtime.prompt(
+          prompt,
+          onUpdate,
+          promptSignal,
+          () => {
+            if (teammateReportEligible) teammateReportConfirmed = true
+          },
+          () => {
+            if (turnConclusionEligible) turnConclusionConfirmed = true
+          },
+          () => {
+            if (successfulToolResultEligible) successfulToolResultConfirmed = true
+          },
+        )
         self.controlsChanged?.(sessionKey)
-        const prompting = promptResult.then(
-          async (response: acp.PromptResponse) => {
-            remoteSettled = true
-            stopWatchingInput?.()
-            try {
-              await contentDeliveryTail
-              settleRunningActivities(response.stopReason === 'cancelled' ? 'cancelled' : 'completed')
-              await activityWriteTail
-              // The response is not exposed to DSH until the terminal state is
-              // durable. A WAL failure therefore leaves recovery required and is
-              // surfaced as an adapter error rather than a false successful turn.
-              await self.ledger.settle(sessionKey, dispatchKey)
-              await self.persistRuntimeSnapshot(sessionKey, runtime)
-              const committedBinding = await self.refreshBindingHead(sessionKey, session)
-              const projectAfterFinish = async (): Promise<void> => {
-                if (
-                  committedBinding === undefined ||
-                  runtime.acpSessionId === undefined ||
-                  self.projectExternalDelegation === undefined
-                )
-                  return
-                for (const delegation of externalDelegations) {
-                  try {
-                    const childSessionId = await self.projectExternalDelegation(delegation, {
-                      profileId: self.profileId,
-                      bindingGeneration: committedBinding.generation,
-                      rootAcpSessionId: runtime.acpSessionId,
-                      parentDshSessionId: sessionKey,
-                      parentCwd: canonicalCwd,
-                      ...(session?.header?.delegationDepth === undefined
-                        ? {}
-                        : { parentDelegationDepth: session.header.delegationDepth }),
-                    })
-                    if (childSessionId !== undefined) {
-                      scheduleActivity({
-                        activityId: `delegated-record:${delegation.vendorDelegationKey}`,
-                        kind: 'delegated',
-                        status: 'completed',
-                        presentation: delegation.label,
-                        rawDetail: activityRawDetail({
-                          projectedChildSessionId: childSessionId,
-                          resultCompleteness: delegation.result.completeness,
-                          ...(delegation.sourceToolCallId === undefined
-                            ? {}
-                            : { sourceToolCallId: delegation.sourceToolCallId }),
-                        }),
-                      })
-                    }
-                  } catch (error) {
+        const waitForKnownTerminalSettlement = async (): Promise<void> => {
+          try {
+            await waitForLocalSettlement(self.hostRoot ?? self, sessionKey, terminalSettlementSignal)
+            if (terminalSettlementSignal.aborted) throw abortReason(terminalSettlementSignal)
+          } catch (error) {
+            // Record only an error proven to come from this local waiter. A
+            // remote prompt can independently reject with the same signal's
+            // reason, and must still propagate as a provider failure.
+            if (terminalSettlementSignal.aborted && error === abortReason(terminalSettlementSignal))
+              handoff.localSettlementAbortReason = error
+            throw error
+          }
+        }
+        const settleKnownRemoteTerminalAndWait = async (): Promise<AcpBindingData | undefined> => {
+          const settling = settleKnownRemoteTerminal()
+          try {
+            // Let the first short, foreground local batch finish even when the
+            // remote prompt was cancelled. Only a retained background retry is
+            // a cancellable wait; a successful known-terminal settle must land
+            // before the aborted consumer returns.
+            return await settling
+          } catch (error) {
+            if (!(error instanceof AcpLocalSettlementError)) throw error
+            await waitForKnownTerminalSettlement()
+            return committedBindingAfterSettle
+          }
+        }
+        const handlePromptResponse = async (
+          response: acp.PromptResponse,
+          settlementAlreadyComplete = false,
+        ): Promise<void> => {
+          remoteSettled = true
+          stopWatchingInput?.()
+          if (response.stopReason === 'cancelled') self.markConfirmedUserModeForRestore(sessionKey, runtime)
+          const confirmedRemoteCancellation =
+            response.stopReason === 'cancelled' &&
+            options.signal?.aborted !== true &&
+            !promptSignal.aborted &&
+            !interruptedForInput
+          const unresolvedActivityStatus =
+            response.stopReason === 'cancelled' || options.signal?.aborted === true ? 'cancelled' : 'unfinished'
+          try {
+            await contentDeliveryTail
+            finishExternalDelegations()
+            settleRunningActivities(unresolvedActivityStatus)
+            await activityWriteTail
+            // Keep the native turn open until the known terminal response has
+            // been durably settled. A local write failure waits on its retained
+            // task; it never turns the already completed ACP prompt into recovery.
+            const committedBinding = settlementAlreadyComplete
+              ? committedBindingAfterSettle
+              : await settleKnownRemoteTerminalAndWait()
+            const projectAfterFinish = async (): Promise<void> => {
+              if (committedBinding === undefined || self.projectExternalDelegation === undefined) return
+              for (const delegation of externalDelegations) {
+                try {
+                  const childSessionId = await self.projectExternalDelegation(delegation, {
+                    profileId: self.profileId,
+                    bindingGeneration: committedBinding.generation,
+                    rootAcpSessionId: committedBinding.agentSessionId,
+                    parentDshSessionId: sessionKey,
+                    parentCwd: canonicalCwd,
+                    ...(session?.header?.delegationDepth === undefined
+                      ? {}
+                      : { parentDelegationDepth: session.header.delegationDepth }),
+                  })
+                  if (childSessionId !== undefined) {
                     scheduleActivity({
                       activityId: `delegated-record:${delegation.vendorDelegationKey}`,
                       kind: 'delegated',
-                      status: 'failed',
+                      status: 'completed',
                       presentation: delegation.label,
                       rawDetail: activityRawDetail({
-                        projection: 'unavailable',
-                        reason: error instanceof Error ? error.message : String(error),
+                        projectedChildSessionId: childSessionId,
+                        resultCompleteness: delegation.result.completeness,
                         ...(delegation.sourceToolCallId === undefined
                           ? {}
                           : { sourceToolCallId: delegation.sourceToolCallId }),
                       }),
                     })
                   }
+                } catch (error) {
+                  scheduleActivity({
+                    activityId: `delegated-record:${delegation.vendorDelegationKey}`,
+                    kind: 'delegated',
+                    status: 'failed',
+                    presentation: delegation.label,
+                    rawDetail: activityRawDetail({
+                      projection: 'unavailable',
+                      reason: error instanceof Error ? error.message : String(error),
+                      ...(delegation.sourceToolCallId === undefined
+                        ? {}
+                        : { sourceToolCallId: delegation.sourceToolCallId }),
+                    }),
+                  })
                 }
-                await activityWriteTail
               }
-              let committedActivitySeq = 0
-              if (typeof durableSidecar.activityHead === 'function') {
+              await activityWriteTail
+            }
+            let committedActivitySeq = 0
+            if (typeof durableSidecar.activityHead === 'function') {
+              try {
+                committedActivitySeq = await durableSidecar.activityHead(sessionKey as never)
+              } catch {
+                // Activity is a presentation partition. A broken activity head
+                // must not turn a successfully settled ACP prompt into an
+                // outcome-unknown recovery gate.
                 try {
-                  committedActivitySeq = await durableSidecar.activityHead(sessionKey as never)
+                  await durableSidecar.append(sessionKey as never, {
+                    kind: 'degradation',
+                    data: {
+                      code: 'activity-head-unavailable',
+                      items: [{ type: 'activity-head', reason: 'activity cursor could not be read at turn finish' }],
+                      keptPreviewChars: 0,
+                      truncated: false,
+                    },
+                  })
                 } catch {
-                  // Activity is a presentation partition. A broken activity head
-                  // must not turn a successfully settled ACP prompt into an
-                  // outcome-unknown recovery gate.
+                  /* best effort diagnostic */
+                }
+              }
+            }
+            await writeUnsupportedChunkAudit()
+            const replayPayload =
+              (response.stopReason === 'cancelled' && !confirmedRemoteCancellation) ||
+              committedBinding === undefined ||
+              committedBinding.agentSessionId.length === 0
+                ? undefined
+                : {
+                    kind: 'dsh-acp' as const,
+                    version: 1 as const,
+                    ownerDshSessionId: sessionKey,
+                    profileId: self.profileId,
+                    profileGeneration: committedBinding.generation,
+                    agentSessionId: committedBinding.agentSessionId,
+                    bindingEpoch: committedBinding.bindingEpoch ?? committedBinding.generation,
+                    launchFingerprint: acpCanonicalHash16(committedBinding.launchFingerprint),
+                    committedPromptOrdinal: committedBinding.committedPromptOrdinal ?? 0,
+                    committedActivitySeq,
+                    ...(admissionProof?.anchorMessageId === undefined
+                      ? {}
+                      : { activityAnchorMessageId: admissionProof.anchorMessageId }),
+                  }
+            let responseLocale: string | undefined
+            if (response.stopReason === 'refusal' || response.stopReason === 'max_turn_requests') {
+              try {
+                responseLocale = self.resolveQuestions?.(sessionKey)?.locale
+              } catch {
+                /* locale lookup is presentation-only and cannot change a settled prompt outcome */
+              }
+            }
+            const responseFinish =
+              interruptedForInput &&
+              options.signal?.aborted !== true &&
+              response.stopReason !== 'refusal' &&
+              response.stopReason !== 'max_turn_requests'
+                ? { kind: 'stop' as const }
+                : finishReason(String(response.stopReason), responseLocale)
+            // ACP deliberately separates private reasoning from the visible
+            // assistant answer.  A successful turn that only emitted
+            // agent_thought_chunk is therefore not a usable DSH answer.  Do not
+            // promote reasoning to text (or guess a trailing sentence); surface
+            // a stable provider error so DSH does not present an apparently
+            // successful, answer-less turn.
+            const hasCompletedReport =
+              response.stopReason === 'end_turn' &&
+              teammateReportConfirmed &&
+              !promptSignal.aborted &&
+              options.signal?.aborted !== true
+            const hasConcludedTurnTool =
+              response.stopReason === 'end_turn' &&
+              turnConclusionConfirmed &&
+              !promptSignal.aborted &&
+              options.signal?.aborted !== true
+            const hasSuccessfulToolResult =
+              response.stopReason === 'end_turn' &&
+              successfulToolResultConfirmed &&
+              !promptSignal.aborted &&
+              options.signal?.aborted !== true
+            // This records a delivered Host tool result, not completion of the user's broader task.
+            const finalReason =
+              responseFinish.kind === 'stop' &&
+              !visibleContentEmitted &&
+              !interruptedForInput &&
+              !hasCompletedReport &&
+              !hasConcludedTurnTool &&
+              !hasSuccessfulToolResult
+                ? {
+                    kind: 'error' as const,
+                    failure: {
+                      code: 'ACP_NO_VISIBLE_RESPONSE',
+                      message: 'ACP agent completed without a visible response',
+                    },
+                  }
+                : responseFinish
+            // Start the projection transaction before publishing finish so its
+            // canonical sidecar payload is already durable if the host exits.
+            // The projector then waits at its parent barrier until DSH consumes
+            // this finish and durably closes the parent turn. Projection is an
+            // additive record and must never delay or rewrite the Agent answer.
+            void projectAfterFinish()
+            if (response.stopReason === 'cancelled') {
+              handoff.afterTerminalFinish(async () => {
+                // Only a vendor-initiated cancellation is mirrored into the
+                // native AgentLoop. User Stop and normal input steering already
+                // own their native cancellation boundary.
+                if (
+                  confirmedRemoteCancellation &&
+                  options.signal?.aborted !== true &&
+                  !promptSignal.aborted &&
+                  !interruptedForInput
+                )
+                  remoteCancellationHook?.()
+                await cancelledRuntimeRetirement
+              })
+            }
+            pushChunk({
+              type: 'finish',
+              reason: finalReason,
+              ...(replayPayload === undefined ? {} : { replayState: { response: replayPayload } }),
+            })
+            if (response.stopReason === 'cancelled') {
+              // Retire the vendor process after response settlement. This also
+              // runs for native Stop, whose aborted consumer may never request
+              // another iterator item to acknowledge the finish callback.
+              cancelledRuntimeRetirement = (async () => {
+                try {
+                  await runtime.retireCancelledSession?.()
+                } catch {
                   try {
-                    await durableSidecar.append(sessionKey as never, {
-                      kind: 'degradation',
-                      data: {
-                        code: 'activity-head-unavailable',
-                        items: [{ type: 'activity-head', reason: 'activity cursor could not be read at turn finish' }],
-                        keptPreviewChars: 0,
-                        truncated: false,
-                      },
-                    })
+                    self.log?.('ACP cancelled runtime cleanup failed')
                   } catch {
-                    /* best effort diagnostic */
+                    /* cleanup diagnostics cannot change persisted output */
                   }
                 }
-              }
-              await writeUnsupportedChunkAudit()
-              const replayPayload =
-                response.stopReason === 'cancelled' ||
-                committedBinding === undefined ||
-                runtime.acpSessionId === undefined
-                  ? undefined
-                  : {
-                      kind: 'dsh-acp' as const,
-                      version: 1 as const,
-                      ownerDshSessionId: sessionKey,
-                      profileId: self.profileId,
-                      profileGeneration: committedBinding.generation,
-                      agentSessionId: runtime.acpSessionId,
-                      bindingEpoch: committedBinding.bindingEpoch ?? committedBinding.generation,
-                      launchFingerprint: acpCanonicalHash16(committedBinding.launchFingerprint),
-                      committedPromptOrdinal: committedBinding.committedPromptOrdinal ?? 0,
-                      committedActivitySeq,
-                      ...(admissionProof?.anchorMessageId === undefined
-                        ? {}
-                        : { activityAnchorMessageId: admissionProof.anchorMessageId }),
-                    }
-              let responseLocale: string | undefined
-              if (response.stopReason === 'refusal' || response.stopReason === 'max_turn_requests') {
-                try {
-                  responseLocale = self.resolveQuestions?.(sessionKey)?.locale
-                } catch {
-                  /* locale lookup is presentation-only and cannot change a settled prompt outcome */
-                }
-              }
-              const responseFinish =
-                interruptedForInput &&
-                options.signal?.aborted !== true &&
-                response.stopReason !== 'refusal' &&
-                response.stopReason !== 'max_turn_requests'
-                  ? { kind: 'stop' as const }
-                  : finishReason(String(response.stopReason), responseLocale)
-              // ACP deliberately separates private reasoning from the visible
-              // assistant answer.  A successful turn that only emitted
-              // agent_thought_chunk is therefore not a usable DSH answer.  Do not
-              // promote reasoning to text (or guess a trailing sentence); surface
-              // a stable provider error so DSH does not present an apparently
-              // successful, answer-less turn.
-              const hasCompletedReport =
-                response.stopReason === 'end_turn' &&
-                teammateReportConfirmed &&
-                !promptSignal.aborted &&
-                options.signal?.aborted !== true
-              const finalReason =
-                responseFinish.kind === 'stop' && !visibleContentEmitted && !interruptedForInput && !hasCompletedReport
-                  ? {
-                      kind: 'error' as const,
-                      failure: {
-                        code: 'ACP_NO_VISIBLE_RESPONSE',
-                        message: 'ACP agent completed without a visible response',
-                      },
-                    }
-                  : responseFinish
-              // Start the projection transaction before publishing finish so its
-              // canonical sidecar payload is already durable if the host exits.
-              // The projector then waits at its parent barrier until DSH consumes
-              // this finish and durably closes the parent turn. Projection is an
-              // additive record and must never delay or rewrite the Agent answer.
-              void projectAfterFinish()
-              pushChunk({
-                type: 'finish',
-                reason: finalReason,
-                ...(replayPayload === undefined ? {} : { replayState: { response: replayPayload } }),
-              })
-            } catch (error: unknown) {
-              settleRunningActivities('failed')
-              await activityWriteTail
-              try {
-                await self.sidecar?.writeRecoveryState({
-                  dshSessionId: sessionKey,
-                  kind: 'outcome-unknown',
-                  cause: 'load-failed',
-                  detail: 'ACP completed but the host could not durably settle its dispatch record',
-                  provider: options.provider,
-                  ...(runtime.acpSessionId === undefined ? {} : { acpSessionId: runtime.acpSessionId }),
-                  updatedAt: Date.now(),
-                })
-              } catch {
-                /* preserve the settlement error */
-              }
-              await self.releaseRuntime(runtimeKey, runtime)
-              failure = error
-            } finally {
-              done = true
-              wake?.()
-              wake = undefined
+              })()
             }
-          },
-          async (error: unknown) => {
-            remoteSettled = true
-            stopWatchingInput?.()
-            await contentDeliveryTail.catch(() => undefined)
-            await writeUnsupportedChunkAudit()
-            settleRunningActivities(options.signal?.aborted === true ? 'cancelled' : 'failed')
+          } catch (error: unknown) {
+            settleRunningActivities(unresolvedActivityStatus)
             await activityWriteTail
-            // `auth_required` is a definitive JSON-RPC rejection, not an
-            // ambiguous transport loss: the Agent confirmed that it did not run
-            // the prompt. Keep the binding for an explicit reconnect after login,
-            // but do not tell the user that the prior outcome is unknown.
-            const authenticationRequired = error instanceof AcpClientError && error.kind === 'auth_required'
-            try {
-              await self.sidecar?.writeRecoveryState({
-                dshSessionId: sessionKey,
-                kind: authenticationRequired ? 'reconnect-required' : 'outcome-unknown',
-                cause: authenticationRequired ? 'auth-required' : 'load-failed',
-                detail: authenticationRequired
-                  ? 'The ACP Agent rejected the prompt because authentication is required. Sign in to the Agent, then reconnect this session.'
-                  : 'ACP prompt ended before its remote outcome was confirmed',
-                provider: options.provider,
-                ...(runtime.acpSessionId === undefined ? {} : { acpSessionId: runtime.acpSessionId }),
-                updatedAt: Date.now(),
-              })
-            } catch {
-              /* preserve the original transport error */
+            if (terminalSettlementSignal.aborted) {
+              // Even if response projection failed before the first settle
+              // call, this confirmed remote terminal still needs a retained
+              // local task. Start/retain it without making Stop wait for I/O.
+              if (localSettlementTask === undefined) void settleKnownRemoteTerminal().catch(() => undefined)
+              retainHealthyRuntimeAfterNotDispatched = true
+              failure = abortReason(terminalSettlementSignal)
+              return
             }
-            await self.releaseRuntime(runtimeKey, runtime)
-            failure = error
+            let localSettlementFailure: unknown = error instanceof AcpLocalSettlementError ? error : undefined
+            try {
+              if (localSettlementFailure === undefined) await settleKnownRemoteTerminalAndWait()
+              else {
+                await waitForKnownTerminalSettlement()
+                localSettlementFailure = undefined
+              }
+            } catch (settlementError) {
+              localSettlementFailure = settlementError
+            }
+            if (terminalSettlementSignal.aborted) {
+              if (localSettlementTask === undefined) void settleKnownRemoteTerminal().catch(() => undefined)
+              retainHealthyRuntimeAfterNotDispatched = true
+              failure = abortReason(terminalSettlementSignal)
+              return
+            }
+            retainHealthyRuntimeAfterNotDispatched = true
+            failure =
+              localSettlementFailure === undefined
+                ? new LlmError(
+                    'The ACP Agent completed, but the response could not be projected into the DSH turn.',
+                    'ACP_RESPONSE_PROJECTION_FAILED',
+                    { cause: error },
+                  )
+                : new LlmError(
+                    localSettlementFailure instanceof Error
+                      ? localSettlementFailure.message
+                      : 'ACP results are not saved yet; local storage will retry automatically.',
+                    'ACP_LOCAL_SETTLEMENT_FAILED',
+                    { cause: localSettlementFailure },
+                  )
+          } finally {
             done = true
             wake?.()
             wake = undefined
-          },
-        )
+          }
+        }
+        const prompting = promptResult.then(handlePromptResponse, async (error: unknown) => {
+          remoteSettled = true
+          stopWatchingInput?.()
+          const settlementFailure = error instanceof AcpHostSettlementError ? error : undefined
+          if (
+            settlementFailure?.code === 'ACP_HOST_FEEDBACK_COMMIT_FAILED' &&
+            settlementFailure.remoteOutcomeKnown === true
+          ) {
+            const response = settlementFailure.remoteResponse
+            if (response !== undefined) {
+              if (response.stopReason === 'cancelled') self.markConfirmedUserModeForRestore(sessionKey, runtime)
+              try {
+                await settleKnownRemoteTerminalAndWait()
+                await handlePromptResponse(response, true)
+              } catch (settlementError) {
+                if (terminalSettlementSignal.aborted) {
+                  retainHealthyRuntimeAfterNotDispatched = true
+                  failure = abortReason(terminalSettlementSignal)
+                  done = true
+                  wake?.()
+                  wake = undefined
+                  return
+                }
+                await contentDeliveryTail.catch(() => undefined)
+                await writeUnsupportedChunkAudit()
+                finishExternalDelegations()
+                settleRunningActivities(options.signal?.aborted === true ? 'cancelled' : 'unfinished')
+                await activityWriteTail
+                retainHealthyRuntimeAfterNotDispatched = true
+                failure = new LlmError(
+                  settlementError instanceof Error
+                    ? settlementError.message
+                    : 'ACP results are not saved yet; local storage will retry automatically.',
+                  'ACP_LOCAL_SETTLEMENT_FAILED',
+                  { cause: settlementError },
+                )
+                done = true
+                wake?.()
+                wake = undefined
+              }
+              return
+            }
+            try {
+              await settleKnownRemoteTerminal()
+              retainHealthyRuntimeAfterNotDispatched = true
+              failure = new LlmError(
+                'The ACP Agent completed, but its response could not be recovered to finish the turn.',
+                'ACP_HOST_FEEDBACK_COMMIT_FAILED',
+                { cause: error },
+              )
+            } catch (settlementError) {
+              retainHealthyRuntimeAfterNotDispatched = true
+              failure = new LlmError(
+                settlementError instanceof Error
+                  ? settlementError.message
+                  : 'ACP results are not saved yet; local storage will retry automatically.',
+                'ACP_LOCAL_SETTLEMENT_FAILED',
+                { cause: settlementError },
+              )
+            }
+            done = true
+            wake?.()
+            wake = undefined
+            return
+          }
+          await contentDeliveryTail.catch(() => undefined)
+          await writeUnsupportedChunkAudit()
+          finishExternalDelegations()
+          settleRunningActivities(options.signal?.aborted === true ? 'cancelled' : 'unfinished')
+          await activityWriteTail
+          // `auth_required` is a definitive JSON-RPC rejection, not an
+          // ambiguous transport loss: the Agent confirmed that it did not run
+          // the prompt. Keep the binding for an explicit reconnect after login,
+          // but do not tell the user that the prior outcome is unknown.
+          const authenticationRequired = error instanceof AcpClientError && error.kind === 'auth_required'
+          if (settlementFailure?.code === 'ACP_HOST_TOOL_NOT_DISPATCHED') {
+            try {
+              await settleKnownRemoteTerminal()
+              retainHealthyRuntimeAfterNotDispatched = true
+              failure = new LlmError(
+                'The ACP Agent ended its response before the DSH Host tool was dispatched',
+                'ACP_HOST_TOOL_NOT_DISPATCHED',
+                { cause: error },
+              )
+            } catch (settlementError) {
+              retainHealthyRuntimeAfterNotDispatched = true
+              failure = new LlmError(
+                settlementError instanceof Error
+                  ? settlementError.message
+                  : 'ACP results are not saved yet; local storage will retry automatically.',
+                'ACP_LOCAL_SETTLEMENT_FAILED',
+                { cause: settlementError },
+              )
+            }
+            done = true
+            wake?.()
+            wake = undefined
+            return
+          }
+          const reconciliationRequired =
+            settlementFailure?.code === 'ACP_HOST_TOOL_RECONCILIATION_REQUIRED' ||
+            settlementFailure?.code === 'ACP_HOST_FEEDBACK_COMMIT_FAILED'
+          const recoveryState: AcpRecoveryState = {
+            dshSessionId: sessionKey,
+            kind: authenticationRequired
+              ? 'reconnect-required'
+              : reconciliationRequired
+                ? 'reconciliation-required'
+                : 'outcome-unknown',
+            cause: authenticationRequired ? 'auth-required' : 'load-failed',
+            detail: authenticationRequired
+              ? 'The ACP Agent rejected the prompt because authentication is required. Sign in to the Agent, then reconnect this session.'
+              : settlementFailure?.code === 'ACP_HOST_FEEDBACK_COMMIT_FAILED'
+                ? 'The ACP tool feedback commit into the native Agent inbox could not be confirmed; inspect the Agent session before continuing.'
+                : reconciliationRequired
+                  ? 'The ACP Agent ended its response while a DSH Host tool was still executing; inspect both sides before continuing.'
+                  : settlementFailure?.code === 'ACP_HOST_CALL_DRAIN_TIMEOUT'
+                    ? 'ACP prompt ended while a DSH Host tool was still active and its outcome could not be confirmed.'
+                    : 'ACP prompt ended before its remote outcome was confirmed',
+            provider: options.provider,
+            ...(runtime.acpSessionId === undefined ? {} : { acpSessionId: runtime.acpSessionId }),
+            updatedAt: Date.now(),
+          }
+          try {
+            if (self.sidecar === undefined) throw new Error('ACP sidecar unavailable')
+            await self.sidecar?.writeRecoveryState(recoveryState)
+          } catch {
+            self.rememberRecoveryFallback(recoveryState)
+          }
+          await self.releaseRuntime(runtimeKey, runtime)
+          failure =
+            settlementFailure === undefined
+              ? error
+              : new LlmError(
+                  recoveryState.detail!,
+                  reconciliationRequired ? 'ACP_RECONCILIATION_REQUIRED' : 'ACP_RECOVERY_REQUIRED',
+                  { cause: error },
+                )
+          done = true
+          wake?.()
+          wake = undefined
+        })
         void prompting
         try {
           while (!done || queue.length > 0) {
@@ -2367,16 +3358,22 @@ export class AcpProfileAdapter extends LlmAdapter {
           }
         } finally {
           stopWatchingInput?.()
+          terminalSettlementWait.dispose()
           // AgentLoop closes the iterator as soon as an aborted turn observes a
           // final ACP update. Keep return() pending until the matching prompt has
           // confirmed cancellation and its dispatch record is durably settled;
           // otherwise an immediate next turn can see a false uncertain outcome.
-          if (options.signal?.aborted === true) await prompting
+          if (options.signal?.aborted === true) {
+            await prompting
+            await cancelledRuntimeRetirement
+          }
         }
       } catch (error: unknown) {
+        terminalSettlementLifetime?.()
         // Setup/read/recovery gates can fail after initialize has spawned the
         // Agent. Existing classified failure paths may already have released it.
-        await self.releaseRuntime(runtimeKey, runtime)
+        if (!retainHealthyRuntimeAfterNotDispatched && !retainCancelledRuntimeForRefreshRetry)
+          await self.releaseRuntime(runtimeKey, runtime)
         throw error
       }
     })()
@@ -2411,8 +3408,10 @@ export class AcpProfileAdapter extends LlmAdapter {
       updatedAt: Date.now(),
     }
     try {
-      await this.sidecar?.writeRecoveryState(recovery)
+      if (this.sidecar === undefined) throw new Error('ACP sidecar is unavailable')
+      await this.sidecar.writeRecoveryState(recovery)
     } catch (error: unknown) {
+      this.rememberRecoveryFallback(recovery)
       throw new LlmError(
         `ACP recovery state could not be persisted: ${error instanceof Error ? error.message : String(error)}`,
         'ACP_RECOVERY_STATE_UNAVAILABLE',
@@ -2424,11 +3423,49 @@ export class AcpProfileAdapter extends LlmAdapter {
   private async refreshBindingHead(
     sessionId: string,
     session: SessionLike | undefined,
+    settlementTarget?: BindingSettlementCommit,
   ): Promise<AcpBindingData | undefined> {
-    if (this.sidecar === undefined || session === undefined) return undefined
+    if (this.sidecar === undefined) {
+      if (settlementTarget !== undefined) throw new Error('ACP sidecar is unavailable for terminal binding commit')
+      return undefined
+    }
+    if (session === undefined && settlementTarget === undefined) return undefined
     const current = await this.sidecar.readLatestBinding(sessionId as never)
-    if (current?.status !== 'ok') return undefined
-    const head = Math.max(session.seq - 1, current.binding.dshCommittedSeq)
+    if (current?.status !== 'ok') {
+      if (settlementTarget !== undefined) throw new Error('ACP binding disappeared before terminal settlement')
+      return undefined
+    }
+    if (settlementTarget !== undefined) {
+      const binding = current.binding
+      const identityMatches =
+        binding.profileId === settlementTarget.profileId &&
+        binding.agentSessionId === settlementTarget.agentSessionId &&
+        binding.generation === settlementTarget.generation &&
+        (binding.bindingEpoch ?? binding.generation) === settlementTarget.bindingEpoch
+      if (!identityMatches) throw new Error('ACP binding identity changed before terminal settlement')
+      const ordinal = binding.committedPromptOrdinal ?? 0
+      if (ordinal === settlementTarget.targetPromptOrdinal) {
+        if (binding.dshCommittedSeq < settlementTarget.dshCommittedSeq) {
+          const repaired: AcpBindingData = {
+            ...binding,
+            dshCommittedSeq: settlementTarget.dshCommittedSeq,
+          }
+          await this.sidecar.append(sessionId as never, { kind: 'binding', data: repaired })
+          return repaired
+        }
+        return binding
+      }
+      if (ordinal !== settlementTarget.basePromptOrdinal)
+        throw new Error('ACP binding prompt ordinal advanced while terminal settlement was pending')
+      const next: AcpBindingData = {
+        ...binding,
+        dshCommittedSeq: Math.max(binding.dshCommittedSeq, settlementTarget.dshCommittedSeq),
+        committedPromptOrdinal: settlementTarget.targetPromptOrdinal,
+      }
+      await this.sidecar.append(sessionId as never, { kind: 'binding', data: next })
+      return next
+    }
+    const head = Math.max((session?.seq ?? 0) - 1, current.binding.dshCommittedSeq)
     const next: AcpBindingData = {
       ...current.binding,
       dshCommittedSeq: Math.max(head, current.binding.dshCommittedSeq),
@@ -2438,8 +3475,62 @@ export class AcpProfileAdapter extends LlmAdapter {
     return next
   }
 
+  private async readBindingSettlementTarget(sessionId: string): Promise<BindingSettlementTarget | undefined> {
+    const current = await this.sidecar?.readLatestBinding(sessionId as never)
+    if (current?.status !== 'ok') return undefined
+    const binding = current.binding
+    const basePromptOrdinal = binding.committedPromptOrdinal ?? 0
+    return {
+      profileId: binding.profileId,
+      agentSessionId: binding.agentSessionId,
+      generation: binding.generation,
+      bindingEpoch: binding.bindingEpoch ?? binding.generation,
+      basePromptOrdinal,
+      targetPromptOrdinal: basePromptOrdinal + 1,
+      baseDshCommittedSeq: binding.dshCommittedSeq,
+    }
+  }
+
+  private localSettlementSink(): AcpLocalSettlementSink {
+    return {
+      settleDispatch: (sessionId, key) => this.ledger.settle(sessionId, key),
+      readDispatch: (sessionId, key) => this.ledger.read(sessionId, key),
+      writeRuntimeSnapshot: async (sessionId, snapshot) => {
+        if (this.sidecar === undefined) throw new Error('ACP sidecar is unavailable for terminal snapshot persistence')
+        await this.sidecar.writeOptionSnapshot(sessionId as never, snapshot)
+      },
+      refreshBindingHead: (sessionId, session, target) => this.refreshBindingHead(sessionId, session, target),
+    }
+  }
+
+  private settlementWaitSignal(
+    sessionId: string,
+    owner: object | undefined,
+    requestSignal?: AbortSignal,
+  ): { readonly signal: AbortSignal; readonly dispose: () => void } {
+    const controller = new AbortController()
+    let waiters = this.settlementSessionWaitControllers.get(sessionId)
+    if (waiters === undefined) this.settlementSessionWaitControllers.set(sessionId, (waiters = new Set()))
+    const entry = { owner, controller }
+    waiters.add(entry)
+    const signal = AbortSignal.any([
+      this.settlementCloseController.signal,
+      controller.signal,
+      ...(requestSignal ? [requestSignal] : []),
+    ])
+    return {
+      signal,
+      dispose: () => {
+        waiters.delete(entry)
+        if (waiters.size === 0 && this.settlementSessionWaitControllers.get(sessionId) === waiters)
+          this.settlementSessionWaitControllers.delete(sessionId)
+      },
+    }
+  }
+
   /** Explicitly discard only ACP-side continuity; DSH history is untouched. */
   async rebindBlank(sessionId: string): Promise<void> {
+    this.assertNoQuarantinedHostCalls(sessionId, true)
     if (this.sidecar === undefined)
       throw new LlmError(
         'ACP sidecar is unavailable; the blank rebind cannot be made durable',
@@ -2449,10 +3540,10 @@ export class AcpProfileAdapter extends LlmAdapter {
     const nextGeneration = binding?.status === 'ok' ? binding.binding.generation + 1 : 1
     this.nextGenerations.set(sessionId, nextGeneration)
     await this.closeSessionRuntime(sessionId)
+    this.assertNoQuarantinedHostCalls(sessionId, true)
     // Explicitly abandoning the old Agent context also resolves any
     // dispatch-uncertain guard; no remote prompt is retried automatically.
-    await this.sidecar.clearDispatch(sessionId as never)
-    await this.sidecar.writeRecoveryState({
+    const healthyState: AcpRecoveryState = {
       dshSessionId: sessionId as never,
       kind: 'healthy',
       ...(binding?.status === 'ok'
@@ -2461,12 +3552,32 @@ export class AcpProfileAdapter extends LlmAdapter {
       generation: nextGeneration,
       lastUserAction: 'rebind-blank',
       updatedAt: Date.now(),
-    })
+    }
+    try {
+      await this.sidecar.writeRecoveryState(healthyState, { clearDispatch: true })
+    } catch (error) {
+      this.rememberRecoveryFallback({
+        ...healthyState,
+        kind: 'outcome-unknown',
+        cause: 'load-failed',
+        detail: 'Blank rebind did not complete durably; the previous ACP outcome still requires recovery.',
+        updatedAt: Date.now(),
+      })
+      throw new LlmError('ACP blank rebind could not be completed durably', 'ACP_RECOVERY_STATE_UNAVAILABLE', {
+        cause: error,
+      })
+    }
+    if (this.hostRoot !== undefined) {
+      clearHostExecutionOwners(this.hostRoot, sessionId)
+      clearSharedRecoveryFallback(this.hostRoot, sessionId)
+    }
     this.inMemoryRecoveryRequired.delete(sessionId)
+    this.inMemoryRecoveryStates.delete(sessionId)
   }
 
   /** Allow a user-selected retry to reuse the original durable ACP binding. */
   async retryOriginal(sessionId: string): Promise<void> {
+    this.assertNoQuarantinedHostCalls(sessionId, true)
     if (this.sidecar === undefined)
       throw new LlmError(
         'ACP sidecar is unavailable; the original binding cannot be restored',
@@ -2492,6 +3603,7 @@ export class AcpProfileAdapter extends LlmAdapter {
     // Retry only replaces runtimes owned by this DSH session. Other DSH
     // sessions must keep their live Agent processes untouched.
     await this.closeSessionRuntime(sessionId)
+    this.assertNoQuarantinedHostCalls(sessionId, true)
     const generation: ProfileGeneration = {
       id: profileLaunchIdentityHash(this.profileId, profile),
       config: profile,
@@ -2508,8 +3620,7 @@ export class AcpProfileAdapter extends LlmAdapter {
       await this.persistRuntimeSnapshot(sessionId, runtime)
       // The user explicitly reviewed the uncertain outcome. Remove only the
       // durable dispatch guard; the ACP binding and all DSH history remain.
-      await this.sidecar.clearDispatch(sessionId as never)
-      await this.sidecar.writeRecoveryState({
+      const healthyState: AcpRecoveryState = {
         dshSessionId: sessionId as never,
         kind: 'healthy',
         provider: binding.provider,
@@ -2517,14 +3628,20 @@ export class AcpProfileAdapter extends LlmAdapter {
         generation: binding.generation,
         lastUserAction: 'retry-original',
         updatedAt: Date.now(),
-      })
+      }
+      await this.sidecar.writeRecoveryState(healthyState, { clearDispatch: true })
+      if (this.hostRoot !== undefined) {
+        clearHostExecutionOwners(this.hostRoot, sessionId)
+        clearSharedRecoveryFallback(this.hostRoot, sessionId)
+      }
       this.inMemoryRecoveryRequired.delete(sessionId)
+      this.inMemoryRecoveryStates.delete(sessionId)
     } catch (error: unknown) {
       await this.releaseRuntime(runtimeKey, runtime)
       const detail = `ACP retry failed: ${error instanceof Error ? error.message : String(error)}`
       const missing = /(?:session[_ -]?)?(?:not[ -]?found|unknown[_ -]?session)|does not exist/i.test(detail)
       const capability = /cannot restore|does not advertise/i.test(detail)
-      await this.sidecar.writeRecoveryState({
+      const recoveryFailure: AcpRecoveryState = {
         dshSessionId: sessionId as never,
         kind: missing ? 'session-lost' : capability ? 'reconciliation-required' : 'reconnect-required',
         cause: missing ? 'id-not-found' : capability ? 'capability-missing' : 'load-failed',
@@ -2533,12 +3650,21 @@ export class AcpProfileAdapter extends LlmAdapter {
         acpSessionId: binding.agentSessionId,
         generation: binding.generation,
         updatedAt: Date.now(),
-      })
+      }
+      try {
+        await this.sidecar.writeRecoveryState(recoveryFailure)
+      } catch {
+        this.rememberRecoveryFallback(recoveryFailure)
+      }
       throw new LlmError(detail, missing ? 'ACP_SESSION_NOT_FOUND' : 'ACP_RETRY_FAILED')
     }
   }
 
   close(): Promise<void> {
+    this.settlementCloseController.abort(new DOMException('Adapter closed', 'AbortError'))
+    this.settlementSessionWaitControllers.clear()
+    const retireSettlement = this.settlementOwnerDisposer?.() ?? Promise.resolve()
+    this.settlementOwnerDisposer = undefined
     const handoffs = [...this.handoffs.entries()]
     for (const [key, owner] of handoffs) {
       this.detachHandoffOwner(key, owner)
@@ -2550,33 +3676,80 @@ export class AcpProfileAdapter extends LlmAdapter {
     }
     this.handoffs.clear()
     this.inMemoryRecoveryRequired.clear()
+    this.confirmedUserModes.clear()
     this.admittedToolSchemas.clear()
     this.admittedToolSchemaOwners.clear()
     const keys = [...this.runtimes.keys()]
-    const closing = [...this.runtimes.values()].map((runtime) => runtime.close())
+    const runtimes = [...this.runtimes.entries()]
     this.runtimes.clear()
     for (const key of keys) this.controlsChanged?.(key.slice(0, key.lastIndexOf(':')))
-    return Promise.all([
-      ...closing,
-      ...handoffs
-        .map(([, owner]) => owner)
-        .filter((owner) => owner.stream.suspended)
-        .map((owner) => owner.stream.drain()),
-    ]).then(() => undefined)
+    return (async () => {
+      await retireSettlement
+      await Promise.all(
+        runtimes.map(async ([key, runtime]) => {
+          if (this.hostRoot !== undefined)
+            retainHostExecutionOwner(this.hostRoot, key.slice(0, key.lastIndexOf(':')), runtime)
+          await runtime.close()
+        }),
+      )
+      await Promise.all(
+        handoffs
+          .map(([, owner]) => owner)
+          .filter((owner) => owner.stream.suspended)
+          .map((owner) => owner.stream.drain()),
+      )
+    })()
   }
 
   private async releaseRuntime(key: string, runtime: AcpProfileRuntime): Promise<void> {
     // An old asynchronous failure must not evict a replacement with the same key.
     if (this.runtimes.get(key) !== runtime) return
+    if (this.hostRoot !== undefined)
+      retainHostExecutionOwner(this.hostRoot, key.slice(0, key.lastIndexOf(':')), runtime)
     this.runtimes.delete(key)
     this.controlsChanged?.(key.slice(0, key.lastIndexOf(':')))
     await runtime.close().catch(() => undefined)
   }
 
+  private assertNoQuarantinedHostCalls(sessionId: string, recoveryAction = false): void {
+    if (this.hostRoot === undefined) return
+    try {
+      assertHostExecutionQuiescent(this.hostRoot, sessionId, recoveryAction)
+    } catch (error) {
+      throw new LlmError(
+        'ACP Host tool execution is still active; wait for it to settle before recovery',
+        'ACP_RECOVERY_REQUIRED',
+        { cause: error },
+      )
+    }
+  }
+
+  private rememberRecoveryFallback(state: AcpRecoveryState): void {
+    this.inMemoryRecoveryRequired.set(state.dshSessionId, state.updatedAt)
+    this.inMemoryRecoveryStates.set(state.dshSessionId, state)
+    if (this.hostRoot !== undefined) setSharedRecoveryFallback(this.hostRoot, state)
+    try {
+      this.controlsChanged?.(state.dshSessionId)
+    } catch {
+      /* the local gate remains authoritative if a UI subscriber fails */
+    }
+  }
+
   /** Release only the disposed host session's runtimes; keep its durable history. */
   async disposeSession(session: { readonly id: string; readonly identity?: object }): Promise<void> {
     const owner = session.identity ?? session
+    const waiters = this.settlementSessionWaitControllers.get(session.id)
+    if (waiters !== undefined) {
+      for (const waiter of [...waiters]) {
+        if (waiter.owner === owner) {
+          waiter.controller.abort(new DOMException('Session disposed', 'AbortError'))
+          waiters.delete(waiter)
+        }
+      }
+      if (waiters.size === 0) this.settlementSessionWaitControllers.delete(session.id)
+    }
     await this.closeSessionRuntime(session.id, owner)
+    if (this.confirmedUserModes.get(session.id)?.owner === owner) this.confirmedUserModes.delete(session.id)
     if (this.admittedToolSchemaOwners.get(session.id) === owner) {
       this.admittedToolSchemaOwners.delete(session.id)
       this.admittedToolSchemas.delete(session.id)
@@ -2670,6 +3843,9 @@ export class AcpProfileAdapter extends LlmAdapter {
     }
     return {
       profileId: this.profileId,
+      diagnosticDshSessionId: sessionId,
+      ...(runtime === 'codebuddy' ? { refreshSessionAfterCancelledPrompt: true } : {}),
+      onHostSettlementChanged: () => this.controlsChanged?.(sessionId),
       ...sessionProtocolExtensions(runtime),
       ...(this.mcpKey === undefined
         ? {}

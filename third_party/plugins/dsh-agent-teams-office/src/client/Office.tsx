@@ -1,14 +1,14 @@
 import type { LoadSnapshot, MemberStatus } from '../types.ts';
 import type { OfficeRecord, SceneMount } from './scene-cache.ts';
 import type { Translate } from './locales.ts';
-interface OfficeProps { t: Translate; load: LoadSnapshot; sessionId: string; visible: boolean; signal: AbortSignal; office: OfficeRecord }
+interface OfficeProps { t: Translate; localeRevision: number; load: LoadSnapshot; sessionId: string; visible: boolean; signal: AbortSignal; office: OfficeRecord }
 import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives';
 import { pollSnapshot } from './poll.ts';
 import { TEAMMATE_CAPACITY } from './team-office/layout.ts';
 
 /** Native sidebar tab content; the scene survives docking and floating through its tab-owned cache. */
-export function Office({ t, load, sessionId, visible, signal, office }: OfficeProps) {
+export function Office({ t, localeRevision, load, sessionId, visible, signal, office }: OfficeProps) {
   const { snapshot, selected, focused, sceneError, ready, view } = useSyncExternalStore(office.subscribe, office.getSnapshot);
   const [error, setError] = useState<Error | null>(null);
   const [retry, setRetry] = useState(0);
@@ -22,7 +22,7 @@ export function Office({ t, load, sessionId, visible, signal, office }: OfficePr
     const mounted = office.mount(canvas.current!, signal); seat.current = mounted;
     return () => { mounted.detach(); seat.current = null; };
   }, [office, signal]);
-  useEffect(() => { office.update(snapshot?.members ?? [], stateText, kind => kind === 'idle' || kind === 'put-cup' ? '' : t(`activity_${kind}`)); }, [snapshot, selected, ready, t, office]);
+  useEffect(() => { office.update(snapshot?.members ?? [], stateText, kind => kind === 'idle' || kind === 'put-cup' ? '' : t(`activity_${kind}`), t(view === 'pixel' ? 'canvasPixel' : 'canvasTeam')); }, [snapshot, selected, ready, view, t, localeRevision, office]);
   useEffect(() => { seat.current?.visible(visible); }, [visible, office, signal]);
 
   const members = snapshot?.members ?? [];

@@ -195,9 +195,10 @@ describe('常量：与宿主侧契约逐字对齐', () => {
     })
   })
 
-  it('ACP_CATALOG_ENTRIES 钉版：override 四条排前（devin/codex-acp/kimi/claude-acp），其余按 registry 顺序', () => {
-    expect(ACP_CATALOG_ENTRIES.slice(0, 4).map((entry) => entry.id)).toEqual([
+  it('ACP_CATALOG_ENTRIES 钉版：已验证的五条排前，其余按 registry 顺序', () => {
+    expect(ACP_CATALOG_ENTRIES.slice(0, 5).map((entry) => entry.id)).toEqual([
       'devin',
+      'codebuddy-code',
       'codex-acp',
       'kimi',
       'claude-acp',
@@ -536,7 +537,7 @@ describe('草稿种子：emptyDraft / draftFromCatalogEntry / draftFromAgent', (
     expect(emptyDraft()).toEqual({ id: '', name: '', command: '', argsText: '', envText: '', loginHint: '' })
   })
 
-  it('draftFromCatalogEntry 按条目 id 播种：内置 runtime 四条各回其编辑态', () => {
+  it('draftFromCatalogEntry 按条目 id 播种：内置 runtime 预设绑定各回其编辑态', () => {
     expect(draftFromCatalogEntry('devin')).toEqual({
       id: 'devin',
       catalogId: 'devin',
@@ -607,6 +608,21 @@ describe('草稿种子：emptyDraft / draftFromCatalogEntry / draftFromAgent', (
       loginHint: 'kimi login',
       runtime: 'kimi',
       catalogId: 'kimi',
+    })
+
+    // CodeBuddy has explicit adapter coverage and keeps its catalog runtime binding.
+    const codebuddy = catalogEntryOf('codebuddy-code')
+    expect(codebuddy).toMatchObject({
+      runtime: 'codebuddy',
+      loginHint: 'codebuddy',
+      args: ['--acp'],
+      verification: 'adapter-tested',
+    })
+    const codebuddyDraft = draftFromCatalogEntry('codebuddy-code')
+    expect(codebuddyDraft).toMatchObject({ runtime: 'codebuddy', catalogId: 'codebuddy-code', argsText: '--acp' })
+    expect(validateAgentDraft(codebuddyDraft as AgentDraft, {}, undefined).config).toMatchObject({
+      runtime: 'codebuddy',
+      catalogId: 'codebuddy-code',
     })
 
     // 未知条目 id → undefined（菜单只从 catalog 列表渲染，正常不可达）
@@ -1141,5 +1157,13 @@ describe('catalog identity survives profile customization', () => {
     const config: AcpAgentConfig = { name: 'Custom', command: 'custom', args: [], env: {}, catalogId: 'future-agent' }
     expect(draftFromAgent('my-custom', config).catalogId).toBe('future-agent')
     expect(effectiveRuntimeOf('my-custom', config)).toBeUndefined()
+    const copiedKnownCatalog: AcpAgentConfig = {
+      name: 'Custom CodeBuddy Wrapper',
+      command: 'custom',
+      args: [],
+      env: {},
+      catalogId: 'codebuddy-code',
+    }
+    expect(effectiveRuntimeOf('my-custom', copiedKnownCatalog)).toBeUndefined()
   })
 })

@@ -64,18 +64,41 @@ const pluginNames = releasePluginManifest.plugins.filter(plugin => plugin.deskto
 function installStartupOverlayMonitor() {
   if (window.__DSH_STARTUP_OVERLAYS__) return
   const state = window.__DSH_STARTUP_OVERLAYS__ = {
-    timeOrigin: performance.timeOrigin, legacySeenAt: null, ocbcSeenAt: null, goneAt: null,
+    timeOrigin: performance.timeOrigin, legacySeenAt: null, ocbcSeenAt: null,
+    ocbcStageVisibleAt: null, ocbcVisibleRafAt: null, goneAt: null,
   }
+  let visibleRafPending = false
   const scan = () => {
     const legacy = document.querySelector('[data-dsh-boot]') !== null
-    const ocbc = document.querySelector('[data-dsh-boot-ocbc]') !== null
+    const overlay = document.querySelector('[data-dsh-boot-ocbc]')
+    const ocbc = overlay !== null
     const now = performance.now()
     if (legacy && state.legacySeenAt === null) state.legacySeenAt = now
     if (ocbc && state.ocbcSeenAt === null) state.ocbcSeenAt = now
+    const stage = overlay?.firstElementChild
+    const canvas = stage?.querySelector('canvas')
+    const visible = stage !== null && stage !== undefined && canvas !== null
+      && getComputedStyle(stage).visibility === 'visible' && stage.getBoundingClientRect().width > 0
+      && stage.getBoundingClientRect().height > 0 && canvas.width > 0 && canvas.height > 0
+    if (visible && state.ocbcStageVisibleAt === null) state.ocbcStageVisibleAt = now
+    if (visible && state.ocbcVisibleRafAt === null && !visibleRafPending) {
+      visibleRafPending = true
+      requestAnimationFrame(() => {
+        visibleRafPending = false
+        const currentOverlay = document.querySelector('[data-dsh-boot-ocbc]')
+        const currentStage = currentOverlay?.firstElementChild
+        const currentCanvas = currentStage?.querySelector('canvas')
+        if (currentStage !== null && currentStage !== undefined && currentCanvas !== null
+          && getComputedStyle(currentStage).visibility === 'visible' && currentStage.getBoundingClientRect().width > 0
+          && currentStage.getBoundingClientRect().height > 0 && currentCanvas.width > 0 && currentCanvas.height > 0) {
+          state.ocbcVisibleRafAt = performance.now()
+        }
+      })
+    }
     if (state.ocbcSeenAt !== null && !legacy && !ocbc && state.goneAt === null) state.goneAt = now
     if (legacy || ocbc) state.goneAt = null
   }
-  new MutationObserver(scan).observe(document, { subtree: true, childList: true })
+  new MutationObserver(scan).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ['style'] })
   scan()
 }
 async function verifyPlugins(app, page, run, kind) {
@@ -268,11 +291,14 @@ for (const kind of scenarios) {
     mark('workspaceVisibleMs')
     await page.waitForFunction(() => {
       const state = (window).__DSH_STARTUP_OVERLAYS__
-      return state?.ocbcSeenAt !== null && state?.ocbcSeenAt !== undefined && state?.goneAt !== null
+      return state?.ocbcSeenAt !== null && state?.ocbcSeenAt !== undefined
+        && state?.ocbcVisibleRafAt !== null && state?.ocbcVisibleRafAt !== undefined && state?.goneAt !== null
     }, null, { timeout: 300_000 })
     const overlay = await page.evaluate(() => (window).__DSH_STARTUP_OVERLAYS__)
     const pageToLaunchMs = value => Math.round(overlay.timeOrigin + value - wallStart)
     run.timings.overlaySeenMs = pageToLaunchMs(overlay.ocbcSeenAt)
+    run.timings.ocbcStageVisibleMs = overlay.ocbcStageVisibleAt === null ? null : pageToLaunchMs(overlay.ocbcStageVisibleAt)
+    run.timings.ocbcVisibleRafMs = pageToLaunchMs(overlay.ocbcVisibleRafAt)
     run.timings.overlayGoneMs = pageToLaunchMs(overlay.goneAt)
     run.timings.legacyBootSeenMs = overlay.legacySeenAt === null ? null : pageToLaunchMs(overlay.legacySeenAt)
     await settingsLauncher.click()

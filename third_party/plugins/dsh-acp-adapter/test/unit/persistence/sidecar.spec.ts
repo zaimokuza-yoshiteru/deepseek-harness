@@ -26,22 +26,27 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { Worker } from 'node:worker_threads'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { SessionId } from '@deepseek-ai/dsh-session'
+import { ACP_CONFIG_IDENTIFIER_MAX } from '../../../src/contract/config-options.ts'
 import {
   ACP_SIDECAR_AUDIT_QUEUE_LIMIT,
   ACP_SIDECAR_DB_FILENAME,
   ACP_SIDECAR_SCHEMA_VERSION,
   ACP_SNAPSHOT_FIELD_MAX,
+  ACP_SNAPSHOT_MODE_DESCRIPTION_MAX,
   ACP_SNAPSHOT_OPTION_LIMIT,
   ACP_SNAPSHOT_TOTAL_BYTES,
   ACP_SNAPSHOT_VALUES_LIMIT,
   acpOptionsSnapshotOf,
   createAcpSidecar,
   installAcpSidecar,
+  toOptionsSnapshotRecord,
   type AcpBindingData,
   type AcpBindingRecord,
+  type AcpActivityRecord,
   type AcpOptionsSnapshotRecord,
   type AcpRecoveryState,
   type AcpSidecar,
@@ -132,6 +137,99 @@ async function latestBinding(sessionId: string): Promise<AcpBindingRecord | unde
 /** 直插 SQL 夹具连接（行级容错/索引表篡改用；用完必须 close）。 */
 function rawDb(): DatabaseSync {
   return new DatabaseSync(dbFile())
+}
+
+type LegacyActivityFixture = {
+  readonly dsh_session_id: string
+  readonly activity_id: string
+  readonly owner_dsh_session_id: string
+  readonly prompt_anchor_message_id: string
+  readonly activity_seq: number
+  readonly revision_seq: number
+  readonly time: number
+  readonly kind: string
+  readonly status: string
+  readonly presentation: string
+  readonly raw_detail: string | null
+  readonly raw_detail_ref: string | null
+  readonly content_index: number | null
+  readonly display_detail: string | null
+}
+
+const MIGRATION_ACTIVITY: Parameters<AcpSidecar['upsertActivity']>[0] = {
+  dshSessionId: 'sess-migration',
+  activityId: 'act-current',
+  ownerDshSessionId: 'owner-1',
+  promptAnchorMessageId: 'anchor-1',
+  time: TIME_BASE,
+  kind: 'plan',
+  status: 'running',
+  presentation: 'Current activity',
+  rawDetail: 'current raw detail',
+  rawDetailRef: 'current-ref',
+  contentIndex: 7,
+  display: { plan: [{ content: 'Current plan detail', status: 'in_progress' }] },
+}
+
+function legacyFixtureFromActivity(activity: AcpActivityRecord): LegacyActivityFixture {
+  return {
+    dsh_session_id: activity.dshSessionId,
+    activity_id: activity.activityId,
+    owner_dsh_session_id: activity.ownerDshSessionId,
+    prompt_anchor_message_id: activity.promptAnchorMessageId,
+    activity_seq: activity.activitySeq,
+    revision_seq: activity.revisionSeq,
+    time: activity.time,
+    kind: activity.kind,
+    status: activity.status,
+    presentation: activity.presentation,
+    raw_detail: activity.rawDetail ?? null,
+    raw_detail_ref: activity.rawDetailRef ?? null,
+    content_index: activity.contentIndex ?? null,
+    display_detail: activity.display === undefined ? null : JSON.stringify(activity.display),
+  }
+}
+
+async function seedLeftoverActivityJournal(
+  rowsForCurrent: (current: AcpActivityRecord) => readonly LegacyActivityFixture[],
+): Promise<AcpActivityRecord> {
+  const current = await store.upsertActivity(MIGRATION_ACTIVITY)
+  const rows = rowsForCurrent(current)
+  await store.dispose()
+  const db = rawDb()
+  try {
+    db.exec(`CREATE TABLE activity_journal_legacy (
+      dsh_session_id TEXT, activity_id TEXT, owner_dsh_session_id TEXT,
+      prompt_anchor_message_id TEXT, activity_seq INTEGER, revision_seq INTEGER,
+      time INTEGER, kind TEXT, status TEXT, presentation TEXT, raw_detail TEXT,
+      raw_detail_ref TEXT, content_index INTEGER, display_detail TEXT
+    ) STRICT`)
+    const insert = db.prepare(
+      'INSERT INTO activity_journal_legacy (dsh_session_id, activity_id, owner_dsh_session_id, prompt_anchor_message_id, activity_seq, revision_seq, time, kind, status, presentation, raw_detail, raw_detail_ref, content_index, display_detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    )
+    for (const row of rows) {
+      insert.run(
+        row.dsh_session_id,
+        row.activity_id,
+        row.owner_dsh_session_id,
+        row.prompt_anchor_message_id,
+        row.activity_seq,
+        row.revision_seq,
+        row.time,
+        row.kind,
+        row.status,
+        row.presentation,
+        row.raw_detail,
+        row.raw_detail_ref,
+        row.content_index,
+        row.display_detail,
+      )
+    }
+  } finally {
+    db.close()
+  }
+  store = createAcpSidecar({ root, now: () => TIME_BASE + 1, warn: (message) => warns.push(message) })
+  return current
 }
 
 beforeEach(() => {
@@ -244,6 +342,52 @@ describe('createAcpSidecar 基本读写（v2 envelope 契约）', () => {
     await store.settleDispatch(SessionId('sess-dispatch'), 'step-1')
     await store.settleDispatch(SessionId('sess-dispatch'), 'step-1')
     await expect(store.readDispatch(SessionId('sess-dispatch'), 'step-1')).resolves.toMatchObject({ state: 'settled' })
+  })
+
+  it('atomically writes explicit healthy recovery with dispatch clearing and rolls both back on delete failure', async () => {
+    const recovering = SessionId('atomic-recovery')
+    const other = SessionId('atomic-other')
+    const prior: AcpRecoveryState = {
+      dshSessionId: recovering,
+      kind: 'outcome-unknown',
+      cause: 'load-failed',
+      detail: 'inspect before retry',
+      updatedAt: TIME_BASE,
+    }
+    await store.writeRecoveryState(prior)
+    await store.writeRecoveryState({ dshSessionId: other, kind: 'outcome-unknown', updatedAt: TIME_BASE })
+    for (const sessionId of [recovering, other])
+      await store.beginDispatch({
+        key: 'uncertain',
+        dshSessionId: sessionId,
+        provider: 'acp-devin',
+        model: 'm',
+        state: 'dispatch-uncertain',
+        createdAt: TIME_BASE,
+      })
+    const triggerDb = rawDb()
+    try {
+      triggerDb.exec(`CREATE TRIGGER fail_recovery_dispatch_delete BEFORE DELETE ON dispatch_ledger
+        WHEN OLD.dsh_session_id = 'atomic-recovery' BEGIN SELECT RAISE(ABORT, 'injected delete failure'); END`)
+    } finally {
+      triggerDb.close()
+    }
+
+    await expect(
+      store.writeRecoveryState(
+        {
+          dshSessionId: recovering,
+          kind: 'healthy',
+          lastUserAction: 'rebind-blank',
+          updatedAt: TIME_BASE + 1,
+        },
+        { clearDispatch: true },
+      ),
+    ).rejects.toThrow('injected delete failure')
+    await expect(store.readRecoveryState(recovering)).resolves.toEqual(prior)
+    await expect(store.readDispatch(recovering, 'uncertain')).resolves.toMatchObject({ state: 'dispatch-uncertain' })
+    await expect(store.readRecoveryState(other)).resolves.toMatchObject({ kind: 'outcome-unknown' })
+    await expect(store.readDispatch(other, 'uncertain')).resolves.toMatchObject({ state: 'dispatch-uncertain' })
   })
 
   it('keeps at most one settled dispatch row per DSH session', async () => {
@@ -806,6 +950,42 @@ describe('行级容错与库级 fail loud（坏行/隔离概念删除后的等�
     expect(warns.some((message) => message.includes('skipped 5 malformed audit row(s)'))).toBe(true)
   })
 
+  it('快照分页按物理游标跨过坏行并继续读取后续合法记录', async () => {
+    await store.append(SessionId('sidecar-initialize'), { kind: 'binding', time: 1, data: BINDING_A })
+    const raw = rawDb()
+    const insert = raw.prepare(
+      'INSERT INTO audit (record_id, dsh_session_id, seq, time, kind, payload) VALUES (?, ?, ?, ?, ?, ?)',
+    )
+    for (let seq = 1; seq <= 100; seq += 1)
+      insert.run(`bad-${String(seq)}`, 'sess-scan', seq, seq, 'unknown-kind', '{}')
+    insert.run('good-101', 'sess-scan', 101, 101, 'filesystem', JSON.stringify({ operation: 'read', outcome: 'error' }))
+    insert.run('bad-single', 'sess-single-bad', 1, 1, 'unknown-kind', '{}')
+    insert.run(
+      'good-single',
+      'sess-single-bad',
+      2,
+      2,
+      'filesystem',
+      JSON.stringify({ operation: 'read', outcome: 'ok' }),
+    )
+    raw.close()
+
+    const first = await store.listPageScan(SessionId('sess-scan'), 0, 100, 101)
+    expect(first).toMatchObject({
+      entries: [],
+      scannedThrough: 100,
+      scannedRecords: 100,
+      unreadableRecords: 100,
+      hasMore: true,
+    })
+    const second = await store.listPageScan(SessionId('sess-scan'), first.scannedThrough, 100, 101)
+    expect(second).toMatchObject({ scannedThrough: 101, scannedRecords: 1, unreadableRecords: 0, hasMore: false })
+    expect(second.entries.map((entry) => entry.recordId)).toEqual(['good-101'])
+    const single = await store.listPageScan(SessionId('sess-single-bad'), 0, 100, 2)
+    expect(single).toMatchObject({ scannedThrough: 2, scannedRecords: 2, unreadableRecords: 1, hasMore: false })
+    expect(single.entries.map((entry) => entry.recordId)).toEqual(['good-single'])
+  })
+
   it('库文件损坏 → open 即 fail loud（warn + reject），不再吞错降级', async () => {
     await store.append(SessionId('sess-1'), { kind: 'binding', time: 1, data: BINDING_A })
     await store.dispose()
@@ -1139,8 +1319,9 @@ describe(' option 快照（acpOptionsSnapshotOf 有界标准化 + option_snapsho
     expect(await store.readOptionSnapshot(SessionId('ghost'))).toBeUndefined()
   })
 
-  it('硬上限：字段截断 128 字符、values 截断 64 条、选项数截断 32 项', () => {
-    const longId = 'x'.repeat(ACP_SNAPSHOT_FIELD_MAX + 50)
+  it('硬上限：展示字段截断，opaque IDs 完整保留或整项跳过，values 截断 64 条', () => {
+    const longId = 'x'.repeat(135)
+    const overLimitId = 'z'.repeat(513)
     const manyValues = Array.from({ length: ACP_SNAPSHOT_VALUES_LIMIT + 10 }, (_, index) => ({
       value: `v${String(index)}`,
       name: `v${String(index)}`,
@@ -1153,7 +1334,15 @@ describe(' option 快照（acpOptionsSnapshotOf 有界标准化 + option_snapsho
     }))
     const record = acpOptionsSnapshotOf(
       [
-        { type: 'select', id: longId, name: 'Model', currentValue: 'm1', options: manyValues } as never,
+        {
+          type: 'select',
+          id: longId,
+          category: `cat-${longId}`,
+          name: 'M'.repeat(200),
+          currentValue: longId,
+          options: [{ value: longId, name: 'long' }, ...manyValues],
+        } as never,
+        { type: 'select', id: overLimitId, name: 'Too long', currentValue: 'x', options: [] } as never,
         ...(manyOptions as never[]),
       ],
       undefined,
@@ -1161,9 +1350,63 @@ describe(' option 快照（acpOptionsSnapshotOf 有界标准化 + option_snapsho
       TIME_BASE,
     )
     expect(record.options).toHaveLength(ACP_SNAPSHOT_OPTION_LIMIT)
-    expect(record.options[0]?.id).toHaveLength(ACP_SNAPSHOT_FIELD_MAX)
+    expect(record.options[0]).toMatchObject({ id: longId, category: `cat-${longId}`, value: longId })
+    expect(record.options[0]?.name).toHaveLength(ACP_SNAPSHOT_FIELD_MAX)
+    expect(record.options[0]?.values?.[0]).toBe(longId)
     expect(record.options[0]?.values).toHaveLength(ACP_SNAPSHOT_VALUES_LIMIT)
     expect(record.currentModeId).toBeNull()
+  })
+
+  it('preserves exact 511/512-character identifiers within the existing 16 KiB storage budget', () => {
+    const id511 = 'a'.repeat(ACP_CONFIG_IDENTIFIER_MAX - 1)
+    const id512 = 'b'.repeat(ACP_CONFIG_IDENTIFIER_MAX)
+    const id513 = 'c'.repeat(ACP_CONFIG_IDENTIFIER_MAX + 1)
+    const record = acpOptionsSnapshotOf(
+      [
+        {
+          type: 'select',
+          id: id511,
+          name: 'Mode',
+          category: 'mode',
+          currentValue: id511,
+          options: [{ value: id511, name: 'A' }],
+        },
+        {
+          type: 'select',
+          id: id512,
+          name: 'Mode',
+          category: 'mode',
+          currentValue: id512,
+          options: [{ value: id512, name: 'B' }],
+        },
+        {
+          type: 'select',
+          id: id513,
+          name: 'Mode',
+          category: 'mode',
+          currentValue: 'safe',
+          options: [{ value: 'safe', name: 'C' }],
+        },
+        {
+          type: 'select',
+          id: 'too-long-current',
+          name: 'Mode',
+          category: 'mode',
+          currentValue: id513,
+          options: [{ value: 'safe', name: 'D' }],
+        },
+      ] as never,
+      id512,
+      'fp-opaque-boundary',
+      TIME_BASE,
+    )
+    expect(record.options.map((option) => [option.id, option.value, option.values])).toEqual([
+      [id511, id511, [id511]],
+      [id512, id512, [id512]],
+    ])
+    expect(record.currentModeId).toBe(id512)
+    expect(JSON.stringify(record).length).toBeLessThanOrEqual(ACP_SNAPSHOT_TOTAL_BYTES)
+    expect(toOptionsSnapshotRecord(record)).toEqual(record)
   })
 
   it('总字节超限：先丢尾部非 model 类选项（model 保底），再剥 values；产物恒 ≤ 16384 字节', () => {
@@ -1270,6 +1513,105 @@ describe(' option 快照（acpOptionsSnapshotOf 有界标准化 + option_snapsho
       contextUsage: { used: 0, size: 0, cost: null },
     })
   })
+
+  it('规范化较长 Agent mode 描述后可往返持久化，不让展示字段卡住已完成 turn', async () => {
+    const modes = Array.from({ length: 8 }, (_, index) => ({
+      id: `mode-${String(index)}`,
+      name: `Mode ${String(index)}`,
+      ...(index === 3 ? { description: 'd'.repeat(224) } : {}),
+    }))
+    const record = acpOptionsSnapshotOf([], 'mode-3', 'fp-long-mode', TIME_BASE, {
+      modes: { currentModeId: 'mode-3', availableModes: modes },
+      contextUsage: { used: 10, size: 100 },
+    })
+    expect(record.modes?.availableModes[3]?.description).toHaveLength(224)
+    expect(record.currentModeId).toBe('mode-3')
+    expect(toOptionsSnapshotRecord(record)).toEqual(record)
+    await store.writeOptionSnapshot(SessionId('sess-long-mode'), record)
+    expect(await store.readOptionSnapshot(SessionId('sess-long-mode'))).toEqual(record)
+  })
+
+  it('限制 Agent mode 数量并保留当前 mode 的完整 ID，不截断身份字段', async () => {
+    const modes = Array.from({ length: ACP_SNAPSHOT_OPTION_LIMIT + 8 }, (_, index) => ({
+      id: `mode-${String(index)}`,
+      name: `Mode ${String(index)}`.repeat(40),
+      description: 'x'.repeat(224),
+    }))
+    const activeModeId = `mode-${String(modes.length - 1)}`
+    const record = acpOptionsSnapshotOf([], activeModeId, 'fp-many-modes', TIME_BASE, {
+      modes: { currentModeId: activeModeId, availableModes: modes },
+    })
+    expect(record.modes?.availableModes).toHaveLength(ACP_SNAPSHOT_OPTION_LIMIT)
+    expect(record.modes?.availableModes.some((mode) => mode.id === activeModeId)).toBe(true)
+    expect(record.modes?.availableModes.every((mode) => mode.name.length <= ACP_SNAPSHOT_FIELD_MAX)).toBe(true)
+    expect(record.modes?.availableModes.every((mode) => mode.description?.length === 224)).toBe(true)
+    expect(record.currentModeId).toBe(activeModeId)
+
+    const longModeId = 'm'.repeat(135)
+    const longModeRecord = acpOptionsSnapshotOf([], longModeId, 'fp-long-mode-id', TIME_BASE, {
+      modes: { currentModeId: longModeId, availableModes: [{ id: longModeId, name: 'Long mode' }] },
+    })
+    expect(longModeRecord.currentModeId).toBe(longModeId)
+    expect(longModeRecord.modes?.availableModes[0]?.id).toBe(longModeId)
+    const tooLongModeId = 'm'.repeat(513)
+    const overLimitModeRecord = acpOptionsSnapshotOf([], tooLongModeId, 'fp-invalid-mode-id', TIME_BASE, {
+      modes: { currentModeId: tooLongModeId, availableModes: [{ id: tooLongModeId, name: 'Invalid' }] },
+    })
+    expect(overLimitModeRecord.currentModeId).toBeNull()
+    expect(overLimitModeRecord.modes).toBeUndefined()
+    const invalidUsage = acpOptionsSnapshotOf([], 'active', 'fp-invalid-usage', TIME_BASE, {
+      modes: { currentModeId: 'active', availableModes: [{ id: 'active', name: 'Active' }] },
+      contextUsage: { used: Number.POSITIVE_INFINITY, size: 100 },
+    })
+    expect(invalidUsage.currentModeId).toBe('active')
+    expect(invalidUsage.modes?.currentModeId).toBe('active')
+    expect(invalidUsage.contextUsage).toBeUndefined()
+    expect(toOptionsSnapshotRecord(invalidUsage)).toEqual(invalidUsage)
+    await store.writeOptionSnapshot(SessionId('sess-invalid-usage'), invalidUsage)
+    expect(await store.readOptionSnapshot(SessionId('sess-invalid-usage'))).toEqual(invalidUsage)
+  })
+
+  it('mode description 使用独立 1024 字符上限并对超限展示字段做有界裁剪', async () => {
+    const record = acpOptionsSnapshotOf([], 'active', 'fp-mode-description-bound', TIME_BASE, {
+      modes: {
+        currentModeId: 'active',
+        availableModes: [
+          { id: 'active', name: 'Active', description: 'd'.repeat(ACP_SNAPSHOT_MODE_DESCRIPTION_MAX + 1) },
+        ],
+      },
+    })
+    expect(record.modes?.availableModes[0]?.description).toHaveLength(ACP_SNAPSHOT_MODE_DESCRIPTION_MAX)
+    expect(toOptionsSnapshotRecord(record)).toEqual(record)
+    await store.writeOptionSnapshot(SessionId('sess-mode-description-bound'), record)
+    expect(await store.readOptionSnapshot(SessionId('sess-mode-description-bound'))).toEqual(record)
+  })
+
+  it('modes 与 config options 合并后仍服从总大小上限并可被读侧接受', async () => {
+    const fat = {
+      type: 'select',
+      id: 'model',
+      name: 'Model',
+      currentValue: 'active',
+      options: Array.from({ length: ACP_SNAPSHOT_VALUES_LIMIT }, (_, index) => ({
+        value: `model-${String(index)}-${'v'.repeat(100)}`,
+        name: 'Model option',
+      })),
+    } as never
+    const modes = Array.from({ length: ACP_SNAPSHOT_OPTION_LIMIT }, (_, index) => ({
+      id: `mode-${String(index)}`,
+      name: 'n'.repeat(224),
+      description: 'd'.repeat(224),
+    }))
+    const record = acpOptionsSnapshotOf([fat], 'mode-0', 'fp-total-with-modes', TIME_BASE, {
+      modes: { currentModeId: 'mode-0', availableModes: modes },
+      contextUsage: { used: 100, size: 1000, cost: { amount: 0.2, currency: 'USD' } },
+    })
+    expect(JSON.stringify(record).length).toBeLessThanOrEqual(ACP_SNAPSHOT_TOTAL_BYTES)
+    expect(record.options.some((option) => option.id === 'model')).toBe(true)
+    expect(toOptionsSnapshotRecord(record)).toEqual(record)
+    await store.writeOptionSnapshot(SessionId('sess-total-with-modes'), record)
+    expect(await store.readOptionSnapshot(SessionId('sess-total-with-modes'))).toEqual(record)
+  })
 })
 
 describe('pending member mode storage', () => {
@@ -1292,5 +1634,541 @@ describe('pending member mode storage', () => {
     expect(await store.readModeIntent(id)).toEqual(latest)
     await store.clearModeIntent(id, latest)
     expect(await store.readModeIntent(id)).toBeUndefined()
+  })
+
+  it('accepts protocol-sized mode IDs without truncation and rejects IDs above the shared limit', async () => {
+    const id = SessionId('mode-id-bound')
+    const longModeId = 'm'.repeat(135)
+    const intent = { bindingKey: 'original', modeId: longModeId }
+    await store.writeModeIntent(id, intent)
+    expect(await store.readModeIntent(id)).toEqual(intent)
+    await expect(store.writeModeIntent(id, { ...intent, modeId: 'm'.repeat(513) })).rejects.toThrow(TypeError)
+  })
+})
+
+// Hardening tests for recent fixes
+describe('hardening: seq reuse, batch drain fallback, activity_journal migration', () => {
+  it('drains queued audit before a failed binding transaction and does not reserve a missing row seq', async () => {
+    const sid = 'sess-seq-reuse'
+    const queuedBeforeFailure = store.append(SessionId(sid), {
+      kind: 'replay-assessment',
+      data: { status: 'not-compared' },
+    })
+
+    // Inject a binding write failure via trigger on bindings
+    const triggerDb = rawDb()
+    try {
+      triggerDb.exec(
+        `CREATE TRIGGER fail_bind BEFORE INSERT ON bindings WHEN NEW.dsh_session_id = '${sid}' BEGIN SELECT RAISE(ABORT, 'injected bind failure'); END`,
+      )
+    } finally {
+      triggerDb.close()
+    }
+
+    const failedBinding = store.append(SessionId(sid), { kind: 'binding', data: BINDING_A })
+    const queuedAfterFailure = store.append(SessionId(sid), {
+      kind: 'replay-assessment',
+      data: { status: 'not-compared' },
+    })
+    await expect(failedBinding).rejects.toThrow()
+    await Promise.all([queuedBeforeFailure, queuedAfterFailure])
+
+    await store.flush()
+    const lines = await readEnvelopes(sid)
+    const replayRows = lines.filter((line) => line.kind === 'replay-assessment')
+    expect(replayRows).toHaveLength(2)
+    expect(replayRows.map((line) => line.seq)).toEqual([1, 2])
+    expect(lines.some((line) => line.kind === 'binding')).toBe(false)
+    expect(new Set(lines.map((line) => line.seq)).size).toBe(lines.length)
+  })
+
+  it('allocates audit sequence from SQLite across two long-lived sidecar instances', async () => {
+    const sid = SessionId('sess-cross-instance-seq')
+    const second = createAcpSidecar({ root, now: () => TIME_BASE + 1 })
+    extraStores.push(second)
+    await store.append(sid, { kind: 'binding', data: BINDING_A })
+    await second.append(sid, {
+      kind: 'binding',
+      data: bindingData({ dshCommittedSeq: 9, committedPromptOrdinal: 1 }),
+    })
+    await store.append(sid, {
+      kind: 'binding',
+      data: bindingData({ dshCommittedSeq: 10, committedPromptOrdinal: 2 }),
+    })
+    expect((await readEnvelopes(String(sid))).map((line) => line.seq)).toEqual([1, 2, 3])
+  })
+
+  it('waits for another SQLite worker holding the write lock and allocates after its committed MAX(seq)', async () => {
+    const sid = 'sess-cross-process-seq'
+    await store.append(SessionId(sid), { kind: 'binding', data: BINDING_A })
+    const worker = new Worker(new URL('../../fixtures/sidecar-lock-worker.mjs', import.meta.url), {
+      workerData: { dbPath: dbFile(), sessionId: sid, time: TIME_BASE + 1 },
+    })
+    const receive = (type: string) =>
+      new Promise<void>((resolve, reject) => {
+        const onMessage = (message: { type?: string; error?: string }) => {
+          if (message.type === 'error') {
+            worker.off('message', onMessage)
+            reject(new Error(message.error))
+          }
+          if (message.type === type) {
+            worker.off('message', onMessage)
+            resolve()
+          }
+        }
+        worker.on('message', onMessage)
+        worker.once('error', reject)
+      })
+    try {
+      await receive('locked')
+      worker.postMessage({ type: 'release' })
+      await store.append(SessionId(sid), {
+        kind: 'binding',
+        data: bindingData({ dshCommittedSeq: 9, committedPromptOrdinal: 1 }),
+      })
+      await receive('committed')
+      expect((await readEnvelopes(sid)).map((line) => line.seq)).toEqual([1, 2, 3])
+    } finally {
+      await worker.terminate().catch(() => 0)
+    }
+  })
+
+  it('keeps queued and synchronous append order and exposes newly committed rows to a second cursor', async () => {
+    const sid = SessionId('sess-queued-sync-order')
+    const second = createAcpSidecar({ root, now: () => TIME_BASE + 1 })
+    extraStores.push(second)
+    const queuedAppend = store.append(sid, { kind: 'replay-assessment', data: { status: 'not-compared' } })
+    const externalCommit = second.append(sid, { kind: 'binding', data: BINDING_A })
+    const headPage = second.listPage(sid, 0, 10, 1)
+    const syncAppend = store.append(sid, { kind: 'permission', data: permissionData('queued-sync-order') })
+    await Promise.all([queuedAppend, externalCommit, syncAppend])
+    expect((await headPage).map((entry) => [entry.seq, entry.kind])).toEqual([[1, 'binding']])
+    const continuation = await second.listPage(sid, 1, 10)
+    expect(continuation.map((entry) => [entry.seq, entry.kind])).toEqual([
+      [2, 'replay-assessment'],
+      [3, 'permission'],
+    ])
+  })
+
+  it('on batch flush failure falls back to per-item writes and counts dropped items', async () => {
+    const sid = 'sess-batch'
+    // Queue the good/poisoned/good entries in one synchronous batch before its drain microtask.
+    const batch = [
+      store.append(SessionId(sid), { kind: 'replay-assessment', data: { status: 'matched' } }),
+      store.append(SessionId(sid), { kind: 'replay-assessment', data: { bad: BigInt(1) } as unknown as any }),
+      store.append(SessionId(sid), { kind: 'replay-assessment', data: { status: 'different' } }),
+    ]
+    await Promise.all(batch)
+
+    // Flush explicitly
+    await store.flush()
+
+    const lines = await readEnvelopes(sid)
+    // Both good items survive whole-batch failure and the poisoned row is dropped.
+    const persisted = lines.filter((line) => line.kind === 'replay-assessment')
+    expect(persisted).toHaveLength(2)
+    expect(persisted.map((line) => (line.payload as { status?: string }).status)).toEqual(['matched', 'different'])
+    // droppedEntries should have incremented by 1
+    expect((store as unknown as { droppedEntries: number }).droppedEntries).toBe(1)
+  })
+
+  it('recovers leftover activity_journal_legacy rows into new activity_journal when new table exists', async () => {
+    // Pre-seed DB: create new-format activity_journal and a leftover legacy table with a row
+    const pre = rawDb()
+    try {
+      pre.exec(`CREATE TABLE IF NOT EXISTS activity_journal (
+        dsh_session_id TEXT NOT NULL, activity_id TEXT NOT NULL, owner_dsh_session_id TEXT NOT NULL,
+        prompt_anchor_message_id TEXT NOT NULL, activity_seq INTEGER NOT NULL, revision_seq INTEGER NOT NULL,
+        time INTEGER NOT NULL, kind TEXT NOT NULL, status TEXT NOT NULL, presentation TEXT NOT NULL,
+        raw_detail TEXT, raw_detail_ref TEXT, PRIMARY KEY (dsh_session_id, revision_seq)
+      ) STRICT`)
+      // ensure other minimal tables exist so migration logic runs in the same environment
+      pre.exec(`CREATE TABLE IF NOT EXISTS activity_journal_legacy (
+        dsh_session_id TEXT NOT NULL, activity_id TEXT NOT NULL, owner_dsh_session_id TEXT NOT NULL,
+        prompt_anchor_message_id TEXT NOT NULL, activity_seq INTEGER NOT NULL, revision_seq INTEGER,
+        time INTEGER NOT NULL, kind TEXT NOT NULL, status TEXT NOT NULL, presentation TEXT NOT NULL,
+        raw_detail TEXT, raw_detail_ref TEXT
+      ) STRICT`)
+      const insert = pre.prepare(
+        'INSERT INTO activity_journal_legacy (dsh_session_id, activity_id, owner_dsh_session_id, prompt_anchor_message_id, activity_seq, revision_seq, time, kind, status, presentation) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      )
+      insert.run('sess-legacy', 'act-1', 'owner-1', 'anchor-1', 1, 1, TIME_BASE, 'tool', 'running', 'p')
+    } finally {
+      pre.close()
+    }
+
+    // Open sidecar which should migrate legacy rows into activity_journal and drop legacy table
+    await store.dispose()
+    store = createAcpSidecar({ root, now: () => TIME_BASE + 1, warn: (m) => warns.push(m) })
+
+    const inspection = rawDb()
+    try {
+      const row = inspection
+        .prepare('SELECT COUNT(*) AS n FROM activity_journal WHERE dsh_session_id = ?')
+        .get('sess-legacy') as { n: number }
+      expect(row.n).toBeGreaterThanOrEqual(1)
+      const legacyExists = inspection
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='activity_journal_legacy'")
+        .get()
+      expect(legacyExists).toBeUndefined()
+    } finally {
+      inspection.close()
+    }
+  })
+
+  it('imports non-conflicting legacy revisions and preserves optional activity columns', async () => {
+    await seedLeftoverActivityJournal((current) => [
+      {
+        ...legacyFixtureFromActivity(current),
+        dsh_session_id: 'sess-imported',
+        activity_id: 'act-imported',
+        owner_dsh_session_id: 'owner-imported',
+        prompt_anchor_message_id: 'anchor-imported',
+        activity_seq: 1,
+        revision_seq: 1,
+        time: TIME_BASE + 10,
+        presentation: 'Imported activity',
+        raw_detail: 'imported raw detail',
+        raw_detail_ref: 'imported-ref',
+        content_index: 19,
+        display_detail: '{"plan":[{"content":"Imported plan","status":"completed"}]}',
+      },
+    ])
+
+    const snapshot = await store.activitySnapshot(SessionId('sess-imported'))
+    expect(snapshot).toHaveLength(1)
+    expect(snapshot[0]).toMatchObject({
+      activityId: 'act-imported',
+      contentIndex: 19,
+      rawDetail: 'imported raw detail',
+      rawDetailRef: 'imported-ref',
+      display: { plan: [{ content: 'Imported plan', status: 'completed' }] },
+    })
+    const db = rawDb()
+    try {
+      expect(
+        db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'activity_journal_legacy'").get(),
+      ).toBeUndefined()
+      expect(
+        db
+          .prepare('SELECT content_index, display_detail FROM activity_journal WHERE dsh_session_id = ?')
+          .get('sess-imported'),
+      ).toEqual({
+        content_index: 19,
+        display_detail: '{"plan":[{"content":"Imported plan","status":"completed"}]}',
+      })
+    } finally {
+      db.close()
+    }
+  })
+
+  it('drops a legacy table when its colliding primary-key row is an exact match', async () => {
+    await seedLeftoverActivityJournal((current) => [legacyFixtureFromActivity(current)])
+
+    const snapshot = await store.activitySnapshot(SessionId('sess-migration'))
+    expect(snapshot).toHaveLength(1)
+    const db = rawDb()
+    try {
+      expect(
+        db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'activity_journal_legacy'").get(),
+      ).toBeUndefined()
+    } finally {
+      db.close()
+    }
+    expect(warns.some((message) => message.includes('conflicting legacy activity journal'))).toBe(false)
+  })
+
+  it('retains a same-revision row for a different activity instead of discarding it', async () => {
+    await seedLeftoverActivityJournal((current) => [
+      { ...legacyFixtureFromActivity(current), activity_id: 'different-activity' },
+    ])
+
+    const snapshot = await store.activitySnapshot(SessionId('sess-migration'))
+    expect(snapshot.map((activity) => activity.activityId)).toEqual(['act-current'])
+    const db = rawDb()
+    try {
+      expect(
+        db.prepare('SELECT activity_id FROM activity_journal_legacy WHERE dsh_session_id = ?').get('sess-migration'),
+      ).toEqual({ activity_id: 'different-activity' })
+    } finally {
+      db.close()
+    }
+    expect(warns).toContain(
+      'dsh-acp sidecar: retained 1 conflicting legacy activity journal row(s); original rows remain available',
+    )
+  })
+
+  it('retains a same-activity, same-revision row when its content differs', async () => {
+    await seedLeftoverActivityJournal((current) => [
+      { ...legacyFixtureFromActivity(current), presentation: 'Different content' },
+    ])
+
+    const snapshot = await store.activitySnapshot(SessionId('sess-migration'))
+    expect(snapshot).toHaveLength(1)
+    expect(snapshot[0]?.presentation).toBe('Current activity')
+    const db = rawDb()
+    try {
+      expect(
+        db.prepare('SELECT presentation FROM activity_journal_legacy WHERE dsh_session_id = ?').get('sess-migration'),
+      ).toEqual({ presentation: 'Different content' })
+    } finally {
+      db.close()
+    }
+  })
+
+  it('imports safe rows from a mixed legacy table and retries retained conflicts idempotently on reopen', async () => {
+    await seedLeftoverActivityJournal((current) => {
+      const base = legacyFixtureFromActivity(current)
+      return [
+        { ...base, presentation: 'Conflicting revision' },
+        {
+          ...base,
+          activity_id: 'act-safe',
+          activity_seq: 2,
+          revision_seq: 2,
+          time: TIME_BASE + 2,
+          presentation: 'Safe imported revision',
+          content_index: 22,
+          display_detail: '{"plan":[{"content":"Safe detail","status":"pending"}]}',
+        },
+      ]
+    })
+
+    expect(await store.activitySnapshot(SessionId('sess-migration'))).toMatchObject([
+      { activityId: 'act-current', presentation: 'Current activity' },
+      { activityId: 'act-safe', presentation: 'Safe imported revision', contentIndex: 22 },
+    ])
+    let db = rawDb()
+    try {
+      expect(db.prepare('SELECT COUNT(*) AS count FROM activity_journal_legacy').get()).toEqual({ count: 2 })
+    } finally {
+      db.close()
+    }
+
+    await store.dispose()
+    store = createAcpSidecar({ root, now: () => TIME_BASE + 3, warn: (message) => warns.push(message) })
+    expect(await store.activitySnapshot(SessionId('sess-migration'))).toHaveLength(2)
+    db = rawDb()
+    try {
+      expect(
+        db.prepare('SELECT COUNT(*) AS count FROM activity_journal WHERE dsh_session_id = ?').get('sess-migration'),
+      ).toEqual({ count: 2 })
+      expect(db.prepare('SELECT COUNT(*) AS count FROM activity_journal_legacy').get()).toEqual({ count: 2 })
+    } finally {
+      db.close()
+    }
+    expect(warns.filter((message) => message.includes('conflicting legacy activity journal'))).toHaveLength(2)
+  })
+
+  it('migrates an old activity schema atomically without dropping optional columns', async () => {
+    await store.dispose()
+    const db = rawDb()
+    try {
+      db.exec(`CREATE TABLE activity_journal (
+        dsh_session_id TEXT NOT NULL, activity_id TEXT NOT NULL, owner_dsh_session_id TEXT NOT NULL,
+        prompt_anchor_message_id TEXT NOT NULL, activity_seq INTEGER NOT NULL, revision_seq INTEGER NOT NULL,
+        time INTEGER NOT NULL, kind TEXT NOT NULL, status TEXT NOT NULL, presentation TEXT NOT NULL,
+        raw_detail TEXT, raw_detail_ref TEXT, content_index INTEGER, display_detail TEXT,
+        PRIMARY KEY (dsh_session_id, activity_id)
+      ) STRICT`)
+      db.prepare(
+        'INSERT INTO activity_journal (dsh_session_id, activity_id, owner_dsh_session_id, prompt_anchor_message_id, activity_seq, revision_seq, time, kind, status, presentation, content_index, display_detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      ).run(
+        'sess-old-schema',
+        'act-old-schema',
+        'owner-old',
+        'anchor-old',
+        3,
+        4,
+        TIME_BASE + 4,
+        'plan',
+        'running',
+        'Old schema activity',
+        31,
+        '{"plan":[{"content":"Old schema detail","status":"pending"}]}',
+      )
+    } finally {
+      db.close()
+    }
+    store = createAcpSidecar({ root, now: () => TIME_BASE + 5, warn: (message) => warns.push(message) })
+
+    expect(await store.activitySnapshot(SessionId('sess-old-schema'))).toMatchObject([
+      {
+        activityId: 'act-old-schema',
+        activitySeq: 3,
+        revisionSeq: 4,
+        contentIndex: 31,
+        display: { plan: [{ content: 'Old schema detail', status: 'pending' }] },
+      },
+    ])
+    const inspection = rawDb()
+    try {
+      expect(
+        inspection
+          .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'activity_journal_legacy'")
+          .get(),
+      ).toBeUndefined()
+      expect(
+        inspection
+          .prepare('SELECT content_index, display_detail FROM activity_journal WHERE activity_id = ?')
+          .get('act-old-schema'),
+      ).toEqual({
+        content_index: 31,
+        display_detail: '{"plan":[{"content":"Old schema detail","status":"pending"}]}',
+      })
+      expect(
+        inspection
+          .prepare(
+            "SELECT name, tbl_name FROM sqlite_master WHERE type = 'index' AND name IN ('activity_session_id_revision_desc', 'activity_session_anchor_id_revision_desc') ORDER BY name",
+          )
+          .all(),
+      ).toEqual([
+        { name: 'activity_session_anchor_id_revision_desc', tbl_name: 'activity_journal' },
+        { name: 'activity_session_id_revision_desc', tbl_name: 'activity_journal' },
+      ])
+    } finally {
+      inspection.close()
+    }
+  })
+
+  it('rolls back a structurally invalid old-schema migration without renaming or dropping its source rows', async () => {
+    await store.dispose()
+    const old = rawDb()
+    try {
+      old.exec(`CREATE TABLE activity_journal (
+        dsh_session_id TEXT NOT NULL, activity_id TEXT, owner_dsh_session_id TEXT NOT NULL,
+        prompt_anchor_message_id TEXT NOT NULL, activity_seq INTEGER NOT NULL, revision_seq INTEGER NOT NULL,
+        time INTEGER NOT NULL, kind TEXT NOT NULL, status TEXT NOT NULL,
+        raw_detail TEXT, raw_detail_ref TEXT, content_index INTEGER, display_detail TEXT
+      ) STRICT`)
+      old
+        .prepare(
+          'INSERT INTO activity_journal (dsh_session_id, activity_id, owner_dsh_session_id, prompt_anchor_message_id, activity_seq, revision_seq, time, kind, status, content_index, display_detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        )
+        .run(
+          'sess-invalid-old-schema',
+          'act-invalid-schema',
+          'owner-invalid',
+          'anchor-invalid',
+          1,
+          1,
+          TIME_BASE,
+          'tool',
+          'running',
+          45,
+          '{"unavailable":"invalid"}',
+        )
+    } finally {
+      old.close()
+    }
+    store = createAcpSidecar({ root, now: () => TIME_BASE + 6, warn: (message) => warns.push(message) })
+
+    await expect(store.activitySnapshot(SessionId('sess-invalid-old-schema'))).rejects.toThrow(/presentation/)
+    const inspection = rawDb()
+    try {
+      const schema = inspection
+        .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'activity_journal'")
+        .get() as { sql: string }
+      expect(schema.sql).not.toContain('PRIMARY KEY (dsh_session_id, revision_seq)')
+      expect(
+        inspection.prepare('SELECT activity_id, content_index, display_detail FROM activity_journal').get(),
+      ).toEqual({
+        activity_id: 'act-invalid-schema',
+        content_index: 45,
+        display_detail: '{"unavailable":"invalid"}',
+      })
+      expect(
+        inspection
+          .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'activity_journal_legacy'")
+          .get(),
+      ).toBeUndefined()
+    } finally {
+      inspection.close()
+    }
+  })
+
+  it('moves named activity indexes off a retained conflicting legacy table and keeps them on the current table after reopen', async () => {
+    const current = await store.upsertActivity(MIGRATION_ACTIVITY)
+    await store.dispose()
+    const db = rawDb()
+    try {
+      db.exec(`CREATE TABLE activity_journal_legacy (
+        dsh_session_id TEXT, activity_id TEXT, owner_dsh_session_id TEXT,
+        prompt_anchor_message_id TEXT, activity_seq INTEGER, revision_seq INTEGER,
+        time INTEGER, kind TEXT, status TEXT, presentation TEXT, raw_detail TEXT,
+        raw_detail_ref TEXT, content_index INTEGER, display_detail TEXT
+      ) STRICT`)
+      const legacy = { ...legacyFixtureFromActivity(current), presentation: 'Preserved conflicting content' }
+      db.prepare(
+        'INSERT INTO activity_journal_legacy (dsh_session_id, activity_id, owner_dsh_session_id, prompt_anchor_message_id, activity_seq, revision_seq, time, kind, status, presentation, raw_detail, raw_detail_ref, content_index, display_detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      ).run(
+        legacy.dsh_session_id,
+        legacy.activity_id,
+        legacy.owner_dsh_session_id,
+        legacy.prompt_anchor_message_id,
+        legacy.activity_seq,
+        legacy.revision_seq,
+        legacy.time,
+        legacy.kind,
+        legacy.status,
+        legacy.presentation,
+        legacy.raw_detail,
+        legacy.raw_detail_ref,
+        legacy.content_index,
+        legacy.display_detail,
+      )
+      db.exec(`
+        DROP INDEX activity_session_id_revision_desc;
+        DROP INDEX activity_session_anchor_id_revision_desc;
+        CREATE INDEX activity_session_id_revision_desc
+          ON activity_journal_legacy(dsh_session_id, activity_id, revision_seq DESC);
+        CREATE INDEX activity_session_anchor_id_revision_desc
+          ON activity_journal_legacy(dsh_session_id, prompt_anchor_message_id, activity_id, revision_seq DESC);
+      `)
+    } finally {
+      db.close()
+    }
+    store = createAcpSidecar({ root, now: () => TIME_BASE + 2, warn: (message) => warns.push(message) })
+
+    await store.activitySnapshot(SessionId('sess-migration'))
+    let inspection = rawDb()
+    try {
+      expect(
+        inspection
+          .prepare(
+            "SELECT name, tbl_name FROM sqlite_master WHERE type = 'index' AND name IN ('activity_session_id_revision_desc', 'activity_session_anchor_id_revision_desc') ORDER BY name",
+          )
+          .all(),
+      ).toEqual([
+        { name: 'activity_session_anchor_id_revision_desc', tbl_name: 'activity_journal' },
+        { name: 'activity_session_id_revision_desc', tbl_name: 'activity_journal' },
+      ])
+      expect(
+        inspection
+          .prepare('SELECT presentation FROM activity_journal_legacy WHERE dsh_session_id = ?')
+          .get('sess-migration'),
+      ).toEqual({ presentation: 'Preserved conflicting content' })
+    } finally {
+      inspection.close()
+    }
+
+    await store.dispose()
+    store = createAcpSidecar({ root, now: () => TIME_BASE + 3, warn: (message) => warns.push(message) })
+    await store.activitySnapshot(SessionId('sess-migration'))
+    inspection = rawDb()
+    try {
+      expect(
+        inspection
+          .prepare(
+            "SELECT name, tbl_name FROM sqlite_master WHERE type = 'index' AND name IN ('activity_session_id_revision_desc', 'activity_session_anchor_id_revision_desc') ORDER BY name",
+          )
+          .all(),
+      ).toEqual([
+        { name: 'activity_session_anchor_id_revision_desc', tbl_name: 'activity_journal' },
+        { name: 'activity_session_id_revision_desc', tbl_name: 'activity_journal' },
+      ])
+    } finally {
+      inspection.close()
+    }
   })
 })

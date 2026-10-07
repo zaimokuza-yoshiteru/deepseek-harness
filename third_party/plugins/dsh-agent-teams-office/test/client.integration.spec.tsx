@@ -22,7 +22,7 @@ vi.mock('../src/client/office.css', () => ({ default: '' }));
 vi.mock('../src/client/scene-factory.ts', () => ({ createOfficeScene: ((async (host, select, _error, { view }) => {
   const canvas = document.createElement('canvas'); host.append(canvas);
   const scene = { canvas, view, select, camera: { zoom: 1.4 }, tick: 42,
-    update: vi.fn(), activities: vi.fn(), fit: vi.fn(), focus: vi.fn(() => true), setActive: vi.fn(), destroy: vi.fn(() => canvas.remove()) };
+    update: vi.fn((_members, _label, _selected, canvasLabel: string) => canvas.setAttribute('aria-label', canvasLabel)), activities: vi.fn(), fit: vi.fn(), focus: vi.fn(() => true), setActive: vi.fn(), destroy: vi.fn(() => canvas.remove()) };
   scenes.push(scene); return scene;
 }) satisfies SceneFactory) }));
 let runtime:SlotTestRuntime|null = null;
@@ -79,6 +79,7 @@ it('native floating/docking keeps one scene; selection has no conversation navig
   await act(async () => { h.controller.openTab('dsh-agent-teams-office'); });
   await waitFor(() => expect(scenes).toHaveLength(1));
   const first = scenes[0], tab = h.controller.active(); assert.ok(tab);
+  await waitFor(() => expect(first.canvas.getAttribute('aria-label')).toBe('Agent Teams 3D office (up to 16 teammates plus Lead)'));
   await act(async () => { first.select('lead'); });
   expect(document.body.textContent).toContain('Lead');
   expect(document.body.textContent).not.toMatch(/查看会话|View conversation/);
@@ -104,6 +105,7 @@ it('native floating/docking keeps one scene; selection has no conversation navig
   const pixel = within(h.view.container).getByRole('button', { name: /像素|Pixel/ });
   await act(async () => { fireEvent.click(pixel); });
   await waitFor(() => expect(scenes).toHaveLength(2));
+  await waitFor(() => expect(scenes[1].canvas.getAttribute('aria-label')).toBe('Agent Teams pixel office'));
   expect(first.destroy).toHaveBeenCalledOnce(); expect(scenes[1].view).toBe('pixel');
   await act(async () => { await h.feature.dispose(); });
   expect(scenes[1].destroy).toHaveBeenCalledOnce();
@@ -114,6 +116,20 @@ it('native floating/docking keeps one scene; selection has no conversation navig
   await act(async () => { await h.runtime.mount(plugin); });
   await waitFor(() => expect(scenes).toHaveLength(3));
   expect(document.querySelectorAll('canvas')).toHaveLength(1);
+});
+
+it('updates the existing canvas accessible name when the locale changes', async () => {
+  const h = await setup();
+  await act(async () => { h.controller.openTab('dsh-agent-teams-office'); });
+  await waitFor(() => expect(scenes).toHaveLength(1));
+  const canvas = scenes[0].canvas;
+  await waitFor(() => expect(canvas.getAttribute('aria-label')).toBe('Agent Teams 3D office (up to 16 teammates plus Lead)'));
+  const locale = h.runtime.ctx.locale as { setLocale?: (id: string) => void };
+  expect(locale.setLocale).toBeTypeOf('function');
+  await act(async () => { locale.setLocale!('zh'); });
+  await waitFor(() => expect(canvas.getAttribute('aria-label')).toBe('Agent Teams 3D 办公室（最多 16 位队友及 Lead）'));
+  expect(scenes).toHaveLength(1);
+  expect(scenes[0].canvas).toBe(canvas);
 });
 
 it('disabled Agent Teams leaves no Office entry', async () => {

@@ -70,10 +70,8 @@ export async function createRenderer(parent: HTMLElement, assetBase: string, sig
         plusImage.draggable = false;
         plusImage.style.cssText = `position:absolute;left:-4px;top:${16 - hudPlus.baseline}px;width:${hudPlus.width}px;height:${hudPlus.height}px`;
         hud.querySelector('.hud-plus')!.append(plusImage);
-        const flags = { contours: true, grid: true, material: true, hair: true, face: true, headpiece: true, backhair: true, collar: true, logo: true, motion: true, letters: true, hud: true };
-        const on = (id: keyof typeof flags) => flags[id];
-        const canvases = { atlas: makeCanvas(), revealed: makeCanvas(), mask: makeCanvas(), eye: makeCanvas(), gridAtlas: makeCanvas(), gridReveal: makeCanvas(), person: makeCanvas(), sourceMask: makeCanvas(), selected: makeCanvas(), assigned: makeCanvas() };
-        const ac = canvases.atlas.getContext('2d')!, rc = canvases.revealed.getContext('2d')!, mc = canvases.mask.getContext('2d')!, ec = canvases.eye.getContext('2d')!;
+        const canvases = { atlas: makeCanvas(), revealed: makeCanvas(), mask: makeCanvas(), gridAtlas: makeCanvas(), gridReveal: makeCanvas(), person: makeCanvas(), sourceMask: makeCanvas() };
+        const ac = canvases.atlas.getContext('2d')!, rc = canvases.revealed.getContext('2d')!, mc = canvases.mask.getContext('2d')!;
         const flowRegionColumns = 8, flowRegionRows = 3, flowsPerRegion = 2, flowBrightness = 78;
         const assertLive = () => { check(initSignal); if (disposed)
             throw abortError(); };
@@ -137,29 +135,7 @@ export async function createRenderer(parent: HTMLElement, assetBase: string, sig
             sm.fillRect(x - 3, y - 3, w + 6, h + 6);
         sm.filter = 'none';
         sm.globalCompositeOperation = 'source-over';
-        const partDefinitions = [['headpiece', headShape], ['collar', collarShape], ['hair', hairShape], ['face', faceShape], ['backhair', personShape]] as const;
-        const partMasks = new Map<string, HTMLCanvasElement>(), assigned = canvases.assigned;
-        for (const [name, shape] of partDefinitions) {
-            const c = makeCanvas(), cc = c.getContext('2d')!;
-            cc.fillStyle = 'white';
-            cc.fill(shape);
-            cc.globalCompositeOperation = 'destination-in';
-            cc.drawImage(canvases.person, 0, 0);
-            cc.globalCompositeOperation = 'destination-out';
-            cc.drawImage(assigned, 0, 0);
-            cc.globalCompositeOperation = 'source-over';
-            assigned.getContext('2d')!.drawImage(c, 0, 0);
-            partMasks.set(name, c);
-        }
-        const selectedContext = canvases.selected.getContext('2d')!;
-        const allParts = () => partDefinitions.every(([name]) => on(name));
-        function updateSelectedMask() { clear(selectedContext); if (allParts()) {
-            selectedContext.drawImage(canvases.person, 0, 0);
-            return;
-        } for (const [name] of partDefinitions)
-            if (on(name))
-                selectedContext.drawImage(partMasks.get(name)!, 0, 0); }
-        function applyCharacterMask(c: CanvasRenderingContext2D) { c.globalCompositeOperation = 'destination-in'; c.drawImage(canvases.selected, 0, 0); c.globalCompositeOperation = 'source-over'; }
+        function applyCharacterMask(c: CanvasRenderingContext2D) { c.globalCompositeOperation = 'destination-in'; c.drawImage(canvases.person, 0, 0); c.globalCompositeOperation = 'source-over'; }
         const cleanResponse = await fetch(assetUrl(assetBase, 'clean-plate-v1.webp'), { signal: initSignal });
         if (!cleanResponse.ok)
             throw new Error(`Clean plate failed to load (${cleanResponse.status})`);
@@ -176,7 +152,6 @@ export async function createRenderer(parent: HTMLElement, assetBase: string, sig
         gridContext.globalCompositeOperation = 'destination-in';
         gridContext.drawImage(canvases.sourceMask, 0, 0);
         gridContext.globalCompositeOperation = 'source-over';
-        updateSelectedMask();
         const contourCanvas = document.createElement('canvas');
         contourCanvas.width = W;
         contourCanvas.height = H;
@@ -211,7 +186,6 @@ export async function createRenderer(parent: HTMLElement, assetBase: string, sig
         }
         const motion = localMotion(W, H);
         motionResource = motion;
-        const selected = canvases.selected;
         const poseToCanvas = (t: number) => Math.max(63, Math.min(168, Math.round(t * 24)));
         function composeMaterial(t: number) {
             clear(ac);
@@ -223,8 +197,6 @@ export async function createRenderer(parent: HTMLElement, assetBase: string, sig
             ac.globalCompositeOperation = 'destination-in';
             ac.drawImage(canvases.person, 0, 0);
             ac.globalCompositeOperation = 'source-over';
-            if (!allParts())
-                applyCharacterMask(ac);
             clear(mc);
             world(mc);
             mc.fillStyle = 'white';
@@ -248,7 +220,7 @@ export async function createRenderer(parent: HTMLElement, assetBase: string, sig
             rc.globalCompositeOperation = 'source-over';
             ctx.save();
             ctx.setTransform(1, 0, 0, 1, 0, 0);
-            ctx.drawImage(on('motion') ? motion.draw(canvases.revealed, t) : canvases.revealed, 0, 0);
+            ctx.drawImage(motion.draw(canvases.revealed, t), 0, 0);
             ctx.restore();
         }
         function drawGrid(t: number) { const gc = canvases.gridReveal.getContext('2d')!; clear(gc); gc.drawImage(canvases.gridAtlas, 0, 0); clear(mc); world(mc); mc.fillStyle = 'white'; const pitch = 18; for (let y = -18; y < H + 18; y += pitch)
@@ -358,7 +330,7 @@ export async function createRenderer(parent: HTMLElement, assetBase: string, sig
         function drawBackground(t: number) {
             ctx.fillStyle = '#030609';
             ctx.fillRect(0, 0, W, H);
-            if (on('letters')) drawLetterFlow(t);
+            drawLetterFlow(t);
         }
         function updateOverlay(t: number) {
             const visible = t >= 2;
@@ -388,10 +360,7 @@ export async function createRenderer(parent: HTMLElement, assetBase: string, sig
             sloganGroup.setAttribute('opacity', String(smooth(BRAND_REVEAL_START + .87, BRAND_REVEAL_START + 1.34, t)));
         }
         function render(t: number) { if (disposed)
-            return; const time = clamp(t / DURATION) * DURATION; lastTime = time; clear(ctx); drawBackground(time); world(ctx); if (on('material'))
-            composeMaterial(time); if (on('grid'))
-            drawGrid(time); if (on('contours'))
-            drawContours(time); drawLogoGlow(time); drawSloganEffects(time); drawTerminal(time); hud.style.opacity = String(smooth(.3, 1, time)); updateOverlay(time); }
+            return; const time = clamp(t / DURATION) * DURATION; lastTime = time; clear(ctx); drawBackground(time); world(ctx); composeMaterial(time); drawGrid(time); drawContours(time); drawLogoGlow(time); drawSloganEffects(time); drawTerminal(time); hud.style.opacity = String(smooth(.3, 1, time)); updateOverlay(time); }
         // Preload only validated release assets; no study, host, or network URL is embedded here.
         let released = false;
         const dispose = () => { if (released)
@@ -399,10 +368,7 @@ export async function createRenderer(parent: HTMLElement, assetBase: string, sig
             image.close(); frames.clear(); contourTracks.length = 0; cleanPlate?.close(); motion.dispose?.(); glyphs.dispose(); svg.remove(); hud.remove(); wrapper.remove(); for (const c of Object.values(canvases)) {
             c.width = 0;
             c.height = 0;
-        } contourCanvas.width = 0; contourCanvas.height = 0; logoLayer.width = 0; logoLayer.height = 0; for (const c of partMasks.values()) {
-            c.width = 0;
-            c.height = 0;
-        } partMasks.clear(); output.width = 0; output.height = 0; cliCanvas.width = 0; cliCanvas.height = 0; };
+        } contourCanvas.width = 0; contourCanvas.height = 0; logoLayer.width = 0; logoLayer.height = 0; output.width = 0; output.height = 0; cliCanvas.width = 0; cliCanvas.height = 0; };
         signal?.addEventListener('abort', dispose, { once: true });
         return { render, dispose };
     }

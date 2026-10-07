@@ -135,6 +135,32 @@ function connectInline(script: string, opts: AcpConnectionOptions = {}): AcpClie
   )
 }
 
+function connectPromptError(error: { code: number; message: string; data?: unknown }): AcpClientConnection {
+  const encodedError = JSON.stringify(error)
+  return connectInline(`
+// ${SPEC_TAG}-inline-prompt-error
+const failure = ${encodedError};
+let buf = '';
+process.stdin.on('data', (d) => {
+  buf += d;
+  let i;
+  while ((i = buf.indexOf('\\n')) >= 0) {
+    const line = buf.slice(0, i);
+    buf = buf.slice(i + 1);
+    if (!line.trim()) continue;
+    const msg = JSON.parse(line);
+    if (msg.id === undefined || msg.method === undefined) continue;
+    if (msg.method === 'initialize') {
+      process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: 1 } }) + '\\n');
+    } else if (msg.method === 'session/prompt') {
+      process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, error: failure }) + '\\n');
+    }
+  }
+});
+setInterval(() => {}, 1 << 30);
+`)
+}
+
 // initialize 一律回 -32000 auth_required
 const AUTH_REFUSING_AGENT = `
 // ${SPEC_TAG}-inline-auth
@@ -290,6 +316,77 @@ describe('握手（happy / minimal-caps / no-config-options）', () => {
       2000,
     )
     expect(conn.stderrLines().some((line) => line.includes('"error"') && line.includes('not-owned'))).toBe(true)
+    await conn.close()
+    fs.rmSync(file, { force: true })
+  }, 10_000)
+
+  it('closes Host-operation admission at terminal response, allows restore reads, and keeps existing terminal cleanup usable', async () => {
+    const file = path.join(logDir, 'cancel-generation.txt')
+    fs.writeFileSync(file, 'active-generation')
+    const script = `let b='';let sid='cancel-boundary-session';let loadReplies=0;let cancelCount=0;let terminalId='';let loadId;let promptId;const send=(m)=>process.stdout.write(JSON.stringify(m)+'\\n');const ask=(id,method,params)=>send({jsonrpc:'2.0',id,method,params});const note=(id,m)=>process.stderr.write('reply:'+id+':'+(m.error?'error':'ok')+'\\n');process.stdin.on('data',d=>{b+=d;let i;while((i=b.indexOf('\\n'))>=0){const l=b.slice(0,i);b=b.slice(i+1);if(!l.trim())continue;const m=JSON.parse(l);if(m.method==='initialize')send({jsonrpc:'2.0',id:m.id,result:{protocolVersion:1,agentInfo:{name:'cancel-boundary',version:'1'},agentCapabilities:{}}});else if(m.method==='session/new')send({jsonrpc:'2.0',id:m.id,result:{sessionId:sid}});else if(m.method==='session/load'){loadId=m.id;ask(90,'fs/read_text_file',{sessionId:sid,path:${JSON.stringify(file)}});ask(92,'terminal/create',{sessionId:sid,command:'noop',args:[],outputByteLimit:128})}else if(m.id===90||m.id===92){note(m.id,m);loadReplies++;if(loadReplies===2)send({jsonrpc:'2.0',id:loadId,result:{sessionId:sid}})}else if(m.method==='session/prompt'){promptId=m.id;ask(110,'fs/read_text_file',{sessionId:sid,path:${JSON.stringify(file)}});ask(111,'fs/write_text_file',{sessionId:sid,path:${JSON.stringify(file)},content:'active-write'});ask(112,'terminal/create',{sessionId:sid,command:'noop',args:[],outputByteLimit:128})}else if(m.id===110||m.id===111||m.id===112){note(m.id,m);if(m.id===112&&!m.error)terminalId=m.result.terminalId;if(m.id===112)send({jsonrpc:'2.0',id:promptId,result:{stopReason:'end_turn'}})}else if(m.method==='session/cancel'){cancelCount++;if(cancelCount===1){ask(101,'fs/read_text_file',{sessionId:sid,path:${JSON.stringify(file)}});ask(102,'fs/write_text_file',{sessionId:sid,path:${JSON.stringify(file)},content:'late-write'});ask(103,'terminal/create',{sessionId:sid,command:'noop',args:[],outputByteLimit:128})}else{ask(201,'fs/read_text_file',{sessionId:sid,path:${JSON.stringify(file)}});ask(202,'fs/write_text_file',{sessionId:sid,path:${JSON.stringify(file)},content:'late-write'});ask(203,'terminal/create',{sessionId:sid,command:'noop',args:[],outputByteLimit:128});ask(204,'terminal/output',{sessionId:sid,terminalId});ask(205,'terminal/wait_for_exit',{sessionId:sid,terminalId});ask(206,'terminal/kill',{sessionId:sid,terminalId});ask(207,'terminal/release',{sessionId:sid,terminalId})}}else if([92,101,102,103,201,202,203,204,205,206,207].includes(m.id)){note(m.id,m)}}});setInterval(()=>{},1<<30);`
+    const handled: string[] = []
+    const promptReadGate = Promise.withResolvers<void>()
+    let deferPromptRead = false
+    const conn = connectInline(script, {
+      fileSystemHandlers: {
+        readTextFile: async (params) => {
+          handled.push('read')
+          if (deferPromptRead) await promptReadGate.promise
+          return { content: fs.readFileSync(params.path, 'utf8') }
+        },
+        writeTextFile: async (params) => {
+          handled.push('write')
+          fs.writeFileSync(params.path, params.content)
+          return {}
+        },
+      },
+      terminalHandlers: {
+        createTerminal: async () => {
+          handled.push('create')
+          return { terminalId: 'terminal-cancel-boundary' }
+        },
+        terminalOutput: async () => ({ output: '', truncated: false }),
+        waitForExit: async () => ({ exitCode: 0, signal: null }),
+        killTerminal: async () => ({}),
+        releaseTerminal: async () => ({}),
+        dispose: async () => undefined,
+      },
+    })
+    await conn.initialize()
+    const session = await conn.newSession()
+    await conn.loadSession(session.sessionId)
+    await waitFor(() => conn.stderrLines().some((line) => line.includes('reply:90:ok')))
+    await waitFor(() => conn.stderrLines().some((line) => line.includes('reply:92:error')))
+    await conn.cancel(session.sessionId)
+    await waitFor(() =>
+      [101, 102, 103].every((id) => conn.stderrLines().some((line) => line.includes(`reply:${String(id)}:error`))),
+    )
+
+    deferPromptRead = true
+    let promptResolved = false
+    const prompting = conn.prompt(session.sessionId, PROMPT_BLOCKS).then(() => {
+      promptResolved = true
+    })
+    await waitFor(() => conn.stderrLines().includes('reply:112:ok'))
+    await sleep(10)
+    expect(promptResolved).toBe(false)
+    promptReadGate.resolve()
+    await prompting
+    expect(promptResolved).toBe(true)
+    await waitFor(() => conn.stderrLines().includes('reply:110:ok'))
+    expect(conn.stderrLines()).toContain('reply:110:ok')
+    expect(conn.stderrLines()).toContain('reply:111:ok')
+    expect(conn.stderrLines()).toContain('reply:112:ok')
+    await conn.cancel(session.sessionId)
+    await waitFor(() =>
+      [201, 202, 203, 204, 205, 206, 207].every((id) =>
+        conn.stderrLines().some((line) => line.includes(`reply:${String(id)}:`)),
+      ),
+    )
+    for (const id of [201, 202, 203]) expect(conn.stderrLines()).toContain(`reply:${String(id)}:error`)
+    for (const id of [204, 205, 206, 207]) expect(conn.stderrLines()).toContain(`reply:${String(id)}:ok`)
+    expect(handled).toEqual(['read', 'read', 'write', 'create'])
+    expect(fs.readFileSync(file, 'utf8')).toBe('active-write')
     await conn.close()
     fs.rmSync(file, { force: true })
   }, 10_000)
@@ -705,6 +802,48 @@ describe('错误分类', () => {
     const acpErr = err as AcpClientError
     expect(acpErr.kind).toBe('auth_required')
     expect(acpErr.message).toContain('requires authentication')
+  })
+
+  it('resource exhaustion requires Devin code plus the structured vendor errorKind and preserves a redacted reason', async () => {
+    for (const retryable of [true, false]) {
+      const conn = connectPromptError({
+        code: -32011,
+        message: 'weekly usage quota exhausted; api_key=sk-proj-abcdef1234567890abcdef',
+        data: { errorKind: 'resource_exhausted', retryable },
+      })
+      await conn.initialize()
+      const err = await expectReject(conn.prompt('session-1', PROMPT_BLOCKS))
+      expect(err).toMatchObject({ kind: 'resource-exhausted', code: 'ACP_RESOURCE_EXHAUSTED' })
+      expect((err as Error).message).toContain('weekly usage quota exhausted')
+      expect((err as Error).message).toContain('JSON-RPC code -32011')
+      expect((err as Error).message).toContain('api_key=<redacted>')
+      expect((err as Error).message).not.toContain('sk-proj-abcdef1234567890abcdef')
+    }
+  })
+
+  it.each([
+    ['missing data', { code: -32011, message: 'weekly usage quota exhausted' }],
+    ['unknown kind', { code: -32011, message: 'weekly usage quota exhausted', data: { errorKind: 'rate_limited' } }],
+    [
+      'wrong code',
+      { code: -32603, message: 'weekly usage quota exhausted', data: { errorKind: 'resource_exhausted' } },
+    ],
+  ])('unknown or non-matching provider error (%s) stays protocol-error', async (_label, failure) => {
+    const conn = connectPromptError(failure)
+    await conn.initialize()
+    const err = await expectReject(conn.prompt('session-1', PROMPT_BLOCKS))
+    expect(err).toMatchObject({ kind: 'protocol-error', code: 'ACP_PROTOCOL_ERROR' })
+  })
+
+  it('authentication classification takes precedence over quota-shaped vendor data', async () => {
+    const conn = connectPromptError({
+      code: -32000,
+      message: 'Authentication required',
+      data: { errorKind: 'resource_exhausted' },
+    })
+    await conn.initialize()
+    const err = await expectReject(conn.prompt('session-1', PROMPT_BLOCKS))
+    expect(err).toMatchObject({ kind: 'auth_required', code: 'ACP_AUTH_REQUIRED' })
   })
 
   it('provider failure interrupts an active RPC as a crash and cleans up the managed range', async () => {

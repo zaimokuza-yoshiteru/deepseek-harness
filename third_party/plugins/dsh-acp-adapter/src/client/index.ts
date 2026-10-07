@@ -15,17 +15,20 @@ import type {} from '@deepseek-ai/dsh-client-ui-sidebar-right/client'
 import { isMainSession, openSubagentAside } from './coordinator/native-session-navigation.ts'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
+import { AcpActivityNode } from './ui/AcpActivityNode.ts'
 import {
-  AcpActivityNode,
   acpPromptAnchorDefinition,
   createAcpActivityDefinition,
+  createAcpEffectiveRouteDefinition,
   createAcpLiveActivityDefinition,
-} from './ui/AcpActivityNode.ts'
+} from './ui/activity-definitions.ts'
 import { installNativeToolRenderer } from './ui/native-tool-renderer.ts'
 import { installAcpAssistantStream } from './ui/AcpAssistantStream.ts'
 import { AcpActivityJournalHub } from './data/activity-journal.ts'
+import { AcpUiFeedback } from './data/feedback.ts'
 import { CrossBackendCoordinator } from './coordinator/cross-backend-coordinator.ts'
 import { CrossBackendModal } from './ui/CrossBackendModal.ts'
+import { AcpOutcomeToast } from './ui/AcpOutcomeToast.ts'
 import { AcpRecoveryDock } from './ui/AcpRecoveryDock.ts'
 import { AcpAgentControl } from './ui/AcpAgentControl.ts'
 import { AcpTeamManagement } from './ui/AcpTeamManagement.ts'
@@ -102,6 +105,7 @@ async function registerUi(ctx: ClientContext): Promise<void> {
     refusedMessage: () => ctx.locale.bind('settings.acp')('settingsWriteRefused'),
     remote: acpRemote,
   })
+  const feedback = new AcpUiFeedback()
   const jsonStringWrapping = createAcpJsonStringWrapping()
   const panelWire: AcpSectionWire = {
     refreshHealth: (recheck) => {
@@ -112,10 +116,12 @@ async function registerUi(ctx: ClientContext): Promise<void> {
     },
     saveAgent: (editingId, draft) => panelController.saveAgent(editingId, draft),
     deleteAgent: (id) => panelController.deleteAgent(id),
+    notifyOutcome: feedback.report,
     setToolApprovalDefault: (policy) => panelController.setToolApprovalDefault(policy),
     countBoundSessions: (id) => panelController.countBoundSessions(id),
   }
   const settingsT = ctx.locale.bind('settings.acp') as AcpTranslate
+  ctx.uiConversation.events.register(createAcpEffectiveRouteDefinition())
   ctx.uiConversation.events.register(createAcpLiveActivityDefinition(managedRoutes.owns))
   ctx.uiConversation.events.register(acpPromptAnchorDefinition)
   ctx.uiConversation.events.register(createAcpActivityDefinition(managedRoutes.owns))
@@ -246,7 +252,7 @@ async function registerUi(ctx: ClientContext): Promise<void> {
       ownsRoute: managedRoutes.owns,
       async loadMembers(sessionId) {
         const result = await acpRemote.teamMembers(sessionId)
-        if (!result.ok) throw new Error(result.error.message)
+        if (!result.ok) throw Object.assign(new Error(result.error.message), { code: result.error.code })
         return result.value
       },
       async openMember(parentSessionId, childSessionId) {
@@ -303,6 +309,17 @@ async function registerUi(ctx: ClientContext): Promise<void> {
       CrossBackendModal,
     ),
   )
+  ctx.slots.inject('shell.overlay', () =>
+    ctx.slots.register(
+      {
+        name: 'shell.overlay',
+        id: 'dsh-acp-operation-outcomes',
+        locale: 'acpActivity',
+        inject: (): { readonly feedback: AcpUiFeedback } => ({ feedback }),
+      },
+      AcpOutcomeToast,
+    ),
+  )
   ctx.slots.inject('conversation.input.dock', () =>
     ctx.slots.register(
       {
@@ -312,10 +329,12 @@ async function registerUi(ctx: ClientContext): Promise<void> {
         locale: 'acpActivity',
         inject: (): {
           readonly remote: AcpRemoteLike
+          readonly streamFactory: RemoteStreamFactory
           readonly createNewSession: (sourceSessionId: string) => Promise<void>
           readonly ownsRoute: typeof managedRoutes.owns
         } => ({
           remote: acpRemote,
+          streamFactory: ctx.remote,
           ownsRoute: managedRoutes.owns,
           createNewSession: async (sourceSessionId) => {
             const row = sessions.list.getSnapshot().byId[sourceSessionId as never]

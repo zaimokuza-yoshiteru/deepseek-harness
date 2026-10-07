@@ -56,7 +56,6 @@ export async function createOfficeScene(element: HTMLElement, onSelect: (id: str
       app.renderer.resize(width, height); camera.setViewSize(width, height);
     };
     observer = new ResizeObserver(resize); observer.observe(element); resize();
-    app.canvas.setAttribute('aria-label', 'Agent Teams office');
     app.canvas.addEventListener('webglcontextlost', event => {
       // Pixi deliberately loses the GPU context on destroy; that is not a scene failure.
       if (destroyed) return;
@@ -84,8 +83,9 @@ export async function createOfficeScene(element: HTMLElement, onSelect: (id: str
         if (!entry) return false;
         const p = entry.character.getPixelPosition(); camera.focusOn(p.x, p.y, 2.6); return true;
       },
-      update(members, statusLabel) {
+      update(members, statusLabel, _selected, canvasLabel) {
         if (destroyed) return;
+        app.canvas.setAttribute('aria-label', canvasLabel);
         seats = reconcileSeats(seats, members, SEATS.length);
         for (const [id, entry] of characters) {
           if (!seats.has(id)) { entry.character.destroy(); entry.label.destroy(); characters.delete(id); }

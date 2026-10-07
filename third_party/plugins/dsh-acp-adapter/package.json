@@ -1,6 +1,6 @@
 {
   "name": "@zaimokuza/dsh-acp-adapter",
-  "version": "0.2.0-rc.2.1",
+  "version": "0.2.0-rc.2.7",
   "description": "Use AI agents from the DSH session UI.",
   "icon": "./icon.svg",
   "keywords": [
@@ -95,7 +95,9 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.5.1",
-    "@modelcontextprotocol/sdk": "1.29.0",
+    "@modelcontextprotocol/client": "2.3.0",
+    "@modelcontextprotocol/node": "2.1.1",
+    "@modelcontextprotocol/server": "2.3.0",
     "yaml": "2.9.0",
     "zod": "4.4.3"
   },
@@ -350,7 +352,9 @@
     "tsdown": "0.22.14",
     "typescript": "6.0.3",
     "vitest": "4.1.10",
-    "zustand": "4.4.7"
+    "zustand": "4.4.7",
+    "@deepseek-ai/dsh-agent-loop": "0.2.0-rc.2",
+    "@modelcontextprotocol/core": "2.3.0"
   },
   "files": [
     "icon.svg",

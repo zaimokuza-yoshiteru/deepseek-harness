@@ -1,6 +1,6 @@
 import type { ClientContext } from './context.ts';
 import type { LoadSnapshot, OfficeSnapshot } from '../types.ts';
-import React from 'react';
+import React, { useSyncExternalStore } from 'react';
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives';
 import { createOfficeScene } from './scene-factory.ts';
 import { createSceneCache } from './scene-cache.ts';
@@ -51,10 +51,11 @@ export function apply(ctx: ClientContext) {
   ctx.effect(() => ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register({
     name: 'sidebar.right.pane.tab', key: name, locale: name,
   }, function OfficeTab({ sessionId, useTabInfo }) {
+    const locale = useSyncExternalStore(listener => ctx.locale.subscribe(listener), () => ctx.locale.getSnapshot());
     const { tab } = useTabInfo();
     const sceneKey = sessionId + '/' + tab.id;
     const office = scenes.get(sceneKey);
-    return <Office key={sceneKey} t={t} load={load} sessionId={sessionId}
+    return <Office key={sceneKey} t={t} localeRevision={locale.revision} load={load} sessionId={sessionId}
       visible={tab.visible} signal={tab.signal} office={office}/>;
   })), 'dsh-agent-teams-office: sidebar body');
 }

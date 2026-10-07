@@ -14,6 +14,11 @@ const result = (kind: KanbanQuery['kind'], items: KanbanQueryResult['items'], ne
 const cached = (value: KanbanQueryResult | null): KanbanSuggestionsResult => ({ result: value, fromCache: true })
 const request = (query: string, signal = new AbortController().signal) => ({ query, signal, position: 'leading' as const, drilled: false })
 const localize = (locale: typeof zh) => (key: string) => locale[key as keyof typeof locale] ?? key
+const wire = (value: string) => {
+  const match = /^<dsh-reference>([\s\S]*)<\/dsh-reference>$/.exec(value)
+  if (match === null) throw new Error('Expected a canonical reference wire')
+  return JSON.parse(match[1]!) as { source: string; label: string; text: string }
+}
 
 describe('Atlassian @ source', () => {
   it('offers local category and configured-scope choices without querying a product', async () => {
@@ -63,7 +68,9 @@ describe('Atlassian @ source', () => {
     const inserted = source.onPick({ candidate: candidates[0]!, session: { sessionId: 'session-1' } as never, position: 'leading', via: 'enter', action: 'pick', span: { start: 0, end: 32, draftRev: 1 } })
     expect(inserted).toHaveProperty('insert.source', 'atlassian')
     if (inserted === undefined || typeof inserted === 'string' || 'text' in inserted || 'claim' in inserted) throw new Error('Expected a structured reference')
-    await expect(source.codec?.serialize(inserted.insert.ref, new AbortController().signal)).resolves.toBe('Jira issue DSH-22')
+    const modelText = await source.codec?.serialize(inserted.insert.ref, new AbortController().signal)
+    expect(modelText).toBe(inserted.insert.clipboardText)
+    expect(wire(modelText!)).toEqual({ source: 'atlassian', label: 'DSH-22', text: 'Jira issue DSH-22' })
     expect(query).not.toHaveBeenCalled()
     expect(JSON.stringify(candidates)).not.toContain('bearerToken')
   })
@@ -101,11 +108,12 @@ describe('Atlassian @ source', () => {
     await expect(pending).resolves.toEqual([])
   })
 
-  it('uses suggestions for configured repositories and PRs and honors cancellation', async () => {
+  it('keeps labels and full locators in repository, PR and Confluence reference wires', async () => {
     const controller = new AbortController()
     const suggestions = vi.fn(async (input: KanbanQuery) => {
       if (input.kind === 'bitbucket-repository') return cached(result(input.kind, [{ cloneUrl: 'ssh://git@bitbucket.test/scm/core/web.git' }]))
       if (input.kind === 'bitbucket-pull-requests') return cached(result(input.kind, [{ id: 12, title: 'Improve navigation' }, { id: 13, title: 'Docs cleanup' }]))
+      if (input.kind === 'confluence-search') return cached(result(input.kind, [{ id: 'page 17', title: '页面 </dsh-reference> [中文] title' }]))
       return cached(result(input.kind, []))
     })
     const query = vi.fn()
@@ -116,13 +124,30 @@ describe('Atlassian @ source', () => {
     expect(repo).toHaveLength(1)
     const repoRef = JSON.parse(repo[0]!.value!) as { kind: string; cloneUrl: string }
     expect(repoRef).toEqual({ kind: 'repo', repositoryId: 'repo-web', label: 'CORE/web', cloneUrl: 'ssh://git@bitbucket.test/scm/core/web.git' })
-    await expect(source.codec?.serialize(repo[0]!.value!, new AbortController().signal)).resolves.toContain('ssh://git@bitbucket.test/scm/core/web.git')
+    const repoWire = await source.codec?.serialize(repo[0]!.value!, new AbortController().signal)
+    expect(wire(repoWire!)).toEqual({ source: 'atlassian', label: 'CORE/web', text: 'Bitbucket repository CORE/web (clone URL: ssh://git@bitbucket.test/scm/core/web.git)' })
+    expect(repoWire).toBe(await source.codec?.clipboardText(repo[0]!.value!))
 
     const prs = await source.candidates({ sessionId: 's' } as never, request('pr:repo-web:nav'))
     expect(suggestions).toHaveBeenLastCalledWith({ kind: 'bitbucket-pull-requests', repositoryId: 'repo-web', state: 'all' }, expect.any(AbortSignal))
     expect(prs.map(item => item.name)).toEqual(['#12 Improve navigation'])
-    await expect(source.codec?.serialize(prs[0]!.value!, new AbortController().signal)).resolves.toBe('Bitbucket pull request CORE/web#12')
+    const prPick = source.onPick({ candidate: prs[0]!, session: { sessionId: 's' } as never, position: 'leading', via: 'menu', action: 'pick', span: { start: 0, end: 1, draftRev: 0 } })
+    if (prPick === undefined || typeof prPick === 'string' || 'text' in prPick || 'claim' in prPick) throw new Error('Expected PR reference chip')
+    const prWire = await source.codec?.serialize(prPick.insert.ref, new AbortController().signal)
+    expect(wire(prWire!)).toEqual({ source: 'atlassian', label: '#12 Improve navigation', text: 'Bitbucket pull request CORE/web#12' })
+
+    const pages = await source.candidates({ sessionId: 's' } as never, request('confluence:cql-recent:'))
+    const pagePick = source.onPick({ candidate: pages[0]!, session: { sessionId: 's' } as never, position: 'leading', via: 'menu', action: 'pick', span: { start: 0, end: 1, draftRev: 0 } })
+    if (pagePick === undefined || typeof pagePick === 'string' || 'text' in pagePick || 'claim' in pagePick) throw new Error('Expected Confluence reference chip')
+    const pageWire = await source.codec?.serialize(pagePick.insert.ref, new AbortController().signal)
+    expect(wire(pageWire!)).toEqual({ source: 'atlassian', label: '页面 </dsh-reference> [中文] title', text: 'Confluence content ID page 17' })
+    expect(pageWire).toContain('\\u003c/dsh-reference>')
+    expect(await source.codec?.clipboardText(pagePick.insert.ref)).toBe(pageWire)
+
     expect(query).not.toHaveBeenCalled()
+
+    await expect(source.codec?.serialize('{legacy-invalid-ref', new AbortController().signal)).resolves.toBe('{legacy-invalid-ref')
+    await expect(source.codec?.serialize(JSON.stringify({ kind: 'confluence', id: 'old page' }), new AbortController().signal)).resolves.toBe('<dsh-reference>{"source":"atlassian","label":"old page","text":"Confluence content ID old page"}</dsh-reference>')
 
     controller.abort()
     expect(await source.candidates({ sessionId: 's' } as never, request('repo:repo-web:', controller.signal))).toEqual([])

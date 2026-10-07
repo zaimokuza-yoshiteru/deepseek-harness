@@ -89,11 +89,11 @@ export class AtlassianHttp {
       const response = await new Promise<{ status: number; headers: http.IncomingHttpHeaders; body: Buffer }>((resolve, reject) => {
         let settled = false
         const timeoutMs = options.timeoutMs ?? 30_000
-        const deadline = setTimeout(() => req.destroy(new Error(`Atlassian request exceeded its configured ${timeoutMs} ms deadline`)), timeoutMs)
+        let deadline: ReturnType<typeof setTimeout> | undefined
         const finish = (error?: Error, value?: { status: number; headers: http.IncomingHttpHeaders; body: Buffer }) => {
           if (settled) return
           settled = true
-          clearTimeout(deadline)
+          if (deadline !== undefined) clearTimeout(deadline)
           if (error) reject(error)
           else resolve(value!)
         }
@@ -110,9 +110,14 @@ export class AtlassianHttp {
           res.on('error', error => finish(error))
           res.on('end', () => finish(undefined, { status: res.statusCode ?? 0, headers: res.headers, body: Buffer.concat(chunks) }))
         })
+        deadline = setTimeout(() => req.destroy(new Error(`Atlassian request exceeded its configured ${timeoutMs} ms deadline`)), timeoutMs)
         req.on('error', error => finish(error))
-        if (payload !== undefined) req.write(payload)
-        req.end()
+        try {
+          if (payload !== undefined) req.write(payload)
+          req.end()
+        } catch (error) {
+          finish(error instanceof Error ? error : new Error(String(error)))
+        }
       })
       const raw = response.body.toString('utf8')
       let data: unknown = null

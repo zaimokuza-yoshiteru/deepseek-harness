@@ -211,7 +211,15 @@
 }
 
 .editor {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: var(--dsw-font-xs-13);
+  font-family: Inter, var(--dsw-font-family);
+}
+
+.editorContent {
   box-sizing: border-box;
+  width: 100%;
   min-height: 28px;
   /* Six 20px text lines plus padding and border, then the editor scrolls. */
   max-height: 127px;
@@ -222,11 +230,21 @@
   background: var(--dsw-alias-bg-base);
   color: var(--dsw-alias-label-primary);
   overflow-y: auto;
-  resize: none;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
-.editor:focus {
+.editorContent:focus {
   border-color: var(--dsw-alias-state-business-primary);
+}
+
+.preview :global([data-ref-chip="reference"]) {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  white-space: nowrap;
 }
 
 .actions {

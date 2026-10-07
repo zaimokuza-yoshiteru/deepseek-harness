@@ -19,3 +19,5 @@
 11. 使用 `delivery.json` 统一版本，输出桌面包、同版本源码包及校验清单，过滤个人配置、依赖缓存和旧产物。
 12. 当前便携桌面基线集成 dsh-acp-adapter、dsh-agent-teams-office、dsh-boot-ocbc 和 dsh-atlassian-kanban，统一从仓库内源码构建。
 13. 内网禁用新版桌面产品事件采集与导出，并继续保留 `DSH_TELEMETRY_MODE=DISABLED`；非内网配置保持上游装配行为。
+
+默认源码归档保留完整工作区和插件源码、冻结依赖锁、运行提示/技能、许可证以及实际构建和便携包验证脚本；仅便携包验证直接使用的少量 fixture 会保留，其他测试、普通文档、CI 和维护/发布工具不进入归档。提取后在支持的 Node.js 22.19+ 环境运行 `pnpm install --frozen-lockfile` 和 `pnpm build`。需要开发测试源码时可显式执行 `pnpm package:source --with-tests`。

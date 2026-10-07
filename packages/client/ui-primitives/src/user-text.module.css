@@ -31,6 +31,11 @@
   font-family: var(--dsw-font-markdown-code-font-family);
 }
 
+.referenceMarker {
+  margin-right: 2px;
+  font-weight: 500;
+}
+
 /* Inline reference glyphs (always ReferenceIcon svgs) ride the consumer's own
    font: 1em keeps the glyph at the text's size in the bubble (14px + user
    setting), the queue preview's fixed 13px line, and any future consumer — a

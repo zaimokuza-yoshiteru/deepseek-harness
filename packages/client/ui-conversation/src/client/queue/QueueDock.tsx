@@ -1,5 +1,10 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { DraftEditorRuntime } from '../input/editor/runtime.ts'
+import { ComposerContentEditable } from '../input/editor/ComposerContentEditable.tsx'
+import { DecoratorPortals } from '../input/editor/DecoratorPortals.tsx'
+import type { Occurrence } from '../contract/draft-editor.ts'
+import { tokenizeUserTextReferences } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { FileAttachmentRef, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
@@ -17,13 +22,41 @@ import css from './QueueDock.module.css'
 const EMPTY_QUEUE = [] as const
 const QUEUE_PREVIEW_CHARS = 200
 
+interface QueueEditingState {
+  readonly id: MessageId
+  readonly text: string
+  readonly seedText: string
+  readonly referenceMode: boolean
+}
+
 function previewOf(content: InboxState['next-turn'][number]['content']): string {
-  const flat = content
+  const raw = content
     .filter(block => block.type !== 'image' && block.type !== 'file')
     .map(block => (block.type === 'text' ? block.text : `[${block.type}]`))
-    .join(' ').replace(/\s+/g, ' ').trim()
-  const chars = Array.from(flat)
-  return chars.length > QUEUE_PREVIEW_CHARS ? `${chars.slice(0, QUEUE_PREVIEW_CHARS).join('')}…` : flat
+    .join(' ')
+  const runs = tokenizeUserTextReferences(raw)
+  let preview = ''
+  let visibleChars = 0
+  for (let index = 0; index < runs.length; index += 1) {
+    const run = runs[index]
+    if (run === undefined) continue
+    const isReference = run.kind === 'reference'
+    const visible = isReference ? `@${run.label}` : run.wire.replace(/\s+/gu, ' ')
+    const chars = Array.from(visible)
+    if (visibleChars >= QUEUE_PREVIEW_CHARS) {
+      if (visible.trim() !== '') return `${preview.trimEnd()}…`
+      continue
+    }
+    const remaining = QUEUE_PREVIEW_CHARS - visibleChars
+    if (!isReference && chars.length > remaining) return `${preview}${chars.slice(0, remaining).join('')}…`.trim()
+    preview += isReference ? run.wire : visible
+    visibleChars += chars.length
+    if (visibleChars >= QUEUE_PREVIEW_CHARS) {
+      const hasMore = runs.slice(index + 1).some(next => next.kind === 'reference' || next.wire.trim() !== '')
+      return hasMore ? `${preview.trimEnd()}…` : preview.trim()
+    }
+  }
+  return preview.trim()
 }
 
 function textOf(content: InboxState['next-turn'][number]['content']): string | null {
@@ -98,14 +131,41 @@ function QueueThumb({ attachment, loadImage, label }: {
     : <img className={css.thumb} src={url} alt={label} />
 }
 
-/**
- * Inline editor for one queued row. A textarea rather than an input: HTML
- * strips newlines from single-line input values, so editing a multi-line
- * queued message through one rewrites it as a single line. It grows with its
- * content up to the CSS cap, then scrolls. Enter saves, Shift+Enter breaks the
- * line, Escape cancels.
- */
-function QueueEditor({ text, label, onChange, onSave, onCancel }: {
+/** Choose the plain-text editor or a chip-aware editor from the row's validated reference seed. */
+function QueueEditor({ initialText, text, referenceMode, label, onChange, onSave, onCancel }: {
+  initialText: string
+  text: string
+  referenceMode: boolean
+  label: string
+  onChange: (text: string) => void
+  onSave: (text: string) => void
+  onCancel: () => void
+}) {
+  const occurrences = referenceMode ? tokenizeUserTextReferences(initialText).flatMap((run, index): Occurrence[] => run.kind === 'reference'
+    ? [{
+      occurrenceId: index + 1,
+      source: 'queued-wire',
+      ref: run.wire,
+      offset: run.start,
+      length: run.end - run.start,
+      label: run.label,
+      clipboardText: run.wire,
+    }]
+    : []) : []
+  return !referenceMode
+    ? <PlainQueueEditor text={text} label={label} onChange={onChange} onSave={() => { onSave(text) }} onCancel={onCancel} />
+    : <ReferenceQueueEditor
+      initialText={initialText}
+      occurrences={occurrences}
+      label={label}
+      onChange={onChange}
+      onSave={onSave}
+      onCancel={onCancel}
+    />
+}
+
+/** Keep ordinary queue edits on the multiline textarea; Enter saves and Shift+Enter inserts a line break. */
+function PlainQueueEditor({ text, label, onChange, onSave, onCancel }: {
   text: string
   label: string
   onChange: (text: string) => void
@@ -119,7 +179,6 @@ function QueueEditor({ text, label, onChange, onSave, onCancel }: {
     /* v8 ignore next -- the ref is attached before layout effects run. */
     if (node === null) return
     node.style.height = 'auto'
-    // scrollHeight excludes the border that the border-box height includes.
     node.style.height = `${node.scrollHeight + node.offsetHeight - node.clientHeight}px`
   }, [text])
 
@@ -128,7 +187,7 @@ function QueueEditor({ text, label, onChange, onSave, onCancel }: {
       ref={ref}
       autoFocus
       rows={1}
-      className={css.editor}
+      className={`${css.editor} ${css.editorContent}`}
       aria-label={label}
       value={text}
       onChange={(event) => { onChange(event.currentTarget.value) }}
@@ -142,6 +201,73 @@ function QueueEditor({ text, label, onChange, onSave, onCancel }: {
         onSave()
       }}
     />
+  )
+}
+
+/** Restore validated wires as atomic chips while keeping their original clipboard projection. */
+function ReferenceQueueEditor({ initialText, occurrences, label, onChange, onSave, onCancel }: {
+  initialText: string
+  occurrences: readonly Occurrence[]
+  label: string
+  onChange: (text: string) => void
+  onSave: (text: string) => void
+  onCancel: () => void
+}) {
+  const onChangeRef = useRef(onChange)
+  const onSaveRef = useRef(onSave)
+  onChangeRef.current = onChange
+  onSaveRef.current = onSave
+  const draftRef = useRef(initialText)
+  const isSeeding = useRef(true)
+  const seed = useRef({ text: initialText, occurrences })
+  const runtime = useMemo(() => {
+    const editor = new DraftEditorRuntime({
+      onUpdate: () => {
+        const projection = editor.refreshProjection()
+        if (isSeeding.current) return
+        if (projection.clipboardText === draftRef.current) return
+        draftRef.current = projection.clipboardText
+        onChangeRef.current(projection.clipboardText)
+      },
+      openReference: () => false,
+      activeClaimToken: () => null,
+      lexicon: () => new Map(),
+      resolveLexicon: () => undefined,
+    })
+    return editor
+  }, [])
+
+  useLayoutEffect(() => {
+    const unregister = runtime.register()
+    runtime.restoreDraft(seed.current.text, seed.current.occurrences)
+    const projection = runtime.refreshProjection()
+    draftRef.current = projection.clipboardText
+    isSeeding.current = false
+    return unregister
+  }, [runtime])
+
+  return (
+    <div className={css.editor} data-queue-editor="">
+      <ComposerContentEditable
+        editor={runtime.editor}
+        editable
+        autoFocus
+        className={css.editorContent}
+        aria-label={label}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            event.stopPropagation()
+            onCancel()
+            return
+          }
+          if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return
+          event.preventDefault()
+          event.stopPropagation()
+          onSaveRef.current(draftRef.current)
+        }}
+      />
+      <DecoratorPortals editor={runtime.editor} />
+    </div>
   )
 }
 
@@ -174,7 +300,7 @@ export function QueueDock({ useSession, useProjection, updateQueue, notify, load
   const rowCount = queue.length + pendingQueue.length
   const running = useSession(s => s.running)
   const queueMutable = useSession(s => s.subagent === null || s.subagent.address.mode === 'continuable')
-  const [editing, setEditing] = useState<{ id: MessageId; text: string } | null>(null)
+  const [editing, setEditing] = useState<QueueEditingState | null>(null)
   const [busy, setBusy] = useState<MessageId | null>(null)
   const [collapsed, setCollapsed] = useState(true)
   const listId = useId()
@@ -207,11 +333,11 @@ export function QueueDock({ useSession, useProjection, updateQueue, notify, load
     }
   }
 
-  const saveEdit = async (): Promise<void> => {
-    if (editing === null || editing.text.trim() === '') return
+  const saveEdit = async (nextText = editing?.text): Promise<void> => {
+    if (editing === null || nextText === undefined || nextText.trim() === '') return
     if (await applyAction(
       editing.id,
-      { kind: 'edit', content: [{ type: 'text', text: editing.text }] },
+      { kind: 'edit', content: [{ type: 'text', text: nextText }] },
       t('queue.editFailed'),
     )) setEditing(null)
   }
@@ -249,10 +375,13 @@ export function QueueDock({ useSession, useProjection, updateQueue, notify, load
                 {editing?.id === row.id
                   ? (
                     <QueueEditor
+                      key={row.id}
+                      initialText={editing.seedText}
                       text={editing.text}
+                      referenceMode={editing.referenceMode}
                       label={t('queue.edit')}
-                      onChange={(text) => { setEditing({ id: row.id, text }) }}
-                      onSave={() => { void saveEdit() }}
+                      onChange={(text) => { setEditing(current => current?.id === row.id ? { ...current, text } : current) }}
+                      onSave={(text) => { void saveEdit(text) }}
                       onCancel={() => { setEditing(null) }}
                     />
                   )
@@ -278,7 +407,7 @@ export function QueueDock({ useSession, useProjection, updateQueue, notify, load
                             ))}
                         </span>
                       )}
-                      <span className={css.preview}>{projectUserText(previewOf(row.content), [])}</span>
+                      <span className={css.preview} data-queue-preview="">{projectUserText(previewOf(row.content), [])}</span>
                     </>
                   )}
                 {queueMutable && <div className={css.actions}>
@@ -321,7 +450,12 @@ export function QueueDock({ useSession, useProjection, updateQueue, notify, load
                             title={text === null ? t('queue.edit.unsupported') : undefined}
                             disabled={busy !== null || text === null}
                             onClick={() => {
-                              if (text !== null) setEditing({ id: row.id, text: text })
+                              if (text !== null) setEditing({
+                                id: row.id,
+                                text,
+                                seedText: text,
+                                referenceMode: tokenizeUserTextReferences(text).some(run => run.kind === 'reference'),
+                              })
                             }}
                           >
                             <IconEditOutlineRegular size={14} />

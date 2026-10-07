@@ -21,7 +21,7 @@ function digest(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex')
 }
 
-export function packageSource({ root, output, version, withTests = true }) {
+export function packageSource({ root, output, version, withTests = false }) {
   root = resolve(root)
   version ??= distributionVersion(root)
   if (!/^[0-9A-Za-z][0-9A-Za-z._+-]*$/.test(version)) throw new Error(`Invalid distribution version: ${version}`)
@@ -53,9 +53,9 @@ export function packageSource({ root, output, version, withTests = true }) {
 }
 
 function runCli() {
-  const { values } = parseArgs({ options: { output: { type: 'string' }, version: { type: 'string' }, 'without-tests': { type: 'boolean', default: false } } })
+  const { values } = parseArgs({ options: { output: { type: 'string' }, version: { type: 'string' }, 'with-tests': { type: 'boolean', default: false } } })
   const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-  const result = packageSource({ root, output: values.output, version: values.version, withTests: !values['without-tests'] })
+  const result = packageSource({ root, output: values.output, version: values.version, withTests: values['with-tests'] })
   console.log(`Packaged source archive ${result.archive}`)
   console.log(`SHA-256 ${result.sha256}`)
   console.log(`Manifest ${result.manifest}`)
