@@ -15,17 +15,23 @@ on:
         description: Existing desktop tag at the verified run commit
         required: true
         type: string
+      mode:
+        description: Promotion mode; the RC 2.5 transfer mode is restricted to its isolated branch and fixed artifacts
+        required: true
+        type: choice
+        options: [full, rc25-transfer]
+        default: full
 
 permissions:
   contents: read
 
 concurrency:
-  group: desktop-promote-${{ inputs.tag }}
+  group: desktop-promote-${{ inputs.mode }}-${{ inputs.tag }}
   cancel-in-progress: false
 
 jobs:
   promote:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'full' && github.ref == 'refs/heads/desktop'
     runs-on: ubuntu-24.04
     permissions:
       actions: read
@@ -234,3 +240,217 @@ jobs:
             gh release create "$DESKTOP_TAG" --verify-tag --draft --prerelease --title "DSH Desktop $DESKTOP_TAG" --notes "Verified source and application artifacts; release review pending."
           fi
           gh release upload "$DESKTOP_TAG" ./*.zip ./*.tar.gz ./*.manifest.json ./*.sha256 SHA256SUMS.txt --clobber
+
+  rc25-transfer:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'rc25-transfer'
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      SOURCE_RUN: ${{ inputs.source_run }}
+      DESKTOP_TAG: ${{ inputs.tag }}
+      EXPECTED_SOURCE_SHA: b1e845853b9c6f49283fe4cf30eda2ee5bd520c1
+      EXPECTED_WINDOWS_ARTIFACT_SHA256: 4f3f439cdc7cabf17d910d2b75a6789395d1fd475c499f6db22366515b6f7e56
+    steps:
+      - name: Check fixed transfer scope and source run
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == refs/heads/codex/rc25-transfer ]]
+          [[ "$SOURCE_RUN" == 37758256632 ]]
+          [[ "$DESKTOP_TAG" == 0.2.0.rc.2.5 ]]
+          TAG_SHA="$(gh api "repos/$GH_REPO/commits/$DESKTOP_TAG" --jq .sha)"
+          [[ "$TAG_SHA" == "$EXPECTED_SOURCE_SHA" ]]
+          gh api "repos/$GH_REPO/actions/runs/$SOURCE_RUN" > "$RUNNER_TEMP/source-run.json"
+          export SOURCE_RUN_FILE="$RUNNER_TEMP/source-run.json"
+          python3 - <<'PY'
+          import json, os
+          run = json.load(open(os.environ['SOURCE_RUN_FILE']))
+          assert run['id'] == 37758256632
+          assert run['status'] == 'completed' and run['conclusion'] == 'success'
+          assert run['head_sha'] == os.environ['EXPECTED_SOURCE_SHA']
+          assert run['event'] in ['push', 'workflow_dispatch'] and run['head_branch'] == 'desktop'
+          assert run['path'] == '.github/workflows/desktop-portable.yml'
+          assert run['repository']['full_name'] == os.environ['GH_REPO']
+          PY
+          gh api "repos/$GH_REPO/actions/runs/$SOURCE_RUN/artifacts" > "$RUNNER_TEMP/windows-artifact-list.json"
+          export WINDOWS_ARTIFACT_LIST="$RUNNER_TEMP/windows-artifact-list.json"
+          python3 - <<'PY'
+          import json, os
+          artifacts = json.load(open(os.environ['WINDOWS_ARTIFACT_LIST']))['artifacts']
+          matches = [item for item in artifacts if item['name'] == 'dsh-desktop-win-x64']
+          assert len(matches) == 1
+          artifact = matches[0]
+          assert artifact['id'] == 11542086810 and artifact['size_in_bytes'] == 437756287
+          assert artifact['digest'] == 'sha256:' + os.environ['EXPECTED_WINDOWS_ARTIFACT_SHA256']
+          assert artifact['expired'] is False
+          PY
+          gh api "repos/$GH_REPO/releases/tags/$DESKTOP_TAG" > "$RUNNER_TEMP/release.json"
+          python3 - <<'PY'
+          import json, os
+          release = json.load(open(os.environ['RUNNER_TEMP'] + '/release.json'))
+          assert release['id'] == 406690206
+          assert release['tag_name'] == os.environ['DESKTOP_TAG'] and release['draft'] is True
+          assert release['target_commitish'] == os.environ['EXPECTED_SOURCE_SHA']
+          PY
+
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - uses: actions/checkout@v6
+        with:
+          ref: b1e845853b9c6f49283fe4cf30eda2ee5bd520c1
+          path: product-source
+          persist-credentials: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: product-source/package.json
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+
+      - name: Install locked ASAR reader dependencies without running build scripts
+        run: pnpm --dir product-source install --frozen-lockfile --ignore-scripts
+
+      - name: Download and verify the raw Windows Actions artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p incoming/windows
+          gh api "repos/$GH_REPO/actions/artifacts/11542086810/zip" > incoming/windows-artifact.zip
+          printf '%s  %s\n' "$EXPECTED_WINDOWS_ARTIFACT_SHA256" incoming/windows-artifact.zip | sha256sum --check
+          python3 - <<'PY'
+          import hashlib, pathlib, zipfile
+          wrapper = pathlib.Path('incoming/windows-artifact.zip')
+          assert wrapper.stat().st_size == 437756287
+          expected = {
+              'dsh-desktop-0.2.0.rc.2.5-win-x64.zip',
+              'standard-user-win-x64.json',
+          }
+          with zipfile.ZipFile(wrapper) as archive:
+              infos = archive.infolist()
+              assert len(infos) == len(expected)
+              assert {item.filename for item in infos} == expected
+              assert all(not item.is_dir() and '/' not in item.filename and chr(92) not in item.filename for item in infos)
+              assert archive.testzip() is None
+              for item in infos:
+                  pathlib.Path('incoming/windows', item.filename).write_bytes(archive.read(item))
+          inner = pathlib.Path('incoming/windows/dsh-desktop-0.2.0.rc.2.5-win-x64.zip')
+          with inner.open('rb') as file:
+              digest = hashlib.file_digest(file, 'sha256').hexdigest()
+          assert digest == 'afb45dfacfee5dcda094bf3f462db260f5cf8f6dba7e55101c4f1836d7fe9158'
+          receipt = pathlib.Path('incoming/windows/standard-user-win-x64.json').read_text()
+          import json
+          data = json.loads(receipt)
+          assert data['target'] == 'win-x64' and data['version'] == '0.2.0.rc.2.5'
+          assert data['standardUser'] is True and data['packagedSmoke'] == 'passed'
+          assert data['archive'] == inner.name and data['sha256'] == digest
+          with wrapper.open('rb') as file:
+              wrapper_digest = hashlib.file_digest(file, 'sha256').hexdigest()
+          print(json.dumps({'passed': True, 'wrapperBytes': wrapper.stat().st_size,
+                            'wrapperSha256': wrapper_digest,
+                            'archiveBytes': inner.stat().st_size, 'archiveSha256': digest}))
+          PY
+
+      - name: Download fixed Mac transfer manifest and parts from the draft
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p incoming/mac
+          gh release download "$DESKTOP_TAG" --dir incoming/mac --pattern 'rc25-transfer-mac-arm64.manifest.json'
+          for number in $(seq 0 13); do
+            index="$(printf '%03d' "$number")"
+            gh release download "$DESKTOP_TAG" --dir incoming/mac --pattern "rc25-transfer-mac-arm64.part-$index"
+          done
+
+      - name: Verify Windows receipt and archive, then assemble and verify the Mac archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          node scripts/verify-rc25-transfer.mjs assemble incoming/windows incoming/mac incoming/windows-artifact.zip 2>&1 | tee evidence/assembly.log
+          python3 - <<'PY'
+          import json, os, pathlib, zipfile
+          root = pathlib.Path('incoming/windows')
+          tag = os.environ['DESKTOP_TAG']
+          archive = root / f'dsh-desktop-{tag}-win-x64.zip'
+          receipt = json.loads((root / 'standard-user-win-x64.json').read_text())
+          assert receipt['target'] == 'win-x64' and receipt['version'] == tag
+          assert receipt['standardUser'] is True and receipt['packagedSmoke'] == 'passed'
+          assert receipt['archive'] == archive.name
+          import hashlib
+          with open(archive, 'rb') as f:
+              digest = hashlib.file_digest(f, 'sha256').hexdigest()
+          assert receipt['sha256'] == digest
+          with zipfile.ZipFile(archive) as z:
+              assert z.testzip() is None
+          with zipfile.ZipFile('incoming/mac/dsh-desktop-0.2.0.rc.2.5-mac-arm64.zip') as z:
+              assert z.testzip() is None
+          PY
+      - name: Review actual Mac and Windows ASAR runtime closures
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          node scripts/review-rc25-transfer-asar.mjs \
+            product-source \
+            incoming/mac/dsh-desktop-0.2.0.rc.2.5-mac-arm64.zip \
+            incoming/windows/dsh-desktop-0.2.0.rc.2.5-win-x64.zip \
+            evidence/compiled-intranet-byte-review.json 2>&1 | tee evidence/runtime-closure-review.log
+
+      - name: Upload the verified complete ZIPs to the existing draft
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/$GH_REPO/releases/tags/$DESKTOP_TAG" > "$RUNNER_TEMP/release-before-upload.json"
+          python3 - <<'PY'
+          import json, os
+          release = json.load(open(os.environ['RUNNER_TEMP'] + '/release-before-upload.json'))
+          assert release['id'] == 406690206
+          assert release['tag_name'] == os.environ['DESKTOP_TAG'] and release['draft'] is True
+          assert release['target_commitish'] == os.environ['EXPECTED_SOURCE_SHA']
+          PY
+          gh release upload "$DESKTOP_TAG" \
+            incoming/mac/dsh-desktop-0.2.0.rc.2.5-mac-arm64.zip \
+            incoming/windows/dsh-desktop-0.2.0.rc.2.5-win-x64.zip \
+            --clobber 2>&1 | tee evidence/release-upload.log
+
+      - name: Record release asset API digests and transfer provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          gh api "repos/$GH_REPO/releases/tags/$DESKTOP_TAG" > "$RUNNER_TEMP/release-assets.json"
+          python3 scripts/write-rc25-transfer-receipt.py \
+            --manifest incoming/mac/rc25-transfer-mac-arm64.manifest.json \
+            --mac-zip incoming/mac/dsh-desktop-0.2.0.rc.2.5-mac-arm64.zip \
+            --windows-zip incoming/windows/dsh-desktop-0.2.0.rc.2.5-win-x64.zip \
+            --windows-standard-user incoming/windows/standard-user-win-x64.json \
+            --windows-wrapper incoming/windows-artifact.zip \
+            --closure evidence/compiled-intranet-byte-review.json \
+            --source-run "$RUNNER_TEMP/source-run.json" \
+            --windows-artifact "$RUNNER_TEMP/windows-artifact-list.json" \
+            --release-assets "$RUNNER_TEMP/release-assets.json" \
+            --output evidence/transfer-receipt.json
+          cp incoming/windows/standard-user-win-x64.json evidence/
+          cp "$RUNNER_TEMP/source-run.json" evidence/source-run.json
+          cp "$RUNNER_TEMP/windows-artifact-list.json" evidence/windows-artifact-list.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: desktop-rc25-transfer-evidence
+          path: evidence/
+          if-no-files-found: warn
+          include-hidden-files: true
