@@ -42,7 +42,6 @@ jobs:
       DESKTOP_SMOKE_TARGET: ${{ inputs.target }}
       DESKTOP_SMOKE_MODE: ${{ inputs.mode }}
       DSH_TELEMETRY_MODE: DISABLED
-      DSH_DESKTOP_DISTRIBUTION_VERSION: startup-replay
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
       DSH_STARTUP_DEPENDENCY_AUDIT: ${{ inputs.dependency_audit && '1' || '0' }}
     steps:
