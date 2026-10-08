@@ -88,11 +88,15 @@ const bundledPlugins = bundledNames.map((name) => {
 })
 const paths = resolveDesktopPaths(home)
 const manager = new DesktopProjectManager(paths, runtime)
-async function runInstalledCli(args: readonly string[]): Promise<{ code: number | null; stdout: string; stderr: string }> {
+const expectedCliExitCodes = new WeakMap<ChildProcess, number>()
+async function runInstalledCli(
+  args: readonly string[], expectedCode = 0,
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
   const entry = join(runtime.dsh, 'node_modules', '@deepseek-ai', 'dsh-desktop-host', 'lib', 'cli.js')
   const child = spawn(runtime.node, ['--expose-internals', entry, ...args], {
     env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: ['ignore', 'pipe', 'pipe'],
   })
+  expectedCliExitCodes.set(child, expectedCode)
   let stdout = ''
   let stderr = ''
   child.stdout?.setEncoding('utf8').on('data', (chunk) => { stdout += chunk })
@@ -148,7 +152,7 @@ function childDiagnostic(message: unknown): void {
   })
   child.once('exit', (code, signal) => {
     console.log(`Packaged smoke: child ${String(child.pid)} exited (${String(code ?? signal)})`)
-    if (code !== 0 || signal !== null) failedChildren.push({ code, signal })
+    if (code !== (expectedCliExitCodes.get(child) ?? 0) || signal !== null) failedChildren.push({ code, signal })
   })
   child.once('close', () => {
     child.stdout?.off('data', stdout)
@@ -196,14 +200,26 @@ try {
   }
   const firstStart = performance.now()
   await manager.applyRelease(true)
-  const bundledDump = await runInstalledCli(['--profile', 'desktop', '--dump-config'])
+  const cliProfileName = 'packaged-cli-bundles'
+  const cliProfileDir = join(home, 'profiles', cliProfileName)
+  mkdirSync(cliProfileDir, { recursive: true })
+  writeFileSync(join(cliProfileDir, 'package.json'), `${JSON.stringify({
+    name: `dsh-profile-${cliProfileName}`, private: true, dependencies: {},
+    dsh: { profile: { bundles: bundledNames } },
+  }, undefined, 2)}\n`)
+  writeFileSync(join(cliProfileDir, 'cordis.patch.yml'), '[]\n')
+  assert.equal(existsSync(join(cliProfileDir, 'node_modules')), false, 'The CLI smoke profile must not have installed dependencies')
+  const reservedDump = await runInstalledCli(['--profile', 'desktop', '--dump-config'], 1)
+  assert.equal(reservedDump.code, 1, 'The public CLI must keep Desktop profile launch reserved to Electron')
+  assert.match(reservedDump.stderr, /profile "desktop" is managed exclusively by the Electron application/u)
+  const bundledDump = await runInstalledCli(['--profile', cliProfileName, '--dump-config'])
   assert.equal(bundledDump.code, 0, bundledDump.stderr)
   for (const name of bundledNames) assert.ok(bundledDump.stdout.includes(name), `Installed CLI dump omitted ${name}`)
-  const bundledSchema = await runInstalledCli(['--profile', 'desktop', '--dump-config-schema'])
+  const bundledSchema = await runInstalledCli(['--profile', cliProfileName, '--dump-config-schema'])
   assert.equal(bundledSchema.code, 0, bundledSchema.stderr)
   assert.match(bundledSchema.stdout, /"complete": true/u, 'Installed CLI schema must load the bundled runtime graph')
   const blockedInstall = await runInstalledCli(['plugin', '--profile', 'desktop', 'add',
-    `file:${join(runtime.dsh, 'node_modules', ...bundledNames[0]!.split('/'))}`])
+    `file:${join(runtime.dsh, 'node_modules', ...bundledNames[0]!.split('/'))}`], 1)
   assert.equal(blockedInstall.code, 1, 'Installed CLI must refuse to shadow a bundled application plugin')
   assert.match(blockedInstall.stderr, /provided by the application and cannot be installed/u)
   writeFileSync(join(paths.profile, 'cordis.patch.yml'), '- id: webserver\n  config:\n    host: 127.0.0.1\n    port: 0\n')
@@ -306,7 +322,7 @@ try {
   writeFileSync(join(legacyPaths.profile, 'package.json'), JSON.stringify({
     name: '@deepseek-ai/dsh-desktop-runtime', private: true, version: '0.0.0',
     dependencies: { ...Object.fromEntries(packages.map(entry => [entry.name, `file:./desktop-packages/${entry.file}`])),
-      '@zaimokuza/dsh-acp-adapter': '0.1.5-rc.2.5', '@zaimokuza/dsh-plugin-hub': '0.2.1' },
+      '@zaimokuza/dsh-acp-adapter': '0.1.5-rc.2.5', '@zaimokuza/dsh-plugin-hub': '0.2.1', 'user-extra': '1.2.3' },
     dsh: { desktop: { agentTeams: false }, profile: { bundles: [
       '@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', ...bundledNames,
     ] } },
@@ -315,7 +331,8 @@ try {
   await upgrade.applyRelease(true)
   const migrated = JSON.parse(readFileSync(join(legacyPaths.profile, 'package.json'), 'utf8')) as { dependencies: Record<string, string> }
   assert.equal(bundledNames.some(name => migrated.dependencies[name] !== undefined), false)
-  assert.equal(migrated.dependencies['@zaimokuza/dsh-plugin-hub'], '0.2.1')
+  assert.equal(migrated.dependencies['@zaimokuza/dsh-plugin-hub'], undefined)
+  assert.equal(migrated.dependencies['user-extra'], '1.2.3')
   await upgrade.applyRelease(true)
   console.log('Packaged legacy profile migration: retired tarballs removed offline; disabled Teams preserved')
   const state = JSON.parse(readFileSync(join(legacyPaths.profile, 'package.json'), 'utf8')) as { dsh: { profile: { bundles: string[] } } }
