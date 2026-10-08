@@ -8,6 +8,8 @@ type Playback = { dispose(): void; loop: boolean }
 type BootApi = { replay(): void; toggleLoop(exitLabel?: string): void; dispose(): void }
 
 const PLAY_SECONDS = 7.05
+// Preserve at most one 24fps source-frame of progress per visible RAF; long stalls extend playback instead of skipping intro frames.
+const MAX_FRAME_STEP_SECONDS = 1 / 24
 const FADE_MS = 400
 const LOAD_TIMEOUT_MS = 20_000
 const bootScript = document.currentScript instanceof HTMLScriptElement
@@ -30,8 +32,8 @@ function startPlayback(loop = false, exitLabel = 'Exit loop · Esc'): Playback {
   let raf = 0
   let timeout = 0
   let fadeTimer = 0
-  let startAt: number | undefined
-  let hiddenAt: number | undefined
+  let elapsedSeconds = 0
+  let lastFrameAt: number | undefined
   let bodyObserver: MutationObserver | undefined
 
   stage.setAttribute('aria-hidden', 'true')
@@ -92,22 +94,26 @@ function startPlayback(loop = false, exitLabel = 'Exit loop · Esc'): Playback {
   }
   function onVisibility(): void {
     if (document.hidden) {
-      hiddenAt = performance.now()
+      lastFrameAt = undefined
       cancelAnimationFrame(raf)
     } else if (!closed && renderer !== undefined) {
-      const now = performance.now()
-      if (startAt !== undefined && hiddenAt !== undefined) startAt += now - hiddenAt
-      hiddenAt = undefined
+      lastFrameAt = undefined
       raf = requestAnimationFrame(frame)
     }
   }
   function frame(now: number): void {
     if (closed || renderer === undefined || document.hidden) return
-    if (startAt === undefined) startAt = now
-    let elapsed = Math.max(0, (now - startAt) / 1000)
+    if (lastFrameAt !== undefined) {
+      const visibleStep = Math.max(0, Math.min((now - lastFrameAt) / 1000, MAX_FRAME_STEP_SECONDS))
+      elapsedSeconds += visibleStep
+    }
+    lastFrameAt = now
+    let elapsed = elapsedSeconds
     if (loop && elapsed >= PLAY_SECONDS) {
-      startAt = now
+      elapsedSeconds = 0
       elapsed = 0
+    } else if (!loop) {
+      elapsed = Math.min(elapsed, PLAY_SECONDS)
     }
     try { renderer.render(elapsed) } catch { finish(); return }
     if (elapsed >= PLAY_SECONDS) {
@@ -147,7 +153,7 @@ function startPlayback(loop = false, exitLabel = 'Exit loop · Esc'): Playback {
       clearTimeout(timeout)
       renderer.render(0)
       stage.style.visibility = 'visible'
-      if (document.hidden) { hiddenAt = performance.now(); return }
+      if (document.hidden) return
       // The first RAF timestamp defines zero: time spent downloading and preparing assets never consumes play time.
       raf = requestAnimationFrame(frame)
     } catch {

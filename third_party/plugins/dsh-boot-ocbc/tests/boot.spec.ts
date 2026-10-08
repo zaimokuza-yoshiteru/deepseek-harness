@@ -134,19 +134,37 @@ describe('dsh-boot-ocbc browser lifecycle', () => {
     expect(app.body!.children).toHaveLength(0)
   })
 
-  it('plays for 7.05 seconds, fades for 400ms, then disposes', async () => {
+  it('plays the full 7.05 second sequence at normal frame cadence, fades, then disposes', async () => {
     const app = browserHarness()
     await settle()
-    const first = [...app.frames.keys()][0]!
-    app.fireFrame(first, 0)
-    const second = [...app.frames.keys()][0]!
-    app.fireFrame(second, 7050)
+    const frameStep = 7051 / 423
+    app.fireFrame([...app.frames.keys()][0]!, 0)
+    for (let frame = 1; frame <= 423; frame += 1) {
+      app.fireFrame([...app.frames.keys()][0]!, frame * frameStep)
+    }
     const overlay = app.body!.children[0]!
     expect(overlay.style.opacity).toBe('0')
+    expect(app.renderer.frames.at(-1)).toBeCloseTo(7.05, 6)
     const fadeTimer = [...app.timers.keys()][0]!
     app.fireTimer(fadeTimer)
     expect(app.body!.children).toHaveLength(0)
     expect(app.renderer.disposed).toBe(1)
+  })
+
+  it('caps elapsed time to one 24fps source frame after a long visible RAF gap', async () => {
+    const app = browserHarness()
+    await settle()
+    app.fireFrame([...app.frames.keys()][0]!, 0)
+    app.fireFrame([...app.frames.keys()][0]!, 1000 / 60)
+    expect(app.renderer.frames.at(-1)).toBeCloseTo(1 / 60, 6)
+
+    // Two animation frames have established a baseline before the simulated 3s GPU/main-thread stall.
+    app.fireFrame([...app.frames.keys()][0]!, 181000 / 60)
+    expect(app.renderer.frames.at(-1)).toBeCloseTo(1 / 60 + 1 / 24, 6)
+    expect(app.body!.children[0]!.style.opacity).toBe('1')
+
+    app.fireFrame([...app.frames.keys()][0]!, 182000 / 60)
+    expect(app.renderer.frames.at(-1)).toBeCloseTo(1 / 60 + 1 / 24 + 1 / 60, 6)
   })
 
   it('fails open on a missing renderer and a 20 second initial-load timeout', async () => {
@@ -194,7 +212,9 @@ describe('dsh-boot-ocbc browser lifecycle', () => {
     app.replay()
     await settle()
     app.fireFrame([...app.frames.keys()][0]!, 0)
-    app.fireFrame([...app.frames.keys()][0]!, 7050)
+    for (let frame = 1; frame <= 423; frame += 1) {
+      app.fireFrame([...app.frames.keys()][0]!, frame * (7051 / 423))
+    }
     app.fireTimer([...app.timers.keys()][0]!)
     expect(app.body!.children).toHaveLength(0)
     app.replay()
@@ -202,7 +222,7 @@ describe('dsh-boot-ocbc browser lifecycle', () => {
     expect(api).toBeDefined()
   })
 
-  it('starts the full clock at zero only when a delayed renderer is ready', async () => {
+  it('starts the elapsed clock at zero only when a delayed renderer is ready', async () => {
     let resolveReady!: (renderer: any) => void
     const delayed = { disposed: 0, frames: [] as number[], render(time: number) { this.frames.push(time) }, dispose() { this.disposed += 1 } }
     const app = browserHarness(async () => ({ createRenderer: async () => new Promise(resolve => { resolveReady = resolve }) }))
@@ -217,27 +237,55 @@ describe('dsh-boot-ocbc browser lifecycle', () => {
     expect(app.body!.children[0]!.children[0]!.style.visibility).toBe('visible')
     app.fireFrame([...app.frames.keys()][0]!, 20_000)
     expect(delayed.frames).toEqual([0, 0])
-    app.fireFrame([...app.frames.keys()][0]!, 27_049)
+    app.fireFrame([...app.frames.keys()][0]!, 20_000 + 1000 / 60)
+    expect(delayed.frames.at(-1)).toBeCloseTo(1 / 60, 6)
     expect(app.body!.children[0]!.style.opacity).toBe('1')
-    app.fireFrame([...app.frames.keys()][0]!, 27_050)
-    expect(app.body!.children[0]!.style.opacity).toBe('0')
-    expect(delayed.frames.at(-1)).toBeCloseTo(7.05, 6)
+  })
+
+  it('keeps a renderer that finishes loading while hidden and starts at zero after visibility returns', async () => {
+    let resolveReady!: (renderer: any) => void
+    const delayed = { disposed: 0, frames: [] as number[], render(time: number) { this.frames.push(time) }, dispose() { this.disposed += 1 } }
+    const app = browserHarness(async () => ({ createRenderer: async () => new Promise(resolve => { resolveReady = resolve }) }))
+    await settle()
+    app.setHidden(true)
+    for (const listener of app.documentListeners.get('visibilitychange') ?? []) listener({})
+    app.setNow(5000)
+    resolveReady(delayed)
+    await settle()
+
+    expect(delayed.frames).toEqual([0])
+    expect(delayed.disposed).toBe(0)
+    expect(app.frames.size).toBe(0)
+    expect(app.body!.children).toHaveLength(1)
+    expect(app.body!.children[0]!.children[0]!.style.visibility).toBe('visible')
+
+    app.setHidden(false)
+    for (const listener of app.documentListeners.get('visibilitychange') ?? []) listener({})
+    app.fireFrame([...app.frames.keys()][0]!, 20_000)
+    expect(delayed.frames).toEqual([0, 0])
+    app.fireFrame([...app.frames.keys()][0]!, 20_000 + 1000 / 60)
+    expect(delayed.frames.at(-1)).toBeCloseTo(1 / 60, 6)
+    expect(app.body!.children[0]!.style.opacity).toBe('1')
   })
 
   it('pauses the elapsed animation clock while the document is hidden', async () => {
     const app = browserHarness()
     await settle()
     app.fireFrame([...app.frames.keys()][0]!, 0)
-    app.setNow(1000)
+    app.fireFrame([...app.frames.keys()][0]!, 1000 / 60)
+    app.fireFrame([...app.frames.keys()][0]!, 2000 / 60)
+    const beforeHide = app.renderer.frames.at(-1)!
     app.setHidden(true)
     for (const listener of app.documentListeners.get('visibilitychange') ?? []) listener({})
+    expect(app.frames.size).toBe(0)
     app.setNow(6000)
     app.setHidden(false)
     for (const listener of app.documentListeners.get('visibilitychange') ?? []) listener({})
     app.fireFrame([...app.frames.keys()][0]!, 7050)
+    expect(app.renderer.frames.at(-1)).toBeCloseTo(beforeHide, 6)
     expect(app.body!.children[0]!.style.opacity).toBe('1')
-    app.fireFrame([...app.frames.keys()][0]!, 12050)
-    expect(app.body!.children[0]!.style.opacity).toBe('0')
+    app.fireFrame([...app.frames.keys()][0]!, 7050 + 1000 / 60)
+    expect(app.renderer.frames.at(-1)).toBeCloseTo(beforeHide + 1 / 60, 6)
   })
   it('loops on the same renderer without fading, and exits by button or Escape', async () => {
     const app = browserHarness()
@@ -247,12 +295,17 @@ describe('dsh-boot-ocbc browser lifecycle', () => {
     api.toggleLoop('退出循环 · Esc')
     await settle()
     const overlay = app.body!.children[0]!
+    const frameStep = 7051 / 423
     app.fireFrame([...app.frames.keys()][0]!, 0)
-    app.fireFrame([...app.frames.keys()][0]!, 7050)
+    for (let frame = 1; frame <= 423; frame += 1) {
+      app.fireFrame([...app.frames.keys()][0]!, frame * frameStep)
+    }
     expect(app.renderer.frames.at(-1)).toBe(0)
-    app.fireFrame([...app.frames.keys()][0]!, 7550)
-    expect(app.renderer.frames.at(-1)).toBe(.5)
-    app.fireFrame([...app.frames.keys()][0]!, 14100)
+    app.fireFrame([...app.frames.keys()][0]!, 423 * frameStep + frameStep)
+    expect(app.renderer.frames.at(-1)).toBeCloseTo(frameStep / 1000, 6)
+    for (let frame = 2; frame <= 423; frame += 1) {
+      app.fireFrame([...app.frames.keys()][0]!, 423 * frameStep + frame * frameStep)
+    }
     expect(app.renderer.frames.at(-1)).toBe(0)
     expect(overlay.style.opacity).toBe('1')
     expect(app.timers.size).toBe(0)

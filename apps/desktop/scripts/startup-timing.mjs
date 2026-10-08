@@ -20,7 +20,7 @@ await mkdir(output, { recursive: true })
 const intranet = (process.env.DSH_DESKTOP_INTRANET ?? '1') === '1'
 const report = { target, archive: null, sha256: null, standardUser: process.env.DSH_STANDARD_USER_VERIFIED === '1',
   intranet,
-  measurement: 'Process launch through a Settings click and visible General settings section; overlay completion is recorded separately before plugin inventory, screenshots, and audit work. Overlay-seen time is the first DOM observation, not an exact frame-present timestamp. No model invocation.',
+  measurement: 'Process launch through a Settings click and visible General settings section; OCBC frame callbacks and overlay completion are recorded separately before plugin inventory, screenshots, and audit work. Overlay-seen time is the first DOM observation, not an exact frame-present timestamp. Native show events are hooked after Playwright launch and are not represented as the first show if the window was already visible. RAF callback timings include diagnostic-wrapper overhead and are not unbiased performance benchmarks. No model invocation.',
   limitations: 'Fresh CI machine, immediately after ZIP extraction; not an OS disk-cache cold boot or a user endpoint security reproduction. Extraction is excluded.',
   runs: [] }
 let executable = process.argv[3] && resolve(process.argv[3])
@@ -66,7 +66,53 @@ function installStartupOverlayMonitor() {
   const state = window.__DSH_STARTUP_OVERLAYS__ = {
     timeOrigin: performance.timeOrigin, legacySeenAt: null, ocbcSeenAt: null,
     ocbcStageVisibleAt: null, ocbcVisibleRafAt: null, goneAt: null,
+    ocbcFrameCount: 0, ocbcFrameRecordsDropped: 0, ocbcFrameRecords: [], ocbcFrameDetection: null,
+    captureOcbcFrames: true,
+    visibilityEvents: [{ at: performance.now(), hidden: document.hidden, state: document.visibilityState }],
   }
+  const originalRequestAnimationFrame = window.requestAnimationFrame
+  let previousOcbcFrameTimestamp = null
+  let previousOcbcFrameEntry = null
+  const frameRecordLimit = 1000
+  const onVisibility = () => state.visibilityEvents.push({ at: performance.now(), hidden: document.hidden, state: document.visibilityState })
+  document.addEventListener('visibilitychange', onVisibility)
+  const monitoredRequestAnimationFrame = function (callback) {
+    if (!state.captureOcbcFrames || document.querySelector('[data-dsh-boot-ocbc]') === null) {
+      return originalRequestAnimationFrame.call(this, callback)
+    }
+    const stack = new Error().stack ?? ''
+    const pluginCaller = /plugins\/dsh-boot-ocbc\/lib\/boot\.js/u.test(stack)
+    if (!pluginCaller) return originalRequestAnimationFrame.call(this, callback)
+    const callbackSource = Function.prototype.toString.call(callback)
+    const looksLikeOcbcFrame = pluginCaller && (callback.name === 'frame'
+      || (callbackSource.includes('document.hidden') && callbackSource.includes('.render(')
+        && callbackSource.includes('requestAnimationFrame(')))
+    if (!state.ocbcFrameDetection && pluginCaller) {
+      state.ocbcFrameDetection = { stack: stack.split('\n').slice(0, 5), callbackName: callback.name,
+        callbackSource: callbackSource.slice(0, 500), matchedFrame: looksLikeOcbcFrame }
+    }
+    if (!looksLikeOcbcFrame) return originalRequestAnimationFrame.call(this, callback)
+    const scheduledAt = performance.now()
+    return originalRequestAnimationFrame.call(this, timestamp => {
+      const enteredAt = performance.now()
+      const hiddenAtCallback = document.hidden
+      const visibilityStateAtCallback = document.visibilityState
+      state.ocbcFrameCount++
+      let durationMs = null
+      try { callback(timestamp) } finally {
+        durationMs = performance.now() - enteredAt
+        if (state.ocbcFrameRecords.length < frameRecordLimit) {
+          state.ocbcFrameRecords.push({ index: state.ocbcFrameCount, scheduledAt, timestamp,
+            enteredAt, gapFromPreviousCallbackMs: previousOcbcFrameTimestamp === null ? null : timestamp - previousOcbcFrameTimestamp,
+            gapFromPreviousEntryMs: previousOcbcFrameEntry === null ? null : enteredAt - previousOcbcFrameEntry,
+            durationMs, hidden: hiddenAtCallback, visibilityState: visibilityStateAtCallback })
+        } else state.ocbcFrameRecordsDropped++
+        previousOcbcFrameTimestamp = timestamp
+        previousOcbcFrameEntry = enteredAt
+      }
+    })
+  }
+  window.requestAnimationFrame = monitoredRequestAnimationFrame
   let visibleRafPending = false
   const scan = () => {
     const legacy = document.querySelector('[data-dsh-boot]') !== null
@@ -95,11 +141,48 @@ function installStartupOverlayMonitor() {
         }
       })
     }
-    if (state.ocbcSeenAt !== null && !legacy && !ocbc && state.goneAt === null) state.goneAt = now
+    if (state.ocbcSeenAt !== null && !legacy && !ocbc && state.goneAt === null) {
+      state.goneAt = now
+      state.captureOcbcFrames = false
+      document.removeEventListener('visibilitychange', onVisibility)
+      if (window.requestAnimationFrame === monitoredRequestAnimationFrame) {
+        window.requestAnimationFrame = originalRequestAnimationFrame
+      }
+    }
     if (legacy || ocbc) state.goneAt = null
   }
   new MutationObserver(scan).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ['style'] })
   scan()
+}
+async function installNativeShowMonitor(app, run, elapsed) {
+  const installed = await app.evaluate(({ app, BrowserWindow }) => {
+    const events = []
+    const listeners = new Map()
+    const add = window => {
+      if (listeners.has(window)) return
+      const onShow = () => events.push({ wallTimeMs: Date.now(), id: window.id, url: window.webContents.getURL(),
+        visible: window.isVisible(), title: window.getTitle() })
+      listeners.set(window, onShow)
+      window.on('show', onShow)
+    }
+    for (const window of BrowserWindow.getAllWindows()) add(window)
+    const onCreated = (_event, window) => add(window)
+    app.on('browser-window-created', onCreated)
+    globalThis.__DSH_STARTUP_NATIVE_SHOW_MONITOR__ = {
+      installedWallTimeMs: Date.now(),
+      existingWindows: BrowserWindow.getAllWindows().map(window => ({ id: window.id, url: window.webContents.getURL(),
+        visibleAtInstall: window.isVisible(), title: window.getTitle() })),
+      events,
+      dispose() {
+        app.removeListener('browser-window-created', onCreated)
+        for (const [window, listener] of listeners) window.removeListener('show', listener)
+        listeners.clear()
+      },
+    }
+    return { installedWallTimeMs: globalThis.__DSH_STARTUP_NATIVE_SHOW_MONITOR__.installedWallTimeMs,
+      existingWindows: globalThis.__DSH_STARTUP_NATIVE_SHOW_MONITOR__.existingWindows }
+  })
+  run.nativeShowMonitor = { ...installed, hooksInstalledAtMs: elapsed(), lateObserved: true, events: [] }
 }
 async function verifyPlugins(app, page, run, kind) {
   const resources = await app.evaluate(() => process.resourcesPath)
@@ -232,6 +315,7 @@ for (const kind of scenarios) {
   try {
     app = await _electron.launch({ executablePath: executable, cwd: home, env, args: ['--lang=en-US'], timeout: 300_000 })
     child = app.process()
+    await installNativeShowMonitor(app, run, elapsed)
     const handleWelcome = candidate => {
       if (seenWindows.has(candidate)) return
       seenWindows.add(candidate)
@@ -288,7 +372,7 @@ for (const kind of scenarios) {
     await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()
       .some(window => window.webContents.getURL().startsWith('dsh-app://app/') && window.isVisible())),
       { timeout: 300_000, message: 'The workspace must be visible after startup' }).toBe(true)
-    mark('workspaceVisibleMs')
+    mark('workspaceVisibleObservedAfterHomeMs')
     await page.waitForFunction(() => {
       const state = (window).__DSH_STARTUP_OVERLAYS__
       return state?.ocbcSeenAt !== null && state?.ocbcSeenAt !== undefined
@@ -301,6 +385,37 @@ for (const kind of scenarios) {
     run.timings.ocbcVisibleRafMs = pageToLaunchMs(overlay.ocbcVisibleRafAt)
     run.timings.overlayGoneMs = pageToLaunchMs(overlay.goneAt)
     run.timings.legacyBootSeenMs = overlay.legacySeenAt === null ? null : pageToLaunchMs(overlay.legacySeenAt)
+    assert.equal(overlay.ocbcFrameDetection?.matchedFrame, true, 'OCBC frame callback diagnostics must match the shipped animation')
+    assert.ok(overlay.ocbcFrameCount >= 3 && overlay.ocbcFrameRecords.length >= 3,
+      'OCBC frame callback diagnostics must capture playback before accepting the startup result')
+    const frameRecords = overlay.ocbcFrameRecords.map(record => ({ ...record,
+      scheduledAfterLaunchMs: pageToLaunchMs(record.scheduledAt), callbackAfterLaunchMs: pageToLaunchMs(record.enteredAt),
+      callbackTimestampAfterLaunchMs: pageToLaunchMs(record.timestamp) }))
+    const frameGaps = frameRecords.slice(1).map(record => record.gapFromPreviousCallbackMs).filter(Number.isFinite)
+    const frameDurations = frameRecords.map(record => record.durationMs).filter(Number.isFinite)
+    const sortedFrameGaps = [...frameGaps].sort((left, right) => left - right)
+    const percentile = (values, fraction) => values.length ? values[Math.min(values.length - 1, Math.ceil(values.length * fraction) - 1)] : null
+    run.ocbcAnimation = {
+      detection: overlay.ocbcFrameDetection,
+      frameCount: overlay.ocbcFrameCount,
+      frameRecordsDropped: overlay.ocbcFrameRecordsDropped,
+      frameRecords,
+      visibilityEvents: overlay.visibilityEvents.map(event => ({ ...event, afterLaunchMs: pageToLaunchMs(event.at) })),
+      summary: {
+        firstCallbackAfterLaunchMs: frameRecords[0]?.callbackAfterLaunchMs ?? null,
+        lastCallbackAfterLaunchMs: frameRecords.at(-1)?.callbackAfterLaunchMs ?? null,
+        recordedFrames: frameRecords.length,
+        hiddenDocumentFrames: frameRecords.filter(record => record.hidden).length,
+        maxCallbackGapMs: frameGaps.length ? Math.max(...frameGaps) : null,
+        callbackGapsOver42ms: frameGaps.filter(value => value > 1000 / 24).length,
+        callbackGapsOver83ms: frameGaps.filter(value => value > 1000 / 12).length,
+        p95CallbackGapMs: percentile(sortedFrameGaps, 0.95),
+        p99CallbackGapMs: percentile(sortedFrameGaps, 0.99),
+        meanCallbackGapMs: frameGaps.length ? frameGaps.reduce((sum, value) => sum + value, 0) / frameGaps.length : null,
+        maxCallbackDurationMs: frameDurations.length ? Math.max(...frameDurations) : null,
+        meanCallbackDurationMs: frameDurations.length ? frameDurations.reduce((sum, value) => sum + value, 0) / frameDurations.length : null,
+      },
+    }
     await settingsLauncher.click()
     if (!intranet) await page.getByRole('menuitem', { name: /^(Settings|设置)$/u, exact: true }).click()
     const settingsDialog = page.getByRole('dialog')
@@ -333,6 +448,29 @@ for (const kind of scenarios) {
     throw error
   } finally {
     stopping = true
+    if (app) {
+      try {
+        const nativeState = await app.evaluate(() => {
+          const monitor = globalThis.__DSH_STARTUP_NATIVE_SHOW_MONITOR__
+          if (!monitor) return null
+          const state = { installedWallTimeMs: monitor.installedWallTimeMs, existingWindows: monitor.existingWindows,
+            events: monitor.events.map(event => ({ ...event })) }
+          monitor.dispose()
+          delete globalThis.__DSH_STARTUP_NATIVE_SHOW_MONITOR__
+          return state
+        })
+        if (nativeState) run.nativeShowMonitor = {
+          ...run.nativeShowMonitor,
+          existingWindows: nativeState.existingWindows,
+          events: nativeState.events.map(event => ({ ...event, afterLaunchMs: event.wallTimeMs - wallStart })),
+          existingPrimaryWindowAlreadyVisibleAtHook: nativeState.existingWindows.some(window =>
+            window.url.startsWith('dsh-app://app/') && window.visibleAtInstall),
+        }
+      } catch (error) {
+        run.nativeShowMonitor ??= { lateObserved: true, events: [] }
+        run.nativeShowMonitor.snapshotError = error.message
+      }
+    }
     await save()
     if (app) {
       let timer
@@ -352,4 +490,9 @@ for (const kind of scenarios) {
   }
 }
 await audit?.finish()
-console.log(JSON.stringify(report, null, 2))
+console.log(JSON.stringify({ target: report.target, archive: report.archive, sha256: report.sha256,
+  standardUser: report.standardUser, runs: report.runs.map(run => ({ kind: run.kind, passed: run.passed,
+    timings: run.timings, nativeShowMonitor: run.nativeShowMonitor,
+    ocbcAnimation: run.ocbcAnimation && { detection: run.ocbcAnimation.detection, summary: run.ocbcAnimation.summary,
+      visibilityEvents: run.ocbcAnimation.visibilityEvents }, exit: run.exit, failure: run.failure })),
+  resultPath: join(output, 'result.json') }, null, 2))

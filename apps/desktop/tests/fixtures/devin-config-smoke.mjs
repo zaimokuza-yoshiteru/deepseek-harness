@@ -1,8 +1,6 @@
 /** Exercise packaged Devin registration and real MCP stdio routing without user credentials. */
 import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
-import { spawn } from 'node:child_process'
-import { once } from 'node:events'
 import { createServer } from 'node:http'
 import { createRequire } from 'node:module'
 import { join, dirname } from 'node:path'
@@ -14,6 +12,8 @@ const [runtime, profile] = process.argv.slice(2)
 assert.ok(runtime && profile)
 assert.ok(process.versions.electron, 'The packaged RunAsNode fuse must be enabled')
 const scope = await packagedProfile(runtime, profile)
+const { default: LocalSubprocessRuntime } = await scope.load('@deepseek-ai/dsh-subprocess-local')
+const subprocessFiber = await scope.ctx.plugin(LocalSubprocessRuntime)
 const require = createRequire(join(profile, 'package.json'))
 const installed = dirname(require.resolve('@zaimokuza/dsh-acp-adapter/package.json'))
 // The adapter owns its SDK dependency; the core runtime may use a different MCP package generation.
@@ -27,18 +27,12 @@ const config = () => fs.readFile(configPath, 'utf8').then(JSON.parse)
 const env = { ...Object.fromEntries(Object.entries(process.env).filter(([name]) => /^(?:systemroot|windir|comspec)$/iu.test(name))),
   HOME: home, USERPROFILE: home, APPDATA: join(home, 'appdata'), XDG_CONFIG_HOME: join(home, 'xdg'),
   PATH: '', ELECTRON_RUN_AS_NODE: '1' }
-const subprocess = { spawn(spec) {
-  const child = spawn(spec.argv[0], spec.argv.slice(1), { cwd: spec.cwd, env: spec.env, stdio: 'pipe', windowsHide: true })
-  const done = once(child, 'close').then(([exitCode, signal]) => ({ exitCode, signal }))
-  const abort = () => child.kill()
-  spec.signal.addEventListener('abort', abort, { once: true })
-  void done.finally(() => spec.signal.removeEventListener('abort', abort))
-  cleanup.push(async () => { if (child.exitCode === null && child.signalCode === null) child.kill(); await done })
-  return { stdin: child.stdin, stdout: child.stdout, stderr: child.stderr, done,
-    waitForExit: async () => { await done; return true }, terminate: () => child.kill() }
-} }
 try {
   const { prepareDevinMcp } = await import(pathToFileURL(join(installed, 'lib/host/teams/devin-config.js')).href)
+  const { resolveSubprocessSeam } = await import(pathToFileURL(join(installed, 'lib/host/composition/subprocess.js')).href)
+  const resolvedSubprocess = resolveSubprocessSeam(scope.ctx)
+  assert.equal(resolvedSubprocess.ok, true, 'Packaged adapter must resolve the shipped managed subprocess provider')
+  const subprocess = resolvedSubprocess.seam
   const { Client } = await loadAdapter('@modelcontextprotocol/client')
   const { StdioClientTransport } = await loadAdapter('@modelcontextprotocol/client/stdio')
   const { Server } = await loadAdapter('@modelcontextprotocol/server')
@@ -117,6 +111,7 @@ try {
   console.log('Packaged Electron MCP: fixed entry, old path and env repair, concurrent routing, revocation and inert standalone passed')
 } finally {
   for (const close of cleanup.reverse()) await close()
+  await subprocessFiber.dispose()
   await scope.close()
   await fs.rm(home, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
 }

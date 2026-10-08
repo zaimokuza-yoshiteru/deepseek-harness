@@ -106,11 +106,12 @@
           "Distribute letter streams across 24 regions with two separated lanes each; use website logo fill #e1251b without residual tracing tint; brighten only the scene layer and retain crisp text.",
           "Match background black level to the portrait source (#030609) and remove added atmospheric haze and background glow spots.",
           "Declare the verified 0.1.7-rc.2 and target 0.2.0-rc.2 hosts in 0.1.8; retain the complete animation runtime, duration, replay behavior and all visual assets unchanged. Verify real 0.2.0-rc.2 Host load/unload, web routes and complete animation playback in Chromium.",
-          "Remove eight dead 1280×720 canvases and constant-true renderer branches; preserve full-person mask, animation, branding and disposal. Real-asset Chromium frame pixels match the saved baseline at eight sampled times."
+          "Remove eight dead 1280×720 canvases and constant-true renderer branches; preserve full-person mask, animation, branding and disposal. Real-asset Chromium frame pixels match the saved baseline at eight sampled times.",
+          "Accumulate visible RAF progress with a one-source-frame (24fps) cap after stalls; preserve complete animation and hidden-load/resume behavior. Slow rendering extends playback; click/Escape still exit."
         ]
       },
       "sourceIncludesLocalChanges": true,
-      "sourceSha256": "253c070abac44cde70a5c066dabf2d3ce3afed377e530bb012526f408172760c",
+      "sourceSha256": "adf448f1a3f1e37659945faa1c8e5084a8baa3caa2007a72e062563d6231fa10",
       "fileCount": 157,
       "retainedDocuments": [],
       "excluded": [

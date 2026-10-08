@@ -67,15 +67,24 @@ jobs:
         if: runner.os == 'macOS'
         run: bash apps/desktop/scripts/ci-standard-user-macos.sh
       - uses: actions/upload-artifact@v4
-        if: success()
+        if: always()
         with:
           name: dsh-desktop-${{ matrix.target }}
           path: |
             apps/desktop/.desktop-build/targets/${{ matrix.target }}/artifacts/*.zip
             apps/desktop/.desktop-build/targets/${{ matrix.target }}/artifacts/standard-user-*.json
-            .artifacts/acp-windows-smoke/result.json
-          if-no-files-found: error
+          if-no-files-found: warn
           compression-level: 0
+          include-hidden-files: true
+      - name: Upload Windows ACP smoke evidence
+        if: always() && runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-acp-windows-smoke
+          path: .artifacts/acp-windows-smoke/result.json
+          if-no-files-found: warn
+          compression-level: 0
+          include-hidden-files: true
       - name: Upload macOS GUI startup evidence
         if: always() && runner.os == 'macOS'
         uses: actions/upload-artifact@v4
