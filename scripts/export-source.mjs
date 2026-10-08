@@ -163,6 +163,8 @@ function sourceAllowed(path, withTests, buildTooling = null) {
   // Keep the build and packaging closure, but never ship standalone CI,
   // upload, test, fixture, or portable-smoke entry points in the default archive.
   if (!withTests && parts[0] === 'scripts' && /^(?:test-|coverage-|session-snapshot-corpus)/u.test(parts.at(-1) ?? '')) return false
+  // This runnable review example is neither product source nor build tooling.
+  if (!withTests && normalized.startsWith('apps/cli/config/examples/github-review/')) return false
   if (!withTests && DESKTOP_INSTALLER_CONFIG.test(normalized)) return false
   if (!withTests && parts[0] === 'apps' && parts[1] === 'desktop' && parts[2] === 'scripts'
     && /^(?:ci-|upload-|smoke-|replay-portable-smoke\.)/u.test(parts.at(-1) ?? '')) return false
