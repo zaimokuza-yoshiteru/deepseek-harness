@@ -20,7 +20,7 @@ await mkdir(output, { recursive: true })
 const intranet = (process.env.DSH_DESKTOP_INTRANET ?? '1') === '1'
 const report = { target, archive: null, sha256: null, standardUser: process.env.DSH_STANDARD_USER_VERIFIED === '1',
   intranet,
-  measurement: 'Process launch through a Settings click and visible General settings section; OCBC frame callbacks and overlay completion are recorded separately before plugin inventory, screenshots, and audit work. Overlay-seen time is the first DOM observation, not an exact frame-present timestamp. Native show events are hooked after Playwright launch and are not represented as the first show if the window was already visible. RAF callback timings include diagnostic-wrapper overhead and are not unbiased performance benchmarks. No model invocation.',
+  measurement: 'Process launch through a Settings click and visible General settings section; OCBC frame callbacks and overlay completion are recorded separately before plugin inventory, screenshots, and audit work. Overlay-seen time is the first DOM observation, not an exact frame-present timestamp. Native show events are hooked after Playwright launch and are not represented as the first show if the window was already visible. Legacy callbackGap fields use RAF callback timestamps, which can lag callback entry; callbackEntryGap fields use observed callback-entry times. RAF measurements include diagnostic-wrapper overhead and are not unbiased performance benchmarks. No model invocation.',
   limitations: 'Fresh CI machine, immediately after ZIP extraction; not an OS disk-cache cold boot or a user endpoint security reproduction. Extraction is excluded.',
   runs: [] }
 let executable = process.argv[3] && resolve(process.argv[3])
@@ -392,8 +392,10 @@ for (const kind of scenarios) {
       scheduledAfterLaunchMs: pageToLaunchMs(record.scheduledAt), callbackAfterLaunchMs: pageToLaunchMs(record.enteredAt),
       callbackTimestampAfterLaunchMs: pageToLaunchMs(record.timestamp) }))
     const frameGaps = frameRecords.slice(1).map(record => record.gapFromPreviousCallbackMs).filter(Number.isFinite)
+    const frameEntryGaps = frameRecords.slice(1).map(record => record.gapFromPreviousEntryMs).filter(Number.isFinite)
     const frameDurations = frameRecords.map(record => record.durationMs).filter(Number.isFinite)
     const sortedFrameGaps = [...frameGaps].sort((left, right) => left - right)
+    const sortedFrameEntryGaps = [...frameEntryGaps].sort((left, right) => left - right)
     const percentile = (values, fraction) => values.length ? values[Math.min(values.length - 1, Math.ceil(values.length * fraction) - 1)] : null
     run.ocbcAnimation = {
       detection: overlay.ocbcFrameDetection,
@@ -407,10 +409,16 @@ for (const kind of scenarios) {
         recordedFrames: frameRecords.length,
         hiddenDocumentFrames: frameRecords.filter(record => record.hidden).length,
         maxCallbackGapMs: frameGaps.length ? Math.max(...frameGaps) : null,
+        maxRafTimestampGapMs: frameGaps.length ? Math.max(...frameGaps) : null,
         callbackGapsOver42ms: frameGaps.filter(value => value > 1000 / 24).length,
         callbackGapsOver83ms: frameGaps.filter(value => value > 1000 / 12).length,
         p95CallbackGapMs: percentile(sortedFrameGaps, 0.95),
         p99CallbackGapMs: percentile(sortedFrameGaps, 0.99),
+        p95RafTimestampGapMs: percentile(sortedFrameGaps, 0.95),
+        p99RafTimestampGapMs: percentile(sortedFrameGaps, 0.99),
+        maxCallbackEntryGapMs: frameEntryGaps.length ? Math.max(...frameEntryGaps) : null,
+        p95CallbackEntryGapMs: percentile(sortedFrameEntryGaps, 0.95),
+        p99CallbackEntryGapMs: percentile(sortedFrameEntryGaps, 0.99),
         meanCallbackGapMs: frameGaps.length ? frameGaps.reduce((sum, value) => sum + value, 0) / frameGaps.length : null,
         maxCallbackDurationMs: frameDurations.length ? Math.max(...frameDurations) : null,
         meanCallbackDurationMs: frameDurations.length ? frameDurations.reduce((sum, value) => sum + value, 0) / frameDurations.length : null,

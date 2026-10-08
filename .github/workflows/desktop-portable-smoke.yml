@@ -15,6 +15,12 @@ on:
         options: [win-x64, mac-arm64]
         default: win-x64
         required: true
+      mode:
+        description: GUI startup check or full packaged backend smoke
+        type: choice
+        options: [gui, backend]
+        default: gui
+        required: true
       dependency_audit:
         description: Verify packaged dependency files with application egress blocked
         type: boolean
@@ -34,6 +40,7 @@ jobs:
         shell: ${{ inputs.target == 'win-x64' && 'pwsh' || 'bash' }}
     env:
       DESKTOP_SMOKE_TARGET: ${{ inputs.target }}
+      DESKTOP_SMOKE_MODE: ${{ inputs.mode }}
       DSH_TELEMETRY_MODE: DISABLED
       DSH_DESKTOP_DISTRIBUTION_VERSION: startup-replay
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
@@ -53,17 +60,17 @@ jobs:
           path: .artifacts/smoke-input
           run-id: ${{ inputs.run_id }}
           github-token: ${{ github.token }}
-      - name: Measure shipped Windows GUI as a standard user
+      - name: Verify downloaded Windows app as a standard user
         if: runner.os == 'Windows'
-        run: ./apps/desktop/scripts/ci-standard-user-windows.ps1 -Mode startup
-      - name: Prepare macOS backend replay
+        run: ./apps/desktop/scripts/ci-standard-user-windows.ps1 -Mode ${{ inputs.mode == 'gui' && 'startup' || 'replay' }}
+      - name: Prepare macOS replay dependencies
         if: runner.os == 'macOS'
         run: pnpm install --frozen-lockfile
-      - name: Verify downloaded macOS backend
+      - name: Verify downloaded macOS app
         if: runner.os == 'macOS'
         run: node apps/desktop/scripts/replay-portable-smoke.mjs
-      - name: Upload startup timings and screenshots
-        if: always() && runner.os == 'Windows'
+      - name: Upload GUI startup timings and screenshots
+        if: always() && runner.os == 'Windows' && inputs.mode == 'gui'
         uses: actions/upload-artifact@v4
         with:
           name: desktop-startup-${{ inputs.target }}
@@ -73,4 +80,13 @@ jobs:
             .artifacts/startup-timing/launch-error.txt
             .artifacts/startup-timing/dependency-audit.json
             .artifacts/startup-timing/network-guard.json
+          include-hidden-files: true
+          if-no-files-found: warn
+      - name: Upload packaged backend ACP evidence
+        if: always() && runner.os == 'Windows' && inputs.mode == 'backend'
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-replay-backend-${{ inputs.target }}
+          path: .artifacts/acp-windows-smoke/result.json
+          include-hidden-files: true
           if-no-files-found: warn

@@ -20,11 +20,15 @@ const subprocessFiber = await context.plugin(LocalSubprocessRuntime)
 const adapterInstall = dirname(createRequire(join(profile, 'package.json')).resolve('@zaimokuza/dsh-acp-adapter/package.json'))
 const adapterRequire = createRequire(join(adapterInstall, 'package.json'))
 const adapterModule = (name) => import(pathToFileURL(adapterRequire.resolve(name)).href)
-const [{ AcpClientConnection }, { buildAcpSpawnPlan }, { prepareAcpCommandLaunch }] = await Promise.all([
+const [{ AcpClientConnection }, { buildAcpSpawnPlan }, { prepareAcpCommandLaunch }, { resolveSubprocessSeam }] = await Promise.all([
   adapterModule('./lib/protocol/v1/connection.js'),
   adapterModule('./lib/domain/policy/sandbox.js'),
   adapterModule('./lib/runtime/process/command-launch.js'),
+  adapterModule('./lib/host/composition/subprocess.js'),
 ])
+const resolvedSubprocess = resolveSubprocessSeam(context)
+assert.equal(resolvedSubprocess.ok, true, 'Packaged adapter must resolve the shipped managed subprocess seam')
+const subprocess = resolvedSubprocess.seam
 const scratch = mkdtempSync(join(tmpdir(), 'dsh ACP launch smoke '))
 const fixture = join(dirname(fileURLToPath(import.meta.url)), 'devin-acp-handshake.mjs')
 // Node consumes the first CLI argument as its script filename. A minimal
@@ -65,13 +69,13 @@ async function run(id, command, searchPath) {
     ACP_SMOKE_TRACE: output,
   })
   const args = [command, 'acp', '--marker', marker]
-  const launch = await prepareAcpCommandLaunch(context.subprocess, args, scratch, env)
+  const launch = await prepareAcpCommandLaunch(subprocess, args, scratch, env)
   const plan = buildAcpSpawnPlan({
     mode: 'danger-full-access', workspaceRoot: scratch, argv: launch.argv, env,
     windowsVerbatimArguments: launch.windowsVerbatimArguments,
   })
   await AcpClientConnection.probe({
-    argv: [...plan.argv], cwd: scratch, env: plan.env, spawnPlan: plan, subprocess: context.subprocess,
+    argv: [...plan.argv], cwd: scratch, env: plan.env, spawnPlan: plan, subprocess,
   }, { timeoutMs: 10_000 })
   const records = readFileSync(output, 'utf8').trim().split(/\r?\n/u).map((line) => JSON.parse(line))
   assert.deepEqual(records.map((record) => record.method), ['initialize', 'session/new'])

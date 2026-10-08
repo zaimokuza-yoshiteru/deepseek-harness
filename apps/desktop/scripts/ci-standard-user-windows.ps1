@@ -1,4 +1,4 @@
-param([ValidateSet('build', 'startup')][string]$Mode = 'build')
+param([ValidateSet('build', 'startup', 'replay')][string]$Mode = 'build')
 # The runner creates the account; dependency installation, build and smoke run only as that standard user.
 $ErrorActionPreference = 'Stop'
 $user = 'dshbuilder'

@@ -7,7 +7,7 @@ import { join } from 'node:path'
 process.env.DSH_DESKTOP_DISTRIBUTION_VERSION ||= JSON.parse(readFileSync(new URL('../../../delivery.json', import.meta.url), 'utf8')).version
 const target = process.argv[2]
 const mode = process.argv[3] ?? 'build'
-if (!['build', 'startup'].includes(mode)) throw new Error('Expected build or startup mode')
+if (!['build', 'startup', 'replay'].includes(mode)) throw new Error('Expected build, startup or replay mode')
 if (!['mac-arm64', 'win-x64'].includes(target)) throw new Error('Expected a portable desktop target')
 if (process.platform === 'win32') {
   const elevated = execFileSync('powershell.exe', ['-NoProfile', '-Command',
@@ -27,13 +27,21 @@ const run = args => {
   if (child.error) throw child.error
   if (child.status !== 0 || child.signal !== null) throw new Error(`Desktop CI command failed: ${args.join(' ')}`)
 }
-run(['install', '--frozen-lockfile', ...(mode === 'startup' ? ['--ignore-scripts'] : [])])
+run(['install', '--frozen-lockfile', ...(mode !== 'build' ? ['--ignore-scripts'] : [])])
 if (mode === 'startup') {
   const child = spawnSync(process.execPath, ['apps/desktop/scripts/startup-timing.mjs', target], {
     stdio: 'inherit', env: { ...process.env, DSH_STANDARD_USER_VERIFIED: '1' },
   })
   if (child.error) throw child.error
   if (child.status !== 0 || child.signal !== null) throw new Error('Packaged GUI startup timing failed')
+  process.exit(0)
+}
+if (mode === 'replay') {
+  const child = spawnSync(process.execPath, ['apps/desktop/scripts/replay-portable-smoke.mjs'], {
+    stdio: 'inherit', env: { ...process.env, DESKTOP_SMOKE_TARGET: target, DESKTOP_SMOKE_MODE: 'backend' },
+  })
+  if (child.error) throw child.error
+  if (child.status !== 0 || child.signal !== null) throw new Error('Downloaded packaged backend smoke failed')
   process.exit(0)
 }
 run(['--dir', 'native/system/packages/entry', 'run', 'build:js'])

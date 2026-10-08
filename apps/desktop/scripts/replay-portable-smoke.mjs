@@ -5,6 +5,14 @@ import { spawnSync } from 'node:child_process'
 
 const target = process.env.DESKTOP_SMOKE_TARGET
 if (target !== 'mac-arm64' && target !== 'win-x64') throw new Error('Expected a supported desktop smoke target')
+const mode = process.env.DESKTOP_SMOKE_MODE ?? 'backend'
+if (mode !== 'gui' && mode !== 'backend') throw new Error('Expected gui or backend replay mode')
+if (mode === 'gui') {
+  const result = spawnSync(process.execPath, ['apps/desktop/scripts/startup-timing.mjs', target], { stdio: 'inherit' })
+  if (result.error !== undefined) throw result.error
+  if (result.status !== 0) throw new Error(`Packaged GUI replay exited with ${String(result.status ?? result.signal)}`)
+  process.exit(0)
+}
 const directory = '.artifacts/smoke-input'
 const archives = readdirSync(directory).filter(name => name.endsWith('.zip'))
 if (archives.length !== 1) throw new Error('Expected exactly one downloaded application ZIP')
