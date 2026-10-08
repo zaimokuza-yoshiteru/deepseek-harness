@@ -6,7 +6,7 @@ import { installOfficeEngineResolution, runtimeArchivePath } from './office-engi
 
 /**
  * Run the ordinary CLI with Desktop's bundled package manager and reserved-profile plugin access.
- * @param runtimeDir - Prepared or ASAR-contained production DSH package tree.
+ * @param runtimeDir - Physical production DSH package tree under Desktop resources.
  * @param supportDir - Physical Desktop runtime directory containing pnpm.
  * @returns Completion of the selected CLI command; profile plugins own their process lifetime.
  */
@@ -14,6 +14,7 @@ export async function runDesktopCli(runtimeDir: string, supportDir: string): Pro
   installOfficeEngineResolution(runtimeDir)
   await runCli({
     manageDesktopProfile: true,
+    installAnchor: join(runtimeDir, 'package.json'),
     packageManager: {
       command: process.execPath,
       args: ['--expose-internals', join(supportDir, 'pnpm', 'bin', 'pnpm.mjs')],

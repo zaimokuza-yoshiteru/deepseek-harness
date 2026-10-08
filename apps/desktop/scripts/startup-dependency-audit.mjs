@@ -43,14 +43,14 @@ async function fingerprint(root) {
 }
 
 export async function startDependencyAudit(application, output, home, env) {
-  const seed = join(application, 'resources', 'plugin-seed')
-  const report = { seed: [], runs: [], registryRequests: [], cacheIsolated: true }
+  const runtime = join(application, 'resources', 'dsh')
+  const report = { bundled: [], runs: [], registryRequests: [], cacheIsolated: true }
   const save = () => writeFile(join(output, 'dependency-audit.json'), JSON.stringify(report, null, 2) + '\n')
   const manifests = Object.fromEntries(await Promise.all(names.map(async name => [name,
-    JSON.parse(await readFile(join(seed, 'node_modules', name, 'package.json'), 'utf8'))])))
+    JSON.parse(await readFile(join(runtime, 'node_modules', name, 'package.json'), 'utf8'))])))
   for (const { name, version } of auditDependencyManifests(manifests)) {
-    const root = join(seed, 'node_modules', name)
-    report.seed.push({ name, version, path: relative(application, root), ...await fingerprint(root) })
+    const root = join(runtime, 'node_modules', name)
+    report.bundled.push({ name, version, path: relative(application, root), ...await fingerprint(root) })
   }
   await save()
   const { address } = await lookup('registry.npmjs.org', { family: 4 })
@@ -94,10 +94,10 @@ export async function startDependencyAudit(application, output, home, env) {
     async verify(app, profile, kind) {
       const run = { kind, dependencies: [] }
       report.runs.push(run)
-      for (const packaged of report.seed) {
+      for (const packaged of report.bundled) {
         const installed = await app.evaluate(({ app }, { profile, name }) => {
           const fs = process.getBuiltinModule('node:fs'), path = process.getBuiltinModule('node:path')
-          const roots = [path.join(profile, 'node_modules', name), path.join(app.getAppPath(), 'dsh', 'node_modules', name)]
+          const roots = [path.join(profile, 'node_modules', name), path.join(process.resourcesPath, 'dsh', 'node_modules', name)]
           const root = roots.find(root => fs.existsSync(path.join(root, 'package.json')))
           if (!root) throw new Error(`Dependency missing from profile and shipped runtime: ${name}`)
           const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
@@ -105,10 +105,9 @@ export async function startDependencyAudit(application, output, home, env) {
         }, { profile, name: packaged.name })
         assert.equal(installed.name, packaged.name)
         assert.equal(installed.version, packaged.version)
-        if (installed.source === 'profile') {
-          Object.assign(installed, await fingerprint(installed.root))
-          assert.equal(installed.sha256, packaged.sha256, `${packaged.name} differs from the shipped dependency`)
-        }
+        assert.equal(installed.source, 'application-runtime', `${packaged.name} must load from the application runtime`)
+        Object.assign(installed, await fingerprint(installed.root))
+        assert.equal(installed.sha256, packaged.sha256, `${packaged.name} differs from the shipped dependency`)
         run.dependencies.push(installed)
         await save()
       }

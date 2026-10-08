@@ -1,9 +1,6 @@
 /** Desktop profile initialization and native recovery. */
 
-import { spawn } from 'node:child_process'
-import { applyPluginSeed, needsPluginSeed } from './plugin-seed.ts'
-import { desktopNpmEnvironment } from './npm-environment.ts'
-import { desktopNodeEnvironment } from './node-environment.ts'
+import { reconcileBundledPlugins } from './bundled-plugins.ts'
 import {
   existsSync,
   fsyncSync,
@@ -17,7 +14,7 @@ import {
   writeFileSync,
   writeSync,
 } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
 import {
   DESKTOP_HOST_PACKAGE,
   desktopCorePackageOverrides,
@@ -62,7 +59,7 @@ function migrateProfileSettings(projectDir: string): void {
   }
 }
 
-/** Initializes the Desktop profile and disables third-party bundles during recovery. */
+/** Initializes the Desktop profile and disables user-installed bundles during recovery. */
 export class DesktopProjectManager {
   /**
    * @param paths - Electron-owned package state and reserved desktop profile paths.
@@ -72,7 +69,6 @@ export class DesktopProjectManager {
     readonly paths: DesktopPaths,
     readonly runtime: {
       readonly dsh: string
-      readonly pluginSeed?: string
       readonly node?: string
       readonly pnpm?: string
       readonly nodeBin?: string
@@ -89,44 +85,19 @@ export class DesktopProjectManager {
   }
 
   /**
-   * Prepare the pinned plugin profile, installing additional user plugins only during migration.
+   * Reconcile the profile's bundle selection against the immutable runtime and clean retired package state.
    * @param production - Remove retired application-owned profile packages before Host startup.
    */
   async applyRelease(
-    production = false, environment: () => Promise<NodeJS.ProcessEnv> = async () => process.env,
+    production = false,
   ): Promise<void> {
     await this.withLock(async () => {
       const descriptor = readDesktopRuntime(this.runtime.dsh)
-      if (this.runtime.pluginSeed !== undefined && needsPluginSeed(this.paths.profile, this.runtime.pluginSeed)) {
-        await applyPluginSeed(this.paths.profile, this.runtime.pluginSeed,
-          resolve(this.paths.profile, '../../desktop/migration-backups'), descriptor, async (install) => {
-            createPluginProfile(this.paths.profile)
-            if (install) await this.installUserPlugins(await environment())
-          })
-      }
+      await reconcileBundledPlugins(this.paths.profile, this.runtime.dsh, descriptor)
       cleanProfileCorePackages(this.paths.profile, descriptor.sharedPackages.map(entry => entry.name), production)
       migrateProfileSettings(this.paths.profile)
       createPluginProfile(this.paths.profile)
       removeLinkProjections(this.paths.profile)
-    })
-  }
-
-  private async installUserPlugins(baseEnvironment: NodeJS.ProcessEnv): Promise<void> {
-    const { node, pnpm, nodeBin } = this.runtime
-    if (node === undefined || pnpm === undefined) throw new Error('desktop migration: bundled package manager unavailable')
-    const environment = desktopNpmEnvironment(baseEnvironment).env
-    await new Promise<void>((accept, reject) => {
-      let diagnostic = ''
-      const child = spawn(node, ['--expose-internals', pnpm, 'install', '--prod', '--no-frozen-lockfile'], {
-        cwd: this.paths.profile, env: desktopNodeEnvironment(node, nodeBin, environment), stdio: ['ignore', 'pipe', 'pipe'],
-      })
-      const collect = (chunk: Buffer): void => { diagnostic = (diagnostic + chunk.toString()).slice(-65536) }
-      child.stdout.on('data', collect); child.stderr.on('data', collect)
-      child.once('error', reject)
-      child.once('close', (code, signal) => {
-        if (code === 0) accept()
-        else reject(new Error(`desktop migration: pnpm exited with ${String(code ?? signal)}: ${diagnostic}`))
-      })
     })
   }
 
@@ -210,7 +181,7 @@ export function createDevelopmentProjectMetadata(projectDir: string, release: De
   writeFileSync(join(projectDir, 'pnpm-workspace.yaml'), workspaceFile(), { mode: 0o600 })
 }
 
-/** Create the first external plugin profile without running a package manager. */
+/** Initialize the Desktop profile manifest with its default bundle selection. */
 export function createPluginProfile(projectDir: string): void {
   initProfile(projectDir, WEB_PROFILE.bundles)
 }

@@ -451,12 +451,10 @@ export async function packageTarget(
         { cwd: APP_ROOT, env: electronBuilderEnv, timeoutMs: 60_000 })
     })
   }
-  if (invocation.portable) {
-    delete buildEnv.DSH_DESKTOP_LOCAL_PLUGINS
-    delete targetEnv.DSH_DESKTOP_LOCAL_PLUGINS
-    delete downloadEnv.DSH_DESKTOP_LOCAL_PLUGINS
-    await execute(['run', 'build:plugins', '--desktop-only'], buildEnv, REPOSITORY_ROOT)
-  }
+  delete buildEnv.DSH_DESKTOP_LOCAL_PLUGINS
+  delete targetEnv.DSH_DESKTOP_LOCAL_PLUGINS
+  delete downloadEnv.DSH_DESKTOP_LOCAL_PLUGINS
+  await execute(['run', 'build:plugins', '--desktop-only'], buildEnv, REPOSITORY_ROOT)
   await execute(['run', 'build:official'], buildEnv, REPOSITORY_ROOT)
   await execute(['run', 'release:pack', '--family', 'dsh', '--out', buildPaths.packedDsh, ...packArguments], buildEnv, REPOSITORY_ROOT)
   await execute([

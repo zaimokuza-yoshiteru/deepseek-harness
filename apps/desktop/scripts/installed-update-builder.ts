@@ -31,8 +31,6 @@ export async function createInstalledUpdateBuilderConfig(manifest: string, versi
     files: [
       { from: application, to: '.', filter: ['lib/*.js', 'lib/*.cjs', 'renderer/**/*', 'qualification-bootstrap.mjs', 'installed-update-identity.mjs'] },
       'package.json',
-      { from: dsh, to: 'dsh', filter: ['**/*'] },
-      { from: join(dsh, 'node_modules'), to: 'dsh/node_modules', filter: ['**/*'] },
     ],
     publish: [{ provider: 'generic' as const, url: `${run.origin}/${run.feedKey.slice(0, -'nightly.yml'.length)}`, channel: 'nightly' }],
   }

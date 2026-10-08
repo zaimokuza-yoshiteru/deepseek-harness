@@ -55,7 +55,7 @@ type EsmResolve = (
  * name without an entry, or the layer above it after an `interception` subpath miss.
  */
 type ResolutionRoute =
-  | { readonly kind: 'interception'; readonly entry: RuntimeResolutionEntry; readonly after: string }
+  | { readonly kind: 'interception'; readonly entry: RuntimeResolutionEntry; readonly after: string; readonly specifier?: string }
   | { readonly kind: 'native-after-interception'; readonly parent: string }
   | { readonly kind: 'native'; readonly packageDir?: string }
 
@@ -69,7 +69,7 @@ interface ResolutionRouteState {
 interface CommonJsLookup {
   readonly cacheable: boolean
   resolveNative(searchPaths: readonly string[]): string
-  resolveEntry(entry: RuntimeResolutionEntry, after: string): string
+  resolveEntry(entry: RuntimeResolutionEntry, after: string, specifier?: string): string
 }
 
 /** The lookup positions that one interception layer fixes on an importer's ancestor chain. */
@@ -109,6 +109,8 @@ interface CompiledResolution {
   readonly installationPaths: readonly string[]
   readonly linkedPaths: readonly string[]
   readonly localPackageNames: ReadonlySet<string>
+  readonly installationOwnedPackages: Map<string, string>
+  readonly installationAnchor: string | undefined
   readonly esmRoutes: ResolutionRoutes
   readonly cjsRoutes: ResolutionRoutes
 }
@@ -177,6 +179,10 @@ function compileResolution(resolution: RuntimeResolution): CompiledResolution {
       .flatMap(entry => prefixes(entry.packageDir)))],
     linkedPaths: resolution.linkedRoots.flatMap(root => prefixes(root.realPath)),
     localPackageNames: new Set(resolution.localPackageNames),
+    installationOwnedPackages: new Map(
+      (resolution.installationOwnedPackages ?? []).map(({ requestName, packageName }) => [requestName, packageName]),
+    ),
+    installationAnchor: resolution.installationAnchor,
     esmRoutes: new Map(),
     cjsRoutes: new Map(),
   }
@@ -256,6 +262,16 @@ function localPackageCandidate(searchPath: string, name: string, flavor: 'esm' |
     : stat !== undefined
       || ['.js', '.json', '.node'].some(extension => existsSync(candidate + extension))
   return found ? candidate : undefined
+}
+
+function installedPackageName(packageDir: string): string | undefined {
+  try {
+    const manifest = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8')) as { name?: unknown }
+    return typeof manifest.name === 'string' ? manifest.name : undefined
+  } catch {
+    // Leave malformed and incomplete local package diagnostics to Node's native resolver.
+    return undefined
+  }
 }
 
 function selfReferenceName(parent: string): string | false | null {
@@ -454,6 +470,21 @@ class ResolutionRouter {
     const name = barePackageName(request)
     if (name === undefined) return undefined
 
+    // Distribution-owned package names always use the installation graph, even if pnpm could not
+    // repair an old same-name package left in the profile. Profile aliases are redirected by target name.
+    const ownedPackageName = resolution.installationOwnedPackages.get(name)
+    if (ownedPackageName !== undefined) {
+      const target = resolution.entries.get(ownedPackageName)
+      const specifier = ownedPackageName + request.slice(name.length)
+      const fallback = resolution.installationAnchor ?? (layer.kind === 'profile' ? layer.nativeAfter : parent)
+      const route: ResolutionRoute = target === undefined
+        ? { kind: 'native-after-interception', parent: fallback }
+        : { kind: 'interception', entry: target, after: target.declarer, ...specifier === request ? {} : { specifier } }
+      const state: ResolutionRouteState = { route, ...target === undefined ? {} : { packageDir: target.packageDir } }
+      if (memo) requests.set(request, state)
+      return state
+    }
+
     if (parentRoutes.selfReferenceName === undefined || !memo) {
       parentRoutes.selfReferenceName = selfReferenceName(parent)
     }
@@ -475,25 +506,56 @@ class ResolutionRouter {
       if (candidate !== undefined) candidates.push(candidate)
     }
     if (candidates.length > 0) {
+      let resolved: string | undefined
+      let selected: string | undefined
       if (cjs !== undefined) {
         try {
-          const resolved = cjs.resolveNative(localSearchPaths)
-          const selected = candidates.find(candidate => (
-            localCandidateOwnsResolution(candidate, resolved, request, name)
-          ))
-          if (selected !== undefined) {
-            const state = {
-              route: { kind: 'native' as const, packageDir: selected },
-              packageDir: selected,
-              cjs: resolved,
-            }
-            if (memo) requests.set(request, state)
-            return state
-          }
+          resolved = cjs.resolveNative(localSearchPaths)
+          selected = candidates.find(candidate => localCandidateOwnsResolution(candidate, resolved as string, request, name))
         } catch (error) {
           if (!isUnselectedPackageMiss(error)) throw error
         }
       } else {
+        selected = candidates[0]
+      }
+      // A refused alias can remain undeclared at the profile root if pnpm repair fails. Inspect
+      // only that candidate, and only when distribution ownership is configured. Other local
+      // candidates retain Node's nearest-package behavior and aliases are never promoted globally.
+      const profileCandidate = resolution.profileDir === undefined ? undefined : join(resolution.profileDir, 'node_modules', name)
+      const isProfileCandidate = selected !== undefined && profileCandidate !== undefined
+        && resolve(selected) === resolve(profileCandidate)
+      const ownedAlias = isProfileCandidate && resolution.installationOwnedPackages.size > 0
+        ? installedPackageName(selected as string)
+        : undefined
+      if (ownedAlias !== undefined && resolution.installationOwnedPackages.has(ownedAlias)) {
+        const canonicalName = resolution.installationOwnedPackages.get(ownedAlias) as string
+        const owner = resolution.entries.get(canonicalName)
+        if (owner !== undefined) {
+          const specifier = canonicalName + request.slice(name.length)
+          const route: ResolutionRoute = {
+            kind: 'interception', entry: owner, after: owner.declarer,
+            ...specifier === request ? {} : { specifier },
+          }
+          const state: ResolutionRouteState = { route, packageDir: owner.packageDir }
+          if (memo) requests.set(request, state)
+          return state
+        }
+        const state: ResolutionRouteState = {
+          route: { kind: 'native-after-interception', parent: resolution.installationAnchor ?? layer.nativeAfter },
+        }
+        if (memo) requests.set(request, state)
+        return state
+      }
+      if (cjs !== undefined && selected !== undefined && resolved !== undefined) {
+        const state = {
+          route: { kind: 'native' as const, packageDir: selected },
+          packageDir: selected,
+          cjs: resolved,
+        }
+        if (memo) requests.set(request, state)
+        return state
+      }
+      if (cjs === undefined) {
         const selected = candidates[0] as string
         const state = {
           route: { kind: 'native' as const, packageDir: selected },
@@ -559,7 +621,11 @@ class ResolutionRouter {
   ): ResolutionRouteState | undefined {
     const name = barePackageName(request)
     const { layer } = parentRoutes
-    if (name === undefined || layer.kind !== 'profile' || !layer.active || !resolution.localPackageNames.has(name)) return undefined
+    if (name === undefined || layer.kind !== 'profile' || !layer.active || !resolution.localPackageNames.has(name)
+      || resolution.installationOwnedPackages.has(name)) return undefined
+    // Let the scoped router inspect a declared alias against its actual nearest candidate while
+    // distribution ownership is active; it still keeps ordinary local package resolution intact.
+    if (resolution.installationOwnedPackages.size > 0) return undefined
     const state = { route: { kind: 'native' as const } }
     parentRoutes.requests.set(request, state)
     return state
@@ -747,13 +813,14 @@ export function installRuntimeInterception(
         return result
       }
       const routedParent = pathToFileURL(route.kind === 'interception' ? route.entry.declarer : route.parent).href
+      const routedRequest = route.kind === 'interception' ? route.specifier ?? request : request
       const previous = delegatedEsm
-      delegatedEsm = { parent: routedParent, request }
+      delegatedEsm = { parent: routedParent, request: routedRequest }
       const restoreImporter = (error: unknown): never => throwWithImporter(error, routedParent, parent)
       try {
         let result: ResolveResult | Promise<ResolveResult>
         try {
-          result = native(request, routedParent, attributes)
+          result = native(routedRequest, routedParent, attributes)
         } catch (error) {
           return restoreImporter(error)
         }
@@ -843,15 +910,15 @@ export function installRuntimeInterception(
     target: { specifier: string; parentURL: string }, conditions: Iterable<string>,
   ): string => {
     const state = router.routeUrl(target.specifier, target.parentURL)
-    const resolveFrom = (parentURL: string): string => fileURLToPath(esmDefaultResolve(
-      target.specifier, { parentURL, conditions: [...conditions] },
+    const resolveFrom = (parentURL: string, specifier = target.specifier): string => fileURLToPath(esmDefaultResolve(
+      specifier, { parentURL, conditions: [...conditions] },
     ).url)
     /* v8 ignore next -- the target manifest was found inside the established profile scope */
     if (state === undefined) return resolveFrom(target.parentURL)
     if (state.route.kind === 'native') return resolveFrom(target.parentURL)
     const route = state.route
     if (route.kind === 'native-after-interception') return resolveFrom(pathToFileURL(route.parent).href)
-    return resolveFrom(pathToFileURL(route.entry.declarer).href)
+    return resolveFrom(pathToFileURL(route.entry.declarer).href, route.specifier)
   }
   const wrappedFilename: CommonJsModule['_resolveFilename'] = (request, parent, main, options) => {
     if (delegatedCjs || !parent?.filename || options?.paths !== undefined) {
@@ -863,10 +930,10 @@ export function installRuntimeInterception(
     const state = router.routePath(request, parentFilename, {
       cacheable,
       resolveNative: searchPaths => resolveNativeCjs(request, searchPaths, parent, parentFilename, main, options?.conditions),
-      resolveEntry: (entry, after) => {
+      resolveEntry: (entry, after, specifier) => {
         delegatedCjs++
         try {
-          return resolveRoutedCjs(request, { kind: 'interception', entry, after }, parent, main, routedOptions)
+          return resolveRoutedCjs(specifier ?? request, { kind: 'interception', entry, after }, parent, main, routedOptions)
         } finally {
           delegatedCjs--
         }
@@ -892,11 +959,12 @@ export function installRuntimeInterception(
     try {
       let expected: string
       try {
-        expected = resolveRoutedCjs(request, route, parent, main, routedOptions)
+        expected = resolveRoutedCjs(route.kind === 'interception' ? route.specifier ?? request : request, route, parent, main, routedOptions)
       } catch (error) {
         if (route.kind !== 'interception' || !isUnselectedPackageMiss(error)) throw error
         expected = resolveRoutedCjs(
-          request, { kind: 'native-after-interception', parent: route.after }, parent, main, routedOptions,
+          route.specifier ?? request,
+          { kind: 'native-after-interception', parent: route.after }, parent, main, routedOptions,
         )
       }
       if (cacheable) state.cjs = expected

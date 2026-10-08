@@ -1,8 +1,7 @@
 /** Internal ZIP distribution; no npm publication, installer, or automatic updater. */
 import { desktopTargetPlatform, resolveDesktopBuildTarget, resolveDesktopTargetBuildPaths } from './scripts/desktop-build-paths.mjs'
-import { join, relative, sep } from 'node:path'
-import { officePackageDirectories } from '../../scripts/libreoffice-packages.mjs'
-import { prepareWindowsAsarUnpack, verifyWindowsAsarUnpack } from './scripts/windows-asar-unpack.mjs'
+import { join } from 'node:path'
+import { verifyDesktopRuntime } from './lib/types/runtime-tree.js'
 import { fileURLToPath } from 'node:url'
 import { readFileSync } from 'node:fs'
 import { resolveDesktopDistributionVersion } from '../../scripts/desktop-distribution-version.mjs'
@@ -11,8 +10,6 @@ const delivery = JSON.parse(readFileSync(new URL('../../delivery.json', import.m
 const { tag, appVersion: version } = resolveDesktopDistributionVersion(delivery, process.env.DSH_DESKTOP_DISTRIBUTION_VERSION)
 const target = resolveDesktopBuildTarget()
 const paths = resolveDesktopTargetBuildPaths()
-
-let windowsCode = []
 
 export default {
   appId: 'io.github.zaimokuza-yoshiteru.dsh-desktop',
@@ -24,30 +21,19 @@ export default {
   electronDist: paths.electron,
   electronFuses: { runAsNode: true },
   npmRebuild: false,
-  beforePack: async context => {
-    const office = await officePackageDirectories(paths.dsh, desktopTargetPlatform(target))
-    const patterns = office.map(directory => `**/${relative(paths.dsh, directory).split(sep).join('/')}/**/*`)
-    const existing = context.packager.config.asarUnpack ?? []
-    context.packager.config.asarUnpack = [...(typeof existing === 'string' ? [existing] : existing), ...patterns]
-    if (context.electronPlatformName === 'win32') windowsCode = await prepareWindowsAsarUnpack(context, paths.dsh)
-  },
   afterPack: async context => {
-    if (context.electronPlatformName === 'win32') {
-      await verifyWindowsAsarUnpack(paths.dsh, context.packager.getResourcesDir(context.appOutDir), windowsCode)
-    }
+    await verifyDesktopRuntime(join(context.packager.getResourcesDir(context.appOutDir), 'dsh'),
+      JSON.parse(readFileSync(join(paths.dsh, 'package.json'), 'utf8')).version,
+      desktopTargetPlatform(target))
   },
-  files: ['lib/*.js', 'lib/*.cjs', 'lib/welcome/**/*', 'renderer/**/*', 'package.json',
-    { from: paths.dsh, to: 'dsh', filter: ['**/*'] },
-    { from: join(paths.dsh, 'node_modules'), to: 'dsh/node_modules', filter: ['**/*'] },
-  ],
+  files: ['lib/*.js', 'lib/*.cjs', 'lib/welcome/**/*', 'renderer/**/*', 'package.json'],
   asarUnpack: ['**/*.{node,dylib,dll,so,exe}', '**/*.so.*', '**/spawn-helper', '**/@vscode/ripgrep/bin/rg'],
   extraResources: [
     { from: paths.runtime, to: 'runtime' },
+    { from: paths.dsh, to: 'dsh' },
+    { from: join(paths.dsh, 'node_modules'), to: 'dsh/node_modules', filter: ['**/*'] },
     { from: 'resources/icon.png', to: 'icon.png' },
     ...(target === 'win-x64' ? [{ from: 'resources/tray-windows.ico', to: 'tray.ico' }] : []),
-    { from: join(paths.root, 'plugin-seed'), to: 'plugin-seed' },
-    // Electron Builder excludes nested node_modules from a parent FileSet.
-    { from: join(paths.root, 'plugin-seed', 'node_modules'), to: 'plugin-seed/node_modules', filter: ['**/*'] },
     { from: '../../LICENSE', to: 'notices/DSH-LICENSE' },
     { from: '../../THIRD_PARTY_NOTICES.md', to: 'notices/DSH-THIRD-PARTY-NOTICES.md' },
   ],
@@ -56,7 +42,7 @@ export default {
     category: 'public.app-category.developer-tools',
     identity: '-',
     // Preserve bundled runtime signatures; ASAR contains the rest of nested application bundles.
-    signIgnore: ['/Contents/Resources/app\\.asar\\.unpacked/dsh(?:/|$)', '/Contents/Resources/runtime/primary-runtime(?:/|$)', '\\.pak$'],
+    signIgnore: ['/Contents/Resources/dsh(?:/|$)', '/Contents/Resources/runtime/primary-runtime(?:/|$)', '\\.pak$'],
     hardenedRuntime: false,
     notarize: false,
     target: [{ target: 'zip', arch: ['arm64'] }],

@@ -85,8 +85,12 @@ export interface PackageView {
   readonly meta?: PluginLocalizedMeta
   /** Whether the profile's own dependencies hold the package; false for a bundle the installation supplies. */
   readonly installed: boolean
+  /** Whether this package's code ships with the application installation. */
+  readonly bundled?: boolean
   /** Whether the installation ships the bundle for the person to switch on: official, off until selected, never removable. */
   readonly optional: boolean
+  /** Whether the Host permits removing this package from the profile. */
+  readonly removable: boolean
   /** Whether the bundle is in the profile's layer list. */
   readonly enabled: boolean
   /** Why the Host refuses to switch the bundle off or remove it, when it does. */
@@ -421,7 +425,9 @@ export function packageView(bundle: BundleInfo, plugins: readonly PluginInfo[]):
   return {
     name: bundle.name,
     installed: bundle.installed,
+    ...bundle.bundled === undefined ? {} : { bundled: bundle.bundled },
     optional: bundle.optional,
+    removable: bundle.removable,
     enabled: bundle.enabled,
     rows,
     ...bundle.version === undefined ? {} : { version: bundle.version },

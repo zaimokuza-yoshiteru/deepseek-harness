@@ -120,6 +120,19 @@ it('uses the installation package runtime without changing CLI authentication or
   )
 })
 
+it('uses the supplied application runtime manifest for Desktop bundle ownership checks', async () => {
+  const { home } = fixture()
+  const dir = join(home, 'profiles', 'desktop')
+  initProfile(dir, PROFILE_TEMPLATES.web!.bundles)
+  vi.mocked(runProfilePnpm).mockResolvedValue({ exitCode: 0, output: '', truncated: false, logPath: '/profile/log' })
+  const anchor = '/physical/resources/dsh/package.json'
+  expect(await runPlugin('desktop', ['list'], undefined, anchor)).toBe(0)
+  expect(runProfilePnpm).toHaveBeenCalledWith(
+    expect.objectContaining({ profile: 'desktop', dir, installAnchor: anchor }),
+    ['list'], expect.objectContaining({ execution: 'cli' }),
+  )
+})
+
 it.each([
   ['list'], ['add', 'example-plugin'],
   ['version-exemptions'],

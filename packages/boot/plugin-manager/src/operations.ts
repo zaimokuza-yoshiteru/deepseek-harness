@@ -319,19 +319,23 @@ export async function runProfilePnpm(
       else await writeFileAtomic(file.path, file.text, { mode: 0o600 })
     }
   }
-  /** Packages a compatibility check refused; callers render them for their own surface. */
+  /** Packages an admission check refused; callers render them for their own surface. */
   const incompatible: IncompatiblePlugin[] = []
+  let blockedBundle: string | undefined
   const rejected = async (warnings: readonly string[], restoration: string): Promise<PackageResult> => {
     const diagnostic = `\ndsh: installation rejected: ${warnings.join('\n')}\ndsh: ${restoration}.\n`
     await log.write(diagnostic)
     options.onOutput?.(diagnostic, 'stderr')
     append(Buffer.from(diagnostic))
     await log.close()
-    return { exitCode: 1, output: output.toString('utf8'), truncated, logPath, incompatible }
+    return { exitCode: 1, output: output.toString('utf8'), truncated, logPath,
+      ...incompatible.length > 0 ? { incompatible } : {}, ...blockedBundle === undefined ? {} : { blockedBundle } }
   }
   // An install command names the packages it adds, so their manifests are read and checked before
   // pnpm runs: an incompatible version is never installed, and the one already in use keeps working.
   const preflight: string[] = []
+  const distribution = JSON.parse(readFileSync(context.installAnchor, 'utf8')) as { dsh?: { distribution?: { bundles?: string[] } } }
+  const shippedBundles = new Set(distribution.dsh?.distribution?.bundles ?? [])
   const exemptions = readProfileVersionExemptions(dir)
   // The run's own registry flags, so the lookup asks the registry the installation will use.
   const registryFlags = args.filter(argument => argument.startsWith('--registry='))
@@ -341,6 +345,12 @@ export async function runProfilePnpm(
     try {
       const manifest = await namedSpecManifest(dir, anchorPathSpec(raw, context.cwd), options, environment, registryFlags)
       if (manifest === undefined) continue
+      const actualName = (manifest as { name?: unknown }).name
+      if (typeof actualName === 'string' && shippedBundles.has(actualName)) {
+        blockedBundle ??= actualName
+        preflight.push(`Package ${actualName} is provided by the application and cannot be installed in the profile`)
+        continue
+      }
       const issue = evaluatePluginCompatibility(manifest, exemptions)
       if (issue !== undefined && !issue.exempted) {
         preflight.push(pluginCompatibilityWarning(issue))
@@ -473,8 +483,9 @@ export async function runProfilePnpm(
         const untouched = beforeDependencies[name] === spec && installedBefore.get(name) === installed
         const found: string[] = []
         const issues: IncompatiblePlugin[] = []
+        let manifest: ProfileManifest | undefined
         try {
-          const manifest = readProfileManifest('dsh', packageDir)
+          manifest = readProfileManifest('dsh', packageDir)
           for (const candidate of [manifest, ...bundleComponentManifests(manifest, packageDir, context.installAnchor)]) {
             const issue = evaluatePluginCompatibility(candidate, readProfileVersionExemptions(dir))
             if (issue !== undefined && !issue.exempted) {
@@ -484,6 +495,11 @@ export async function runProfilePnpm(
           }
         } catch (error) {
           found.push(`Cannot validate installed package ${name}: ${String(error)}`)
+        }
+        const actualName = (manifest as (ProfileManifest & { name?: unknown }) | undefined)?.name
+        if (!untouched && typeof actualName === 'string' && shippedBundles.has(actualName)) {
+          blockedBundle ??= actualName
+          found.push(`Package ${actualName} is provided by the application and cannot be installed in the profile`)
         }
         if (found.length === 0) continue
         if (!untouched) {
@@ -518,6 +534,9 @@ export async function runProfilePnpm(
         await log.write(diagnostic)
         options.onOutput?.(diagnostic, 'stderr')
         append(Buffer.from(diagnostic))
+        return { exitCode, output: output.toString('utf8'), truncated, logPath,
+          ...incompatible.length > 0 ? { incompatible } : {},
+          ...repaired.exitCode === 0 && blockedBundle !== undefined ? { blockedBundle } : {} }
       } else if (options.activateNewBundles !== false) {
         await reconcile(before, dir, context.installAnchor, options)
       }

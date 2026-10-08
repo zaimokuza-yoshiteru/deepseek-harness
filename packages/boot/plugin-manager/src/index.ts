@@ -121,6 +121,7 @@ function stringField(manifest: object, field: string): string | undefined {
 /** The fields of the dsh installation's own manifest the manager reads. */
 interface InstallationManifest {
   dependencies?: Record<string, string>
+  dsh?: { distribution?: { bundles?: string[] } }
 }
 
 /** What a package manifest says about the package: identity, one-liner, and whether it is a bundle. */
@@ -283,18 +284,21 @@ export class PluginManager extends TypertRemoteService {
     const selected = manifest.dsh?.profile?.bundles ?? []
     const dependencies = Object.keys(manifest.dependencies ?? {})
     const installation = JSON.parse(readFileSync(this.profile.installAnchor, 'utf8')) as InstallationManifest
-    const names = [...new Set([...selected, ...dependencies, ...Object.keys(installation.dependencies ?? {})])]
+    const bundledNames = new Set(installation.dsh?.distribution?.bundles ?? [])
+    const names = [...new Set([...selected, ...dependencies, ...Object.keys(installation.dependencies ?? {}), ...bundledNames])]
     const bundles: BundleInfo[] = []
     for (const name of names) {
       const installed = dependencies.includes(name)
       const optional = OPTIONAL_BUNDLES.includes(name)
-      const removable = installed && !Object.hasOwn(installation.dependencies ?? {}, name)
+      const bundled = bundledNames.has(name)
+      const removable = installed && !bundled && !Object.hasOwn(installation.dependencies ?? {}, name)
       const enabled = selected.includes(name)
       const readOnlyReason = this.protectsManager(name) ? 'management-required' as const : undefined
       try {
         const info = bundleManifest(name, this.profile.dir, this.profile.installAnchor)
         if (info === undefined) {
-          if (enabled) bundles.push({ name, enabled, installed, optional, removable: removable && readOnlyReason === undefined,
+          if (enabled || bundled) bundles.push({ name, enabled, installed, optional, ...(bundled ? { bundled } : {}),
+            removable: removable && readOnlyReason === undefined,
             ...(readOnlyReason === undefined ? {} : { readOnlyReason }), error: { code: 'not-bundle' }, rows: [], overrides: [] })
           continue
         }
@@ -305,12 +309,13 @@ export class PluginManager extends TypertRemoteService {
         bundles.push({ name, ...(info.version === undefined ? {} : { version: info.version }),
           ...(info.description === undefined || info.description === '' ? {} : { description: info.description }),
           ...meta === undefined ? {} : { meta },
-          enabled, installed, optional, removable: removable && readOnlyReason === undefined,
+          enabled, installed, optional, ...(bundled ? { bundled } : {}), removable: removable && readOnlyReason === undefined,
           ...(readOnlyReason === undefined ? {} : { readOnlyReason }),
           ...this.declaredRows(name, info) })
       } catch (error) {
-        if (enabled || installed) {
-          bundles.push({ name, enabled, installed, optional, removable: removable && readOnlyReason === undefined,
+        if (enabled || installed || bundled) {
+          bundles.push({ name, enabled, installed, optional, ...(bundled ? { bundled } : {}),
+            removable: removable && readOnlyReason === undefined,
             ...(readOnlyReason === undefined ? {} : { readOnlyReason }), error: managementError(error), rows: [], overrides: [] })
         }
       }
@@ -351,6 +356,7 @@ export class PluginManager extends TypertRemoteService {
     const installation = JSON.parse(readFileSync(this.profile.installAnchor, 'utf8')) as InstallationManifest
     const known = new Set([
       ...manifest.dsh?.profile?.bundles ?? [], ...Object.keys(manifest.dependencies ?? {}), ...Object.keys(installation.dependencies ?? {}),
+      ...installation.dsh?.distribution?.bundles ?? [],
     ])
     const plan = registryPlan(options?.registry, await this.registries())
     const registry = plan[0] as Registry
@@ -469,6 +475,14 @@ export class PluginManager extends TypertRemoteService {
     }
     const result = this.change(async (result) => {
       if (spec.trim() === '' || spec.startsWith('-')) throw new ManagementFailure('invalid-spec')
+      const installation = JSON.parse(readFileSync(this.profile.installAnchor, 'utf8')) as InstallationManifest
+      const bundledNames = new Set(installation.dsh?.distribution?.bundles ?? [])
+      try {
+        const parsedSpec = parseInstallSpec(spec)
+        if (parsedSpec.kind === 'registry' && bundledNames.has(parsedSpec.name)) throw new ManagementFailure('not-removable')
+      } catch (error) {
+        if (!(error instanceof InvalidInstallSpecError)) throw error
+      }
       if (stopped()) throw new InstallCancelledError()
       if (options?.approvedBuilds !== undefined) {
         await approveBuilds(this.profile.dir, options.approvedBuilds)
@@ -505,6 +519,7 @@ export class PluginManager extends TypertRemoteService {
           announce('installing', { registry, index: index + 1, total: plan.length })
           run = await this.runPnpm(['add', spec, ...registryArguments(registry)], control.abort.signal, requestId)
           result.packageResult = run
+          if (run.blockedBundle !== undefined) throw new ManagementFailure('not-removable')
           if (stopped()) throw new InstallCancelledError()
           // A compatibility refusal is the package's own answer, so no other registry is asked.
           if (run.incompatible !== undefined) throw new ManagementFailure('incompatible-version', run.incompatible)
@@ -540,6 +555,7 @@ export class PluginManager extends TypertRemoteService {
         const target = installed[0]
         if (installed.length !== 1 || target === undefined) throw new ManagementFailure('ambiguous-install')
         name = target
+        if (bundledNames.has(name)) throw new ManagementFailure('not-removable')
         const dir = resolveBundleDir('dsh', name, this.profile.installAnchor, this.profile.dir)
         const manifest = bundleManifest(name, this.profile.dir, this.profile.installAnchor)
         if (manifest?.dsh?.bundle === undefined) throw new ManagementFailure('not-bundle')

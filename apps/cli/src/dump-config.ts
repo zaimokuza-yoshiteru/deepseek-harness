@@ -15,7 +15,7 @@ import {
   type ConfigDumpLayer,
   type Profile,
 } from '@deepseek-ai/dsh-app-boot'
-import { homePatchPath, prepareProfile, PROFILE_ROOT_FILENAME } from './profile-boot.ts'
+import { homePatchPath, INSTALL_ANCHOR, prepareProfile, PROFILE_ROOT_FILENAME } from './profile-boot.ts'
 
 const NAME = 'dsh'
 
@@ -34,8 +34,9 @@ export function runDumpConfig(
   defaultOnly: boolean,
   patches: readonly string[],
   fromDefaultProfile?: string,
+  installAnchor = INSTALL_ANCHOR,
 ): void {
-  const loaded = prepareProfile(profile, !defaultOnly, fromDefaultProfile)
+  const loaded = prepareProfile(profile, !defaultOnly, fromDefaultProfile, installAnchor)
   const layers = collectConfigDumpLayers(loaded, defaultOnly, patches)
   // The dump anchors on the same empty root file the boot includes.
   process.stdout.write(renderConfigDump(NAME, join(loaded.dir, PROFILE_ROOT_FILENAME), layers))

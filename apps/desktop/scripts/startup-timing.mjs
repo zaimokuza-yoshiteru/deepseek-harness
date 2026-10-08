@@ -186,16 +186,18 @@ async function installNativeShowMonitor(app, run, elapsed) {
 }
 async function verifyPlugins(app, page, run, kind) {
   const resources = await app.evaluate(() => process.resourcesPath)
-  const seed = JSON.parse(await readFile(join(resources, 'plugin-seed', 'package.json'), 'utf8'))
+  const runtimeRoot = join(resources, 'dsh')
+  const runtimeManifest = JSON.parse(await readFile(join(runtimeRoot, 'package.json'), 'utf8'))
   const installed = JSON.parse(await readFile(join(profile, 'package.json'), 'utf8'))
-  run.plugins = { seed: Object.keys(seed.dependencies ?? {}), profileDependencies: Object.keys(installed.dependencies ?? {}),
+  run.plugins = { bundled: runtimeManifest.dsh?.distribution?.bundles ?? [], profileDependencies: Object.keys(installed.dependencies ?? {}),
     profileBundles: installed.dsh?.profile?.bundles ?? [], host: [], cards: [] }
   await save()
   for (const name of pluginNames) {
-    assert.ok(run.plugins.seed.includes(name), `Release archive is missing ${name}`)
-    assert.ok(run.plugins.profileDependencies.includes(name), `First startup did not install ${name}`)
+    assert.ok(run.plugins.bundled.includes(name), `Release archive is missing bundled plugin ${name}`)
+    assert.ok(!run.plugins.profileDependencies.includes(name), `Bundled plugin must not be a profile dependency: ${name}`)
+    assert.equal(existsSync(join(profile, 'node_modules', name)), false, `Bundled plugin was copied to profile: ${name}`)
     assert.ok(run.plugins.profileBundles.includes(name), `First startup did not enable ${name}`)
-    const pkg = JSON.parse(await readFile(join(profile, 'node_modules', name, 'package.json'), 'utf8'))
+    const pkg = JSON.parse(await readFile(join(runtimeRoot, 'node_modules', name, 'package.json'), 'utf8'))
     assert.equal(pkg.name, name)
   }
   const bundles = await page.evaluate(async () => {
@@ -208,12 +210,15 @@ async function verifyPlugins(app, page, run, kind) {
     return value.result.value
   })
   run.plugins.host = bundles.filter(bundle => pluginNames.includes(bundle.name))
-    .map(({ name, version, enabled, error }) => ({ name, version, enabled, error }))
+    .map(({ name, version, enabled, installed, bundled, removable, error }) => ({ name, version, enabled, installed, bundled, removable, error }))
   await save()
   for (const name of pluginNames) {
     const bundle = run.plugins.host.find(bundle => bundle.name === name)
     assert.ok(bundle, `Running desktop host is missing ${name}`)
     assert.equal(bundle.enabled, true, `${name} is disabled`)
+    assert.equal(bundle.bundled, true, `${name} must be marked as provided by the application`)
+    assert.equal(bundle.installed, false, `${name} must not be installed in the profile`)
+    assert.equal(bundle.removable, false, `${name} must not be removable`)
     assert.equal(bundle.error, undefined, `${name} has a loading error`)
   }
   await expect(page.getByRole('button', { name: /^(Atlassian Kanban|Atlassian 看板)$/u })).toBeVisible()
@@ -246,12 +251,12 @@ async function verifyPlugins(app, page, run, kind) {
     await retry.click()
   }
   for (const name of pluginNames) {
-    const card = page.locator(`[data-plugin-package="${name}"]`)
+    const card = page.locator(`[data-plugin-group="bundled"] [data-plugin-package="${name}"]`)
     await expect(card).toBeVisible()
     await expect(card).not.toHaveAttribute('data-plugin-status', 'problem')
     run.plugins.cards.push(name)
   }
-  await page.locator('[data-plugin-group="bundles"]').scrollIntoViewIfNeeded()
+  await page.locator('[data-plugin-group="bundled"]').scrollIntoViewIfNeeded()
   await page.screenshot({ path: join(output, `${kind}-plugins.png`), fullPage: true })
   run.plugins.passed = true
   await save()

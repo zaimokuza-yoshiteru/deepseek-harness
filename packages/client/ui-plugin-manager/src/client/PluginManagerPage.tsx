@@ -534,7 +534,7 @@ function RowDetail({ pkg, row, t, resolveText, onBack, renderSlot, form }: {
 
 /**
  * One package's page: the crumb back to the list; its icon with its switch
- * and, for a package the profile installed, uninstall; its title beside its
+ * and, when allowed, uninstall; its title beside its
  * version tag, its beta tag, and its problem tag; the package name the title
  * stands for, which is what installs it elsewhere; its one-liner; the Host's
  * problem when it reports one; the configuration the bundle registered for
@@ -572,7 +572,7 @@ function PackageDetail({
         actions={(
           <div className={css.detailActions}>
             {renderSlot('plugins.detail.actions', { subject })}
-            {pkg.installed
+            {pkg.removable
               ? (
                 <Button
                   variant="outline"
@@ -600,6 +600,7 @@ function PackageDetail({
           {renderSlot('plugins.detail.badge', { subject })}
         </div>
         <p className={css.detailName}><code data-plugin-name>{pkg.name}</code></p>
+        {pkg.bundled === true ? <p className={css.detailDesc}>{t('bundledHint')}</p> : null}
         {description === undefined ? null : <p className={css.detailDesc}>{description}</p>}
       </div>
       <MetadataError error={pkg.meta?.error} t={t} />
@@ -1278,9 +1279,10 @@ export function PluginManagerPage(props: PluginManagerPageProps): ReactNode {
   // selected name the Host cannot read; the installation's other bundles are inspected in the Settings
   // Plugins section's Plugin list tab.
   const listed = state.packages.filter(pkg => !BUILTIN_PROFILE_BUNDLES.has(pkg.name)
-    && (pkg.installed || pkg.optional || pkg.error !== undefined))
-  const mine = listed.filter(pkg => pkg.installed || !pkg.optional)
-  const official = listed.filter(pkg => pkg.optional && !pkg.installed)
+    && (pkg.bundled === true || pkg.installed || pkg.optional || pkg.error !== undefined))
+  const bundled = listed.filter(pkg => pkg.bundled === true)
+  const mine = listed.filter(pkg => pkg.bundled !== true && (pkg.installed || !pkg.optional))
+  const official = listed.filter(pkg => pkg.bundled !== true && pkg.optional && !pkg.installed)
   const loaded = state.status === 'ready' || state.status === 'error'
   const refreshing = state.refreshStatus === 'refreshing'
   const openPkg = view.kind === 'package' || view.kind === 'row' ? listed.find(pkg => pkg.name === view.name) : undefined
@@ -1316,7 +1318,7 @@ export function PluginManagerPage(props: PluginManagerPageProps): ReactNode {
     )),
   ]
   // One group of cards under its heading and count; the Official group comes first, and a group with nothing in it takes no room.
-  const renderGroup = (id: 'official' | 'bundles', heading: string, cards: readonly ReactNode[]): ReactNode => cards.length === 0
+  const renderGroup = (id: 'official' | 'bundled' | 'bundles', heading: string, cards: readonly ReactNode[]): ReactNode => cards.length === 0
     ? null
     : (
       <section className={css.group} data-plugin-scope="global" data-plugin-group={id}>
@@ -1421,11 +1423,12 @@ export function PluginManagerPage(props: PluginManagerPageProps): ReactNode {
         ? <ItemDetail form={formFor(openItem.id)} item={openItem} t={t} renderSlot={renderSlot} onBack={() => { setView({ kind: 'list' }) }} />
         : null}
       {loaded && showsCards
-        ? officialCards.length === 0 && mine.length === 0 && state.status !== 'error'
+        ? officialCards.length === 0 && bundled.length === 0 && mine.length === 0 && state.status !== 'error'
           ? <p className={css.empty}>{t('empty')}</p>
           : (
             <>
               {renderGroup('official', t('officialTitle'), officialCards)}
+              {renderGroup('bundled', t('bundledTitle'), bundled.map(packageCard))}
               {renderGroup('bundles', t('bundlesTitle'), mine.map(packageCard))}
               {/* A failed package read trails the groups it left incomplete: right under Official on a
                   first-load failure, and after the kept cards when a refresh fails over stale data. */}

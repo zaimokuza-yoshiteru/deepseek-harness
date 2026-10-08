@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { join } from 'node:path'
 
 const { verifyDesktopRuntime } = vi.hoisted(() => ({
   verifyDesktopRuntime: vi.fn<(root: string, expected: string) => Promise<void>>(async () => undefined),
@@ -31,7 +32,10 @@ async function requiredRuntimeVersion(preparedRuntime?: string, preparedRuntimeV
   verifyDesktopRuntime.mockClear()
   const { createElectronBuilderConfig } = await import('../scripts/electron-builder-config.mjs')
   const config = createElectronBuilderConfig(ENVIRONMENT, 'win32', 'x64', preparedRuntime, preparedRuntimeVersion)
+  expect(config.extraResources.some(resource => resource.to === 'dsh')).toBe(true)
+  expect(config.files.some(file => typeof file !== 'string' && file.to === 'dsh')).toBe(false)
   await config.afterPack(CONTEXT as never)
+  expect(verifyDesktopRuntime.mock.calls[0]?.[0]).toBe(join('out/resources', 'dsh'))
   return verifyDesktopRuntime.mock.calls[0]?.[1]
 }
 

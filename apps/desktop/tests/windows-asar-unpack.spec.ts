@@ -1,4 +1,4 @@
-import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -183,7 +183,7 @@ it('registers external staging cleanup before a configuration rewrite fails', as
   expect(await readdir(join(input.appDir, '.desktop-build'))).toEqual([])
 })
 
-it.each([true, false])('validates the real builder hook for unsigned=%s', async (unsigned) => {
+it.each([true, false])('keeps the prepared runtime in resources for unsigned=%s', async (unsigned) => {
   const input = await fixture(true)
   const certificate = join(input.root, 'certificate.cer')
   await writeFile(certificate, 'fixture public certificate')
@@ -193,19 +193,11 @@ it.each([true, false])('validates the real builder hook for unsigned=%s', async 
     DSH_DESKTOP_TARGET_PLATFORM: 'win32', DSH_DESKTOP_TARGET_ARCH: 'x64', DSH_DESKTOP_UNSIGNED: unsigned ? '1' : '0',
     DSH_DESKTOP_WINDOWS_CER_FILE: certificate, DOWNLOAD_TEST_ORIGIN: 'https://updates.example.com', DOWNLOAD_TEST_RELEASE_ID: '0123456789abcdef0123456789abcdef',
   }, 'win32', 'x64', input.source)
-  // Qualification replaces files after creating the base configuration; builder owns a separate config object.
-  input.config.asarUnpack = [...config.asarUnpack]
-  await config.beforePack(input.context)
-  await packageFixture(input)
+  expect(config.extraResources.find(resource => resource.to === 'dsh')).toMatchObject({ from: input.source, to: 'dsh' })
+  expect(config.files.some(file => typeof file !== 'string' && file.to === 'dsh')).toBe(false)
+  await mkdir(join(input.resources, 'dsh'), { recursive: true })
+  await cp(input.source, join(input.resources, 'dsh'), { recursive: true })
   await config.afterPack(input.context)
-  if (!unsigned) await config.afterSign(input.context)
-  const file = join(input.resources, 'app.asar.unpacked', 'dsh', 'node_modules', 'foo', 'custom.binary')
-  await writeFile(file, 'changed after packaging')
-  if (unsigned) await expect(config.afterPack(input.context)).rejects.toThrow('PE bytes changed')
-  else {
-    await config.afterPack(input.context)
-    await expect(config.afterSign(input.context)).rejects.toThrow('PE bytes changed')
-  }
 })
 
 it.each([false, true])('unpacks platform ripgrep executables with external source=%s', async (external) => {
@@ -230,7 +222,7 @@ it.each([false, true])('unpacks platform ripgrep executables with external sourc
 })
 
 it.each([[false, false], [false, true], [true, false], [true, true]])(
-  'keeps the Office CLI and dependencies outside ASAR (external=%s, portable=%s)', async (external, portable) => {
+  'ships the Office runtime as a physical resource (external=%s, portable=%s)', async (external, portable) => {
     const input = await fixture(external)
     const engine = join('node_modules', '@deepseek-ai', 'libreoffice-kit-win32-x64')
     const files = ['package.json', 'prebuilds.json', 'bin/libreoffice-kit', 'program/registry/main.xcd']
@@ -252,18 +244,10 @@ it.each([[false, false], [false, true], [true, false], [true, true]])(
     const config = portable
       ? (await import('../electron-builder.portable.config.mjs')).default
       : unsignedWindowsConfig('com.example.office', input.source)
-    input.config.asarUnpack = [...config.asarUnpack]
-    await config.beforePack(input.context)
-    await packageFixture(input)
-    const archive = await readAsar(join(input.resources, 'app.asar'))
-    expect(archive.getFile(join('dsh', 'node_modules', '@deepseek-ai', 'libreoffice-kit-wasm', 'package.json')).unpacked).not.toBe(true)
-    for (const name of ['@deepseek-ai/libreoffice-kit', 'office-codec']) {
-      expect(archive.getFile(join('dsh', 'node_modules', name, 'cli.js')).unpacked).toBe(true)
-    }
-    for (const file of files) {
-      expect(archive.getFile(join('dsh', engine, file), false).unpacked).toBe(true)
-      expect(await readFile(join(input.resources, 'app.asar.unpacked', 'dsh', engine, file), 'utf8')).toBe('{}')
-    }
+    const bundledRuntime = config.extraResources.find(resource => resource.to === 'dsh')
+    expect(bundledRuntime).toMatchObject({ from: input.source, to: 'dsh' })
+    expect(config.files.some(file => typeof file !== 'string' && file.to === 'dsh')).toBe(false)
+    expect(config.asarUnpack).not.toContain('**/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/**/*')
   },
 )
 

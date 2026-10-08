@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { PassThrough } from 'node:stream'
 import { expect, it, onTestFinished, vi } from 'vitest'
-import { getDshRuntimeVersion, initProfile, readProfileManifest } from '@deepseek-ai/dsh-app-boot'
+import { getDshRuntimeVersion, initProfile, readProfileManifest, resolveBundleDir } from '@deepseek-ai/dsh-app-boot'
 import { anchorPathSpec, readProfileRegistry, runPluginCommand, runProfilePnpm, viewProfilePackage } from '../src/operations.ts'
 
 /** What execa resolves for a run that settled, including the buffered output the pre-install lookup is read for. */
@@ -35,6 +35,8 @@ interface FakePnpm {
   output: string
   /** Exit code of the `install` run that repairs a post-install refusal. */
   repairExit: number
+  /** Repair the dependency tree after the operation restores its original manifest and lockfile. */
+  repair?: (dir: string) => void
   /** What the pre-install `pnpm view` lookup answers for one spec; `{}` declares no peers. */
   view: (spec: string) => { exitCode: number; stdout: string }
   /** The specs the pre-install check asked `pnpm view` about, in order. */
@@ -82,7 +84,7 @@ function fixture() {
       const answer = pnpm.view(spec)
       return result(answer.exitCode, answer.stdout)
     }
-    if (argv.includes('--frozen-lockfile') || argv.includes('--config.lockfile=false')) return result(pnpm.repairExit, '')
+    if (argv.includes('--frozen-lockfile') || argv.includes('--config.lockfile=false')) return result(pnpm.repairExit, '', () => { pnpm.repair?.(runDir) })
     return result(pnpm.exitCode, pnpm.output, () => { pnpm.mutate(runDir) })
   })
   onTestFinished(() => { command.run.mockReset(); treeWait.skip = false; rmSync(home, { recursive: true, force: true }) })
@@ -375,6 +377,58 @@ it('repairs a profile that had no lockfile without creating one', async () => {
   expect(outcome.output).toContain('and node_modules')
 })
 
+it.each([
+  { kind: 'an alternate local directory', spec: 'directory', dependency: 'app-owned-plugin' },
+  { kind: 'a Git spec', spec: 'github:acme/app-owned-plugin', dependency: 'app-owned-plugin' },
+  { kind: 'a tarball spec', spec: 'https://registry.example/app-owned-plugin.tgz', dependency: 'app-owned-plugin' },
+  { kind: 'an npm alias', spec: 'shadow-alias@npm:app-owned-plugin@1.0.0', dependency: 'shadow-alias' },
+])('repairs an install through $kind and keeps the app bundle authoritative', async ({ kind, spec, dependency }) => {
+  const { home, dir, context, pnpm } = fixture()
+  const owned = 'app-owned-plugin'
+  const appDir = join(home, 'node_modules', owned)
+  mkdirSync(appDir, { recursive: true })
+  writeFileSync(join(appDir, 'package.json'), JSON.stringify({
+    name: owned, version: '1.0.0', dsh: { bundle: { patch: './cordis.patch.yml' } },
+  }))
+  writeFileSync(context.installAnchor, JSON.stringify({
+    name: 'installation', dependencies: { [owned]: '1.0.0' }, dsh: { distribution: { bundles: [owned] } },
+  }))
+  const userPackage = join(dir, 'node_modules', 'user-addon')
+  mkdirSync(userPackage, { recursive: true })
+  writeFileSync(join(userPackage, 'package.json'), JSON.stringify({ name: 'user-addon', version: '2.0.0' }))
+  const before = readProfileManifest('test', dir)
+  before.dependencies = { 'user-addon': '2.0.0' }
+  writeFileSync(join(dir, 'package.json'), JSON.stringify(before))
+  writeFileSync(join(dir, 'pnpm-lock.yaml'), 'original-lock\n')
+  let installedPath = spec
+  if (spec === 'directory') {
+    installedPath = join(home, 'alternate')
+    mkdirSync(installedPath, { recursive: true })
+    writeFileSync(join(installedPath, 'package.json'), JSON.stringify({ name: owned, version: '9.0.0' }))
+  }
+  pnpm.mutate = (target) => {
+    const manifest = readProfileManifest('test', target)
+    manifest.dependencies = { ...manifest.dependencies, [dependency]: installedPath }
+    writeFileSync(join(target, 'package.json'), JSON.stringify(manifest))
+    const shadow = join(target, 'node_modules', dependency)
+    mkdirSync(shadow, { recursive: true })
+    writeFileSync(join(shadow, 'package.json'), JSON.stringify({ name: owned, version: '9.0.0' }))
+    writeFileSync(join(target, 'pnpm-lock.yaml'), 'shadow-lock\n')
+  }
+  pnpm.repair = (target) => { rmSync(join(target, 'node_modules', dependency), { recursive: true, force: true }) }
+
+  const outcome = await runProfilePnpm(context, ['add', installedPath], { execution: 'service', outputBytes: 8192 })
+  expect(outcome).toMatchObject({ exitCode: 1, blockedBundle: owned })
+  expect(outcome.output).toContain('installation rejected')
+  expect(readFileSync(join(dir, 'package.json'), 'utf8')).toBe(JSON.stringify(before))
+  expect(readFileSync(join(dir, 'pnpm-lock.yaml'), 'utf8')).toBe('original-lock\n')
+  expect(existsSync(join(dir, 'node_modules', dependency))).toBe(false)
+  expect(existsSync(join(userPackage, 'package.json'))).toBe(true)
+  expect(resolveBundleDir('dsh', owned, context.installAnchor, dir)).toBe(appDir)
+  if (kind === 'an alternate local directory') expect(command.run).not.toHaveBeenCalled()
+  else expect(command.run).toHaveBeenLastCalledWith(expect.anything(), ['install', '--frozen-lockfile'], expect.anything())
+})
+
 it('reports an unrepaired node_modules when the restoring install fails', async () => {
   const { context, pnpm } = fixture()
   pnpm.mutate = (target) => { installGuarded(target, 'incompatible') }
@@ -385,6 +439,42 @@ it('reports an unrepaired node_modules when the restoring install fails', async 
   expect(outcome).toMatchObject({ exitCode: 1 })
   expect(outcome.output).toContain('node_modules could not be reinstalled')
   expect(outcome.output).toContain("run 'dsh plugin install'")
+})
+
+it('restores the profile manifest after alias refusal when pnpm repair leaves the alias behind', async () => {
+  const { home, dir, context, pnpm } = fixture()
+  const owned = 'app-owned-plugin'
+  const appDir = join(home, 'node_modules', owned)
+  mkdirSync(appDir, { recursive: true })
+  writeFileSync(join(appDir, 'package.json'), JSON.stringify({ name: owned, version: '1.0.0' }))
+  writeFileSync(context.installAnchor, JSON.stringify({
+    name: 'installation', dependencies: { [owned]: '1.0.0' }, dsh: { distribution: { bundles: [owned] } },
+  }))
+  const before = readProfileManifest('test', dir)
+  before.dependencies = { 'user-addon': '2.0.0' }
+  writeFileSync(join(dir, 'package.json'), JSON.stringify(before))
+  writeFileSync(join(dir, 'pnpm-lock.yaml'), 'original-lock\n')
+  pnpm.mutate = (target) => {
+    const manifest = readProfileManifest('test', target)
+    manifest.dependencies = { ...manifest.dependencies, 'shadow-alias': 'npm:app-owned-plugin@1.0.0' }
+    writeFileSync(join(target, 'package.json'), JSON.stringify(manifest))
+    const alias = join(target, 'node_modules', 'shadow-alias')
+    mkdirSync(alias, { recursive: true })
+    writeFileSync(join(alias, 'package.json'), JSON.stringify({ name: owned, version: '9.0.0' }))
+    writeFileSync(join(target, 'pnpm-lock.yaml'), 'shadow-lock\n')
+  }
+  pnpm.repairExit = 1
+
+  const outcome = await runProfilePnpm(context, ['add', 'shadow-alias@npm:app-owned-plugin@1.0.0'], {
+    execution: 'service', outputBytes: 8192,
+  })
+  expect(outcome).toMatchObject({ exitCode: 1 })
+  expect(outcome.output).toContain('installation rejected')
+  expect(outcome.output).toContain('node_modules could not be reinstalled')
+  expect(readFileSync(join(dir, 'package.json'), 'utf8')).toBe(JSON.stringify(before))
+  expect(readFileSync(join(dir, 'pnpm-lock.yaml'), 'utf8')).toBe('original-lock\n')
+  // Reconciliation must not delete or replace unrelated dependencies when repair fails.
+  expect(existsSync(join(dir, 'node_modules', 'shadow-alias', 'package.json'))).toBe(true)
 })
 
 it('detects a version update that keeps the dependency spec and removes a lockfile the run created', async () => {

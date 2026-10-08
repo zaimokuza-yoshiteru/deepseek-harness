@@ -1,8 +1,7 @@
-import { officePackageDirectories } from '../../../scripts/libreoffice-packages.mjs'
 import { X509Certificate } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
-import { join, relative, sep } from 'node:path'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -26,7 +25,6 @@ import { resolveDesktopPolicyEnvironment } from './desktop-policy-environment.mj
 import { desktopTargetBuildPaths, resolveDesktopBuildTarget } from './desktop-build-paths.mjs'
 import { installWindowsDirectoryInstaller } from './windows-directory-installer.mjs'
 import { preserveWindowsRuntimeSignature, signWindowsCode } from './windows-runtime-signature.mjs'
-import { prepareWindowsAsarUnpack, verifyWindowsAsarUnpack } from './windows-asar-unpack.mjs'
 import { recordPackagingEvent } from './packaging-run.mjs'
 import {
   resolveMacOSAppUpdateFeed,
@@ -68,9 +66,8 @@ export function createElectronBuilderConfig(
   const buildPaths = desktopTargetBuildPaths(resolveDesktopBuildTarget(env, hostPlatform, hostArch))
   let primaryRuntimeDestination
   let dshDestination
-  let windowsCode = []
   const unpack = ['**/*.{node,dylib,dll,so,exe}', '**/*.so.*', '**/spawn-helper', '**/@vscode/ripgrep-*/bin/rg',
-    `**/node_modules/@deepseek-ai/libreoffice-kit-${resolvedPlatform}-${resolvedArch}/**/*`]
+  ]
   const windowsSigner = packagesWindows && !unsigned
     ? createWindowsTokenSigner({
         certificateFile: env.DSH_DESKTOP_WINDOWS_CER_FILE,
@@ -136,13 +133,13 @@ export function createElectronBuilderConfig(
       'lib/preload-welcome.cjs',
       'renderer/**/*',
       'package.json',
-      { from: buildPaths.dsh, to: 'dsh', filter: ['**/*'] },
-      // electron-builder excludes a source directory's root node_modules.
-      { from: join(buildPaths.dsh, 'node_modules'), to: 'dsh/node_modules', filter: ['**/*'] },
     ],
     asarUnpack: unpack,
     extraResources: [
       { from: buildPaths.runtime, to: 'runtime' },
+      { from: buildPaths.dsh, to: 'dsh', filter: ['**/*'] },
+      // electron-builder excludes a source directory's root node_modules from its parent FileSet.
+      { from: join(buildPaths.dsh, 'node_modules'), to: 'dsh/node_modules', filter: ['**/*'] },
       { from: fileURLToPath(new URL('../resources/icon-windows.png', import.meta.url)), to: 'icon.png' },
       // Windows tray bitmaps; macOS keeps the Dock and ships no menu bar icon.
       ...(packagesWindows ? [{ from: fileURLToPath(new URL('../resources/tray-windows.ico', import.meta.url)), to: 'tray.ico' }] : []),
@@ -159,7 +156,7 @@ export function createElectronBuilderConfig(
       entitlements: fileURLToPath(new URL('./macos-entitlements.plist', import.meta.url)),
       entitlementsInherit: fileURLToPath(new URL('./macos-entitlements.plist', import.meta.url)),
       // ASAR-unpacked native runtime files are pre-signed; PAK resources are sealed by their enclosing bundle.
-      signIgnore: ['/Contents/Resources/app\\.asar\\.unpacked/dsh(?:/|$)', '/Contents/Resources/runtime/primary-runtime(?:/|$)', '\\.pak$'],
+      signIgnore: ['/Contents/Resources/dsh(?:/|$)', '/Contents/Resources/runtime/primary-runtime(?:/|$)', '\\.pak$'],
       notarize: true,
       target: ['dmg', 'zip'],
     },
@@ -168,14 +165,9 @@ export function createElectronBuilderConfig(
       writeUpdateInfo: false,
     },
     beforePack: async context => {
-      const office = await officePackageDirectories(buildPaths.dsh, { platform: resolvedPlatform, arch: resolvedArch })
-      const patterns = office.map(directory => `**/${relative(buildPaths.dsh, directory).split(sep).join('/')}/**/*`)
-      const existing = context.packager.config.asarUnpack ?? []
-      context.packager.config.asarUnpack = [...(typeof existing === 'string' ? [existing] : existing), ...patterns]
-      if (packagesWindows) windowsCode = await prepareWindowsAsarUnpack(context, buildPaths.dsh)
       if (windowsSigner !== undefined) {
         primaryRuntimeDestination = join(context.appOutDir, 'resources', 'runtime', 'primary-runtime')
-        dshDestination = join(context.appOutDir, 'resources', 'app.asar.unpacked', 'dsh')
+        dshDestination = join(context.appOutDir, 'resources', 'dsh')
       }
       if (policy === undefined) return
       const { resolveDesktopPolicyConfig } = await import('../lib/types/mandatory-update-policy.js')
@@ -184,6 +176,8 @@ export function createElectronBuilderConfig(
     afterPack: async context => {
       const { verifyDesktopRuntime } = await import('../lib/types/runtime-tree.js')
       const resourcesDir = context.packager.getResourcesDir(context.appOutDir)
+      await verifyDesktopRuntime(join(resourcesDir, 'dsh'),
+        preparedRuntimeVersion ?? productVersion, { platform: resolvedPlatform, arch: resolvedArch })
       if (resolvedPlatform === 'darwin' && update !== undefined) {
         await writeMacOSAppUpdateConfig(resourcesDir, resolveMacOSAppUpdateFeed(context.packager.config.publish),
           context.packager.appInfo.updaterCacheDirName)
@@ -192,8 +186,6 @@ export function createElectronBuilderConfig(
       // release, and a rewritten one for installed-update qualification.
       await verifyDesktopRuntime(buildPaths.dsh,
         preparedRuntimeVersion ?? productVersion, { platform: resolvedPlatform, arch: resolvedArch })
-      // Unsigned Windows builds skip electron-builder's afterSign hook.
-      if (packagesWindows && unsigned) await verifyWindowsAsarUnpack(buildPaths.dsh, resourcesDir, windowsCode)
     },
     afterSign: async context => {
       if (windowsSigner !== undefined) {
@@ -202,7 +194,6 @@ export function createElectronBuilderConfig(
           sign: windowsSigner,
           record: event => recordPackagingEvent(env.DSH_DESKTOP_PACKAGING_RUN_DIR, event),
         })
-        await verifyWindowsAsarUnpack(buildPaths.dsh, context.packager.getResourcesDir(context.appOutDir), windowsCode)
       }
       if (context.electronPlatformName !== 'darwin') return
       const appPath = join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`)

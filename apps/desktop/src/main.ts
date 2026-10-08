@@ -157,7 +157,6 @@ interface RuntimeResources {
   readonly node: string
   readonly pnpm: string
   readonly dsh: string
-  readonly pluginSeed?: string
 }
 
 function runtimeResources(): RuntimeResources {
@@ -168,10 +167,8 @@ function runtimeResources(): RuntimeResources {
     ?? (development ? join(app.getAppPath(), 'node_modules', 'pnpm', 'bin', 'pnpm.mjs')
       : join(process.resourcesPath, 'runtime', 'pnpm', 'bin', 'pnpm.mjs'))
   const dsh = (development ? process.env.DSH_DESKTOP_DSH_DIR : undefined)
-    ?? (development ? join(app.getAppPath(), '.desktop-build', 'development', 'project') : join(app.getAppPath(), 'dsh'))
-  return { node, nodeBin, pnpm, dsh,
-    ...(development ? {} : { pluginSeed: join(process.resourcesPath, 'plugin-seed') }),
-  }
+    ?? (development ? join(app.getAppPath(), '.desktop-build', 'development', 'project') : join(process.resourcesPath, 'dsh'))
+  return { node, nodeBin, pnpm, dsh }
 }
 
 function developmentPrimaryRuntime(): string {
@@ -608,7 +605,7 @@ async function main(): Promise<void> {
       await navigateMain(applicationUrl)
       await backend.start(async () => {
         const environment = prepareHostEnvironment()
-        const release = manager.applyRelease(app.isPackaged, () => hostEnvironmentReady)
+        const release = manager.applyRelease(app.isPackaged)
         await Promise.all([release, environment])
       })
       if (backend.host !== undefined) await openInitialWindow()

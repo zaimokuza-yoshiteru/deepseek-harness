@@ -154,6 +154,10 @@ export interface RuntimeResolution {
   readonly profileDir: string | undefined
   /** Profile-declared packages installed in the profile's own node_modules. */
   readonly localPackageNames: readonly string[]
+  /** Names owned by the installation's `dsh.distribution.bundles`, including profile aliases to those packages. */
+  readonly installationOwnedPackages?: readonly { readonly requestName: string; readonly packageName: string }[]
+  /** Installation manifest used to keep a missing owned package away from profile-local fallbacks. */
+  readonly installationAnchor?: string
   /** Installation-scope entries followed by profile-scope entries in precedence order. */
   readonly entries: readonly RuntimeResolutionEntry[]
   /** Active profile links to external directories, sorted by name. */
@@ -367,10 +371,13 @@ function collectInstallationScopePackages(
   packageDirs: ReadonlyMap<string, string>
   declarers: ReadonlyMap<string, string>
   versions: ReadonlyMap<string, string | undefined>
+  ownedBundleNames: readonly string[]
 } {
   // Real declaring paths keep workspace symlinks under node_modules from disabling tsx path mappings.
   const canonicalAnchor = join(realModuleDirectory(dirname(installAnchor)), basename(installAnchor))
   const appManifest = readPackageManifest(canonicalAnchor)
+  const ownedBundleNames = (appManifest as ProfileManifest & { dsh?: { distribution?: { bundles?: string[] } } })
+    .dsh?.distribution?.bundles ?? []
   const links = new Map<string, string>()
   const declarers = new Map<string, string>()
   const versions = new Map<string, string | undefined>()
@@ -410,7 +417,7 @@ function collectInstallationScopePackages(
       queue.push({ anchor: manifestPath, manifest })
     }
   }
-  return { packageNames: new Set(links.keys()), packageDirs: links, declarers, versions }
+  return { packageNames: new Set(links.keys()), packageDirs: links, declarers, versions, ownedBundleNames }
 }
 
 /** Inputs for {@link createRuntimeResolution}. */
@@ -434,12 +441,13 @@ export async function createRuntimeResolution(
   const { installAnchor, profile, home = resolveDshHome() } = options
   const profilesDir = join(home, PROFILES_DIR)
   const manifest = readOptionalProfileManifest(profile)
-  const { packageNames, packageDirs, declarers, versions } = collectInstallationScopePackages(
+  const { packageNames, packageDirs, declarers, versions, ownedBundleNames } = collectInstallationScopePackages(
     installAnchor, new Set(profile?.skippedBundles.map(skipped => skipped.packageName)),
   )
   const profileDeclarers = new Map<string, string>()
   const profileVersions = new Map<string, string | undefined>()
   const localPackageNames = profile === undefined ? [] : installedProfilePackageNames(profile, manifest)
+  const ownedPackages = new Map(ownedBundleNames.map(name => [name, name]))
   const profilePackages: ReadonlyMap<string, string> = profile === undefined
     ? new Map<string, string>()
     : collectProfileScopePackages(profile, packageNames, profileDeclarers, profileVersions)
@@ -449,6 +457,12 @@ export async function createRuntimeResolution(
     profilesDir,
     profileDir: profile?.dir,
     localPackageNames: Object.freeze(localPackageNames),
+    ...ownedPackages.size === 0 ? {} : {
+      installationAnchor: installAnchor,
+      installationOwnedPackages: Object.freeze(
+        [...ownedPackages].map(([requestName, packageName]) => Object.freeze({ requestName, packageName })),
+      ),
+    },
     linkedRoots: Object.freeze(linkedRoots.map(root => Object.freeze(root))),
     entries: Object.freeze([
       ...[...packageDirs].map(([name, packageDir]) => Object.freeze({

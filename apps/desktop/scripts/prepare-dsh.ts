@@ -1,6 +1,6 @@
 /** Materialize the complete production runtime before publishing Desktop resources. */
 
-import { preparePluginSeed } from './prepare-plugin-seed.ts'
+import { preparePluginArchives } from './prepare-plugin-archives.ts'
 import { packagingStep } from './packaging-step.mjs'
 import { spawn } from 'node:child_process'
 import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -34,6 +34,7 @@ import {
 import { desktopTargetPlatform, resolveDesktopBuildTarget, resolveDesktopTargetBuildPaths } from './desktop-build-paths.mjs'
 import { desktopRuntimeFileExclusion } from './runtime-file-policy.ts'
 import { selectOfficeEngine } from '../../../scripts/libreoffice-packages.mjs'
+import releasePlugins from '../src/release-plugins.json' with { type: 'json' }
 
 const APP_ROOT = resolve(import.meta.dirname, '..')
 const BUILD_PATHS = resolveDesktopTargetBuildPaths()
@@ -124,6 +125,23 @@ async function main(): Promise<void> {
       cpSync(join(PACKAGE_SET_ROOT, DESKTOP_PACKAGES_DIR), join(BUILD_ROOT, DESKTOP_PACKAGES_DIR), { recursive: true })
       createRuntimeProjectMetadata(BUILD_ROOT, release)
     })
+    const plugins = await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'runtime:stage-plugins', () =>
+      preparePluginArchives(BUILD_ROOT, NODE, PNPM))
+    const projectManifestPath = join(BUILD_ROOT, 'package.json')
+    const projectManifest = JSON.parse(readFileSync(projectManifestPath, 'utf8')) as {
+      dependencies: Record<string, string>
+      dsh?: Record<string, unknown>
+    }
+    for (const plugin of plugins) projectManifest.dependencies[plugin.name] = plugin.spec
+    projectManifest.dsh = {
+      ...projectManifest.dsh,
+      distribution: { bundles: releasePlugins.plugins.map(plugin => plugin.name) },
+    }
+    writeFileSync(projectManifestPath, `${JSON.stringify(projectManifest, undefined, 2)}\n`)
+    const workspacePath = join(BUILD_ROOT, 'pnpm-workspace.yaml')
+    const workspace = readFileSync(workspacePath, 'utf8')
+    const pluginOverrides = plugins.map(plugin => `  ${JSON.stringify(plugin.name)}: ${JSON.stringify(plugin.spec)}`).join('\n')
+    writeFileSync(workspacePath, workspace.replace('overrides:\n', `overrides:\n${pluginOverrides}\n`))
     await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'runtime:lockfile', () => runPnpm(['install', '--lockfile-only']))
     verifyDesktopCoreLockfile(
       readFileSync(join(BUILD_ROOT, 'pnpm-lock.yaml'), 'utf8'),
@@ -143,9 +161,27 @@ async function main(): Promise<void> {
         filter: source => desktopRuntimeFileExclusion(relative(modules, source), target, officeEngine) === undefined,
       })
     })
+    const runtimeDependencies = Object.fromEntries([
+      ...packageSet.packages.map(entry => [entry.name, entry.version] as const),
+      ['react', '18.3.1'], ['react-dom', '18.3.1'],
+      ...plugins.map(plugin => [plugin.name, plugin.version] as const),
+    ])
+    for (const plugin of plugins) {
+      const installed = JSON.parse(readFileSync(join(modules, plugin.name, 'package.json'), 'utf8')) as { name?: string; version?: string }
+      if (installed.name !== plugin.name || installed.version !== plugin.version) {
+        throw new Error(`desktop runtime: installed plugin version mismatch for ${plugin.name}`)
+      }
+    }
     writeFileSync(join(DSH_OUTPUT_ROOT, 'package.json'), `${JSON.stringify({
       name: '@deepseek-ai/dsh-desktop-runtime', private: true, version: release.version, type: 'module',
-      dependencies: Object.fromEntries(packageSet.packages.map(entry => [entry.name, entry.version])),
+      dependencies: runtimeDependencies,
+      dsh: { distribution: { bundles: releasePlugins.plugins.map(plugin => plugin.name) } },
+    }, undefined, 2)}\n`)
+    writeFileSync(join(DSH_OUTPUT_ROOT, 'desktop-plugin-build.json'), `${JSON.stringify({
+      schemaVersion: 1,
+      plugins: plugins.map(({ name, version, source, sourceSha256, file, sha256 }) => ({
+        name, version, source, sourceSha256, asset: file, sha256,
+      })),
     }, undefined, 2)}\n`)
     for (const file of DESKTOP_HOST_RUNTIME_FILES) {
       if (!existsSync(join(DSH_OUTPUT_ROOT, 'node_modules', DESKTOP_HOST_PACKAGE, file))) {
@@ -165,13 +201,12 @@ async function main(): Promise<void> {
     }
     await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'runtime:manifests', () => prepareRuntimeManifests(DSH_OUTPUT_ROOT))
     await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'runtime:primary-smoke', async () => smokePrimaryRuntime(join(RUNTIME_ROOT, 'primary-runtime')))
-    await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'runtime:write-descriptor', async () => writeDesktopRuntime(DSH_OUTPUT_ROOT, release, [...packageSet.packages.map(entry => entry.name), 'react', 'react-dom'], target))
+    await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'runtime:write-descriptor', async () => writeDesktopRuntime(DSH_OUTPUT_ROOT, release, [...packageSet.packages.map(entry => entry.name), 'react', 'react-dom', ...plugins.map(plugin => plugin.name)], target))
     const descriptor = await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'runtime:verify-before-smoke', () => verifyDesktopRuntime(DSH_OUTPUT_ROOT, release.version, target))
     if (!process.argv.includes('--defer-runtime-smoke')) {
       await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'runtime:smoke', () => smokePreparedRuntime(DSH_OUTPUT_ROOT, NODE, RUNTIME_ROOT, descriptor))
       await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'runtime:verify-after-smoke', () => verifyDesktopRuntime(DSH_OUTPUT_ROOT, release.version, target))
     }
-    if (process.env.DSH_DESKTOP_PORTABLE === '1') await preparePluginSeed(join(BUILD_PATHS.root, 'plugin-seed'), NODE, PNPM, release.version)
   } catch (error) {
     rmSync(DSH_OUTPUT_ROOT, { recursive: true, force: true })
     throw error

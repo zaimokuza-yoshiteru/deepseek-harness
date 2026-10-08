@@ -17,7 +17,7 @@ const { default: LocalSubprocessRuntime } = await scope.load('@deepseek-ai/dsh-s
 const { Context } = await scope.load('@deepseek-ai/cordis')
 const context = new Context()
 const subprocessFiber = await context.plugin(LocalSubprocessRuntime)
-const adapterInstall = dirname(createRequire(join(profile, 'package.json')).resolve('@zaimokuza/dsh-acp-adapter/package.json'))
+const adapterInstall = dirname(createRequire(join(runtime, 'package.json')).resolve('@zaimokuza/dsh-acp-adapter/package.json'))
 const adapterRequire = createRequire(join(adapterInstall, 'package.json'))
 const adapterModule = (name) => import(pathToFileURL(adapterRequire.resolve(name)).href)
 const [{ AcpClientConnection }, { buildAcpSpawnPlan }, { prepareAcpCommandLaunch }, { resolveSubprocessSeam }] = await Promise.all([

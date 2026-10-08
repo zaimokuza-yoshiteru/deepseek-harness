@@ -649,6 +649,30 @@ it('restores the manifest and lockfile after a failed package run, classifying t
   expect(install).toHaveBeenCalledTimes(4)
 })
 
+it('reports operation-error when repairing a refused alias install fails without a blockedBundle result', async () => {
+  const { manager, dir, profile } = await fixture()
+  writeFileSync(profile.installAnchor, JSON.stringify({
+    name: 'installation', dependencies: {}, dsh: { distribution: { bundles: ['app-owned-plugin'] } },
+  }))
+  const before = readFileSync(join(dir, 'package.json'), 'utf8')
+  const failure = {
+    exitCode: 1, output: 'installation rejected; node_modules could not be reinstalled',
+    truncated: false, logPath: join(dir, 'pnpm.log'),
+  }
+  const install = vi.spyOn(operations, 'runProfilePnpm').mockResolvedValue(failure)
+  onTestFinished(() => { install.mockRestore() })
+
+  expect(await manager.installBundle('shadow-alias@npm:app-owned-plugin@1.0.0')).toMatchObject({
+    changed: false,
+    application: 'failed',
+    stage: 'install',
+    target: 'shadow-alias@npm:app-owned-plugin@1.0.0',
+    error: { code: 'operation-error' },
+    packageResult: failure,
+  })
+  expect(readFileSync(join(dir, 'package.json'), 'utf8')).toBe(before)
+})
+
 it('keeps saved changes after activation failure and allows a corrected configuration to retry', async () => {
   const { manager, dir } = await fixture()
   writeFileSync(join(dir, 'cordis.patch.yml'), '- id: managed\n  disabled: true\n  config: { fail: true }\n')
@@ -1056,6 +1080,35 @@ it('offers the launcher\'s optional bundles switched off and never removable', a
   expect(await manager.setBundleEnabled(offered, true)).toMatchObject({ application: 'applied' })
   expect((await manager.listBundles()).find(row => row.name === offered)).toMatchObject({ enabled: true, optional: true, removable: false })
   expect(await manager.removeBundle(offered)).toMatchObject({ changed: false, application: 'failed' })
+})
+
+it('marks desktop distribution bundles as app-owned and rejects install or removal through the profile', async () => {
+  const { manager, profile, bundle } = await fixture()
+  const owned = 'desktop-owned-bundle'
+  bundle(owned, [{ id: 'desktop-owned-row', name: './plugin.mjs', config: { service: 'desktopOwnedProbe' } }])
+  writeFileSync(profile.installAnchor, JSON.stringify({
+    name: 'installation', dependencies: { [owned]: '1.0.0' }, dsh: { distribution: { bundles: [owned] } },
+  }))
+
+  expect((await manager.listBundles()).find(row => row.name === owned)).toMatchObject({
+    installed: false, bundled: true, removable: false,
+  })
+  expect(await manager.removeBundle(owned)).toMatchObject({ changed: false, application: 'failed', error: { code: 'not-removable' } })
+  expect(await manager.inspect(owned)).toMatchObject({ status: 'refused', problem: 'already-installed' })
+  expect(await manager.installBundle(owned)).toMatchObject({ changed: false, application: 'failed', error: { code: 'not-removable' } })
+})
+
+it('returns a typed ownership refusal after pnpm repaired a non-registry app-bundle collision', async () => {
+  const { manager, dir } = await fixture()
+  const blockedBundle = 'desktop-owned-bundle'
+  const install = vi.spyOn(operations, 'runProfilePnpm').mockResolvedValue({
+    exitCode: 1, output: 'installation rejected and node_modules restored', truncated: false,
+    logPath: join(dir, 'pnpm.log'), blockedBundle,
+  })
+  onTestFinished(() => { install.mockRestore() })
+  expect(await manager.installBundle('github:acme/desktop-owned-bundle')).toMatchObject({
+    changed: false, application: 'failed', error: { code: 'not-removable' }, packageResult: { blockedBundle },
+  })
 })
 
 it('omits installation-owned plain packages from the bundle inventory', async () => {

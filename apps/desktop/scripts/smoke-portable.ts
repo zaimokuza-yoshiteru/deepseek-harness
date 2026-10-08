@@ -1,4 +1,4 @@
-/** Exercise the packaged seed and bundled Node with an empty, disposable offline profile. */
+/** Exercise bundled runtime plugins and bundled Node with an empty, disposable offline profile. */
 import assert from 'node:assert/strict'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
@@ -7,17 +7,14 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import extractZip from '@electron-internal/extract-zip'
-import { readAsar } from 'app-builder-lib/out/asar/asar.js'
 import { DesktopProjectManager } from '../src/project-manager.ts'
 import { DesktopHostProcess } from '../src/host-process.ts'
 import { authenticateWebHost, forwardWebRequest } from '../src/web-document.ts'
 import { DESKTOP_AGENT_TEAM_BUNDLES } from '../src/profile-defaults.ts'
-import { readDesktopRuntime, type DesktopRuntimeDescriptor } from '../src/runtime-tree.ts'
+import { readDesktopRuntime, verifyDesktopRuntime } from '../src/runtime-tree.ts'
 import { resolveDesktopPaths } from '../src/paths.ts'
-import { desktopTargetBuildPaths } from './desktop-build-paths.mjs'
-import { DESKTOP_PORTABLE_PLUGINS } from '../src/portable-plugins.ts'
+import { desktopTargetBuildPaths, desktopTargetPlatform } from './desktop-build-paths.mjs'
 import { smokeDesktopRuntime } from './smoke-runtime.ts'
-import { verifyRuntimeArchive } from './verify-runtime-archive.ts'
 import { assertPackagedWindowsTrayIcon } from './verify-packaged-tray-icon.ts'
 import { resolveDesktopDistributionVersion } from '../../../scripts/desktop-distribution-version.mjs'
 
@@ -43,17 +40,16 @@ if (archive !== undefined) {
 const resources = target === 'mac-arm64'
   ? join(artifacts, 'mac-arm64', 'DSH Desktop.app', 'Contents', 'Resources')
   : join(artifacts, 'win-unpacked', 'resources')
-// Re-execute under packaged Electron so filesystem reads exercise the actual ASAR layout.
+// Re-execute under packaged Electron so filesystem reads exercise the installed resource layout.
 const executable = target === 'mac-arm64'
   ? join(resources, '..', 'MacOS', 'DSH Desktop') : join(resources, '..', 'DSH Desktop.exe')
 if (process.versions.electron === undefined) {
   try {
     if (target === 'win-x64') assertPackagedWindowsTrayIcon(resources)
-    // Inspect the physical archive under Node before Electron installs its ASAR filesystem hooks.
-    console.log('Packaged smoke: verifying final ASAR bytes against the prepared runtime inventory')
-    const archivePath = join(resources, 'app.asar')
-    const inventory = JSON.parse((await (await readAsar(archivePath)).readFile(join('dsh', 'desktop-runtime.json'))).toString()) as DesktopRuntimeDescriptor
-    await verifyRuntimeArchive(archivePath, inventory)
+    console.log('Packaged smoke: verifying the physical runtime resource files')
+    const runtimeRoot = join(resources, 'dsh')
+    const runtimeDescriptor = readDesktopRuntime(runtimeRoot)
+    await verifyDesktopRuntime(runtimeRoot, runtimeDescriptor.release.version, desktopTargetPlatform(target))
     const child = spawn(executable, ['--expose-internals', '--import', 'tsx/esm', import.meta.filename, target], {
       env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', DSH_DESKTOP_SMOKE_RESOURCES: resources }, stdio: 'inherit',
     })
@@ -75,12 +71,16 @@ const runtime = {
   node: process.execPath,
   nodeBin: join(packagedResources, 'runtime', 'bin'),
   pnpm: join(packagedResources, 'runtime', 'pnpm', 'bin', 'pnpm.mjs'),
-  dsh: join(packagedResources, 'app.asar', 'dsh'),
-  pluginSeed: join(packagedResources, 'plugin-seed'),
+  dsh: join(packagedResources, 'dsh'),
 }
-const seedManifest = JSON.parse(readFileSync(join(runtime.pluginSeed, 'package.json'), 'utf8')) as { dependencies: Record<string, string> }
-const bundledPlugins = Object.keys(seedManifest.dependencies).map((name) => {
-  const manifest = JSON.parse(readFileSync(join(runtime.pluginSeed, 'node_modules', name, 'package.json'), 'utf8')) as {
+const runtimeManifest = JSON.parse(readFileSync(join(runtime.dsh, 'package.json'), 'utf8')) as {
+  dependencies: Record<string, string>
+  dsh: { distribution: { bundles: string[] } }
+}
+const bundledNames = runtimeManifest.dsh.distribution.bundles
+assert.ok(bundledNames.length > 0 && bundledNames.every(name => runtimeManifest.dependencies[name] !== undefined))
+const bundledPlugins = bundledNames.map((name) => {
+  const manifest = JSON.parse(readFileSync(join(runtime.dsh, 'node_modules', name, 'package.json'), 'utf8')) as {
     version: string
     dsh?: { client?: object }
   }
@@ -88,6 +88,19 @@ const bundledPlugins = Object.keys(seedManifest.dependencies).map((name) => {
 })
 const paths = resolveDesktopPaths(home)
 const manager = new DesktopProjectManager(paths, runtime)
+async function runInstalledCli(args: readonly string[]): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  const entry = join(runtime.dsh, 'node_modules', '@deepseek-ai', 'dsh-desktop-host', 'lib', 'cli.js')
+  const child = spawn(runtime.node, ['--expose-internals', entry, ...args], {
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  let stdout = ''
+  let stderr = ''
+  child.stdout?.setEncoding('utf8').on('data', (chunk) => { stdout += chunk })
+  child.stderr?.setEncoding('utf8').on('data', (chunk) => { stderr += chunk })
+  const [code, signal] = await once(child, 'close') as [number | null, NodeJS.Signals | null]
+  assert.equal(signal, null, `Installed CLI terminated by ${String(signal)}: ${stderr}`)
+  return { code, stdout, stderr }
+}
 let host: DesktopHostProcess | undefined
 let hostUrl = ''
 let hostCookie = ''
@@ -120,7 +133,7 @@ async function assertBundles(): Promise<void> {
   }
   assert.equal(bundles.some(item => item.name === '@zaimokuza/dsh-plugin-hub'), false)
 }
-let stage = 'installing the packaged seed'
+let stage = 'reconciling the packaged bundles'
 const children = new Set<ChildProcess>()
 const failedChildren: Array<{ code: number | null; signal: NodeJS.Signals | null }> = []
 function childDiagnostic(message: unknown): void {
@@ -170,29 +183,39 @@ try {
   // Use the final resource directory selected for this packaged Electron process,
   // including the temporary extraction passed by the ZIP replay path.
   if (target === 'win-x64') assertPackagedWindowsTrayIcon(packagedResources)
-  progress('converting Office documents and resolving the skill CLI from the final ASAR')
+  progress('converting Office documents and resolving the skill CLI from physical runtime resources')
   await smokeDesktopRuntime(runtime.dsh, runtime.node, readDesktopRuntime(runtime.dsh), process.env,
     join(packagedResources, 'runtime'))
-  progress('installing the packaged seed')
-  for (const plugin of DESKTOP_PORTABLE_PLUGINS) {
-    assert.ok(existsSync(join(runtime.pluginSeed, 'node_modules', plugin.name, 'package.json')),
-      `Packaged seed is missing ${plugin.name}; include plugin-seed/node_modules explicitly`)
+  progress('checking the packaged bundles')
+  for (const plugin of bundledPlugins) {
+    assert.ok(existsSync(join(runtime.dsh, 'node_modules', plugin.name, 'package.json')),
+      `Packaged runtime is missing ${plugin.name}`)
   }
   for (const file of ['LICENSE', 'THIRD_PARTY_NOTICES.md', 'vendor/munder/LICENSE', 'vendor/the-office/LICENSE', 'vendor/three/LICENSE', 'lib/THIRD_PARTY_LICENSES.txt']) {
-    assert.ok(existsSync(join(runtime.pluginSeed, 'node_modules', '@zaimokuza/dsh-agent-teams-office', file)), `Missing Office notice ${file}`)
+    assert.ok(existsSync(join(runtime.dsh, 'node_modules', '@zaimokuza/dsh-agent-teams-office', file)), `Missing Office notice ${file}`)
   }
   const firstStart = performance.now()
   await manager.applyRelease(true)
+  const bundledDump = await runInstalledCli(['--profile', 'desktop', '--dump-config'])
+  assert.equal(bundledDump.code, 0, bundledDump.stderr)
+  for (const name of bundledNames) assert.ok(bundledDump.stdout.includes(name), `Installed CLI dump omitted ${name}`)
+  const bundledSchema = await runInstalledCli(['--profile', 'desktop', '--dump-config-schema'])
+  assert.equal(bundledSchema.code, 0, bundledSchema.stderr)
+  assert.match(bundledSchema.stdout, /"complete": true/u, 'Installed CLI schema must load the bundled runtime graph')
+  const blockedInstall = await runInstalledCli(['plugin', '--profile', 'desktop', 'add',
+    `file:${join(runtime.dsh, 'node_modules', ...bundledNames[0]!.split('/'))}`])
+  assert.equal(blockedInstall.code, 1, 'Installed CLI must refuse to shadow a bundled application plugin')
+  assert.match(blockedInstall.stderr, /provided by the application and cannot be installed/u)
   writeFileSync(join(paths.profile, 'cordis.patch.yml'), '- id: webserver\n  config:\n    host: 127.0.0.1\n    port: 0\n')
   const prepared = performance.now()
   const metadata = spawn(runtime.node, ['--expose-internals', join(import.meta.dirname, '../tests/fixtures/plugin-metadata-smoke.mjs'), runtime.dsh, paths.profile,
-    JSON.stringify(DESKTOP_PORTABLE_PLUGINS.map(plugin => plugin.name))], {
+    JSON.stringify(bundledNames)], {
     env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: 'inherit',
   })
   const [metadataCode, metadataSignal] = await once(metadata, 'exit')
   assert.equal(metadataSignal, null)
   assert.equal(metadataCode, 0, 'Final plugin metadata must register on the packaged host and client registry')
-  if (DESKTOP_PORTABLE_PLUGINS.some(plugin => plugin.name === '@zaimokuza/dsh-acp-adapter')) {
+  if (bundledNames.includes('@zaimokuza/dsh-acp-adapter')) {
     const devinConfig = spawn(runtime.node, ['--expose-internals', join(import.meta.dirname, '../tests/fixtures/devin-config-smoke.mjs'), runtime.dsh, paths.profile], {
       env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: 'inherit',
     })
@@ -217,7 +240,7 @@ try {
     assert.equal(client.status, 200)
     assert.ok((await client.text()).length > 0)
   }
-  if (DESKTOP_PORTABLE_PLUGINS.some(plugin => plugin.name === '@zaimokuza/dsh-acp-adapter')) {
+  if (bundledNames.includes('@zaimokuza/dsh-acp-adapter')) {
     const acpRpc = await request(new Request('dsh-app://app/api/dshAcp/health', {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ type: 'client-request', rpcId: 'acp-smoke', method: 'dshAcp/health', payload: { args: {} } }),
@@ -285,13 +308,14 @@ try {
     dependencies: { ...Object.fromEntries(packages.map(entry => [entry.name, `file:./desktop-packages/${entry.file}`])),
       '@zaimokuza/dsh-acp-adapter': '0.1.5-rc.2.5', '@zaimokuza/dsh-plugin-hub': '0.2.1' },
     dsh: { desktop: { agentTeams: false }, profile: { bundles: [
-      '@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', ...DESKTOP_PORTABLE_PLUGINS.map(plugin => plugin.name),
+      '@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', ...bundledNames,
     ] } },
   }))
   const upgrade = new DesktopProjectManager(legacyPaths, runtime)
   await upgrade.applyRelease(true)
   const migrated = JSON.parse(readFileSync(join(legacyPaths.profile, 'package.json'), 'utf8')) as { dependencies: Record<string, string> }
-  assert.deepEqual(migrated.dependencies, seedManifest.dependencies)
+  assert.equal(bundledNames.some(name => migrated.dependencies[name] !== undefined), false)
+  assert.equal(migrated.dependencies['@zaimokuza/dsh-plugin-hub'], '0.2.1')
   await upgrade.applyRelease(true)
   console.log('Packaged legacy profile migration: retired tarballs removed offline; disabled Teams preserved')
   const state = JSON.parse(readFileSync(join(legacyPaths.profile, 'package.json'), 'utf8')) as { dsh: { profile: { bundles: string[] } } }

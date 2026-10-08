@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
   symlinkSync,
@@ -558,6 +559,82 @@ describe('runtime resolution', { concurrent: false }, () => {
     expect(resolveFrom('@deepseek-ai/dsh-core', parent)).toBe(
       pathToFileURL(join(f.profile.dir, 'node_modules', '@deepseek-ai/dsh-core', 'index.js')).href,
     )
+  })
+
+  it('reserves distribution-owned packages when a stale profile copy remains', async () => {
+    const f = fixture()
+    const installManifest = JSON.parse(readFileSync(f.installAnchor, 'utf8')) as Record<string, unknown>
+    installManifest.dsh = { distribution: { bundles: ['@deepseek-ai/dsh-core'] } }
+    file(f.installAnchor, JSON.stringify(installManifest))
+    file(join(f.profile.dir, 'package.json'), JSON.stringify({
+      name: 'dsh-profile-web', private: true, dependencies: { '@deepseek-ai/dsh-core': '*' },
+    }))
+    const stale = join(f.profile.dir, 'node_modules', '@deepseek-ai', 'dsh-core')
+    pkg(stale, '@deepseek-ai/dsh-core', 9)
+
+    const resolution = await resolutionOf(f)
+    expect(resolution.installationOwnedPackages).toContainEqual({
+      requestName: '@deepseek-ai/dsh-core', packageName: '@deepseek-ai/dsh-core',
+    })
+    const registration = installRuntimeInterception(resolution)
+    registrations.push(registration)
+    const require = createRequire(join(f.profile.dir, 'entry.cjs'))
+    expect(require('@deepseek-ai/dsh-core')).toEqual({ marker: 1 })
+    expect(require.resolve('@deepseek-ai/dsh-core')).toBe(join(f.installed, 'index.cjs'))
+    const parent = pathToFileURL(join(f.profile.dir, 'entry.mjs')).href
+    expect(resolveFrom('@deepseek-ai/dsh-core', parent)).toBe(pathToFileURL(join(f.installed, 'index.js')).href)
+    expect(registration.packageDir('@deepseek-ai/dsh-core', parent)).toBe(f.installed)
+  })
+
+  it('reserves the app package behind a profile npm alias by its actual package name', async () => {
+    const f = fixture()
+    const installManifest = JSON.parse(readFileSync(f.installAnchor, 'utf8')) as Record<string, unknown>
+    installManifest.dsh = { distribution: { bundles: ['@deepseek-ai/dsh-core'] } }
+    file(f.installAnchor, JSON.stringify(installManifest))
+    file(join(f.profile.dir, 'package.json'), JSON.stringify({
+      name: 'dsh-profile-web', private: true, dependencies: { 'core-shadow': 'npm:@deepseek-ai/dsh-core@9.0.0' },
+    }))
+    const staleAlias = join(f.profile.dir, 'node_modules', 'core-shadow')
+    pkg(staleAlias, '@deepseek-ai/dsh-core', 9)
+    const privateOwner = join(f.profile.dir, 'node_modules', 'ordinary-owner')
+    pkg(privateOwner, 'ordinary-owner', 8)
+    pkg(join(privateOwner, 'node_modules', 'core-shadow'), 'core-shadow', 7)
+
+    const resolution = await resolutionOf(f)
+    expect(resolution.installationOwnedPackages).not.toContainEqual({
+      requestName: 'core-shadow', packageName: '@deepseek-ai/dsh-core',
+    })
+    const registration = installRuntimeInterception(resolution)
+    registrations.push(registration)
+    const require = createRequire(join(f.profile.dir, 'entry.cjs'))
+    expect(require('core-shadow')).toEqual({ marker: 1 })
+    expect(require.resolve('core-shadow')).toBe(join(f.installed, 'index.cjs'))
+    const parent = pathToFileURL(join(f.profile.dir, 'entry.mjs')).href
+    expect(resolveFrom('core-shadow', parent)).toBe(pathToFileURL(join(f.installed, 'index.js')).href)
+    expect(registration.packageDir('core-shadow', parent)).toBe(f.installed)
+    // A prior route for the profile-root alias must not redirect a nearer private dependency.
+    expect(createRequire(join(privateOwner, 'index.cjs'))('core-shadow')).toEqual({ marker: 7 })
+  })
+
+  it('routes an undeclared leftover npm alias to the app after failed profile repair', async () => {
+    const f = fixture()
+    const installManifest = JSON.parse(readFileSync(f.installAnchor, 'utf8')) as Record<string, unknown>
+    installManifest.dsh = { distribution: { bundles: ['@deepseek-ai/dsh-core'] } }
+    file(f.installAnchor, JSON.stringify(installManifest))
+    // The refused alias is absent from the restored manifest but can remain on disk when pnpm repair fails.
+    const staleAlias = join(f.profile.dir, 'node_modules', 'core-shadow')
+    pkg(staleAlias, '@deepseek-ai/dsh-core', 9)
+
+    const resolution = await resolutionOf(f)
+    expect(resolution.localPackageNames).not.toContain('core-shadow')
+    const registration = installRuntimeInterception(resolution)
+    registrations.push(registration)
+    const require = createRequire(join(f.profile.dir, 'entry.cjs'))
+    expect(require('core-shadow')).toEqual({ marker: 1 })
+    expect(require.resolve('core-shadow')).toBe(join(f.installed, 'index.cjs'))
+    const parent = pathToFileURL(join(f.profile.dir, 'entry.mjs')).href
+    expect(resolveFrom('core-shadow', parent)).toBe(pathToFileURL(join(f.installed, 'index.js')).href)
+    expect(registration.packageDir('core-shadow', parent)).toBe(f.installed)
   })
 
   it('preserves an npm alias package self-reference', async () => {

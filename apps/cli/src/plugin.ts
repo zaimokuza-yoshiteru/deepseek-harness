@@ -67,7 +67,12 @@ async function versionCommand(profile: string, args: readonly string[]): Promise
  * @param packageManager Installation-owned executable and environment for pnpm operations.
  * @returns Zero on success; nonzero on invalid approval or package-manager failure.
  */
-export async function runPlugin(profile: string, args: readonly string[], packageManager?: ProfileContext['packageManager']): Promise<number> {
+export async function runPlugin(
+  profile: string,
+  args: readonly string[],
+  packageManager?: ProfileContext['packageManager'],
+  installAnchor = INSTALL_ANCHOR,
+): Promise<number> {
   if (profile === 'desktop') {
     try { requireDesktopProfile(resolveProfileDir(profile)) } catch (error) {
       process.stderr.write(`dsh: ${String(error)}\n`)
@@ -80,7 +85,7 @@ export async function runPlugin(profile: string, args: readonly string[], packag
   if (existsSync(join(dir, 'package.json'))) {
     for (const warning of readProfileCompatibility(dir).warnings) process.stderr.write(`dsh: warning: ${warning}\n`)
   }
-  const context = { profile, dir, installAnchor: INSTALL_ANCHOR, cwd: process.cwd() }
+  const context = { profile, dir, installAnchor, cwd: process.cwd() }
   const options: PackageOperationOptions = {
     ...packageManager,
     execution: 'cli',

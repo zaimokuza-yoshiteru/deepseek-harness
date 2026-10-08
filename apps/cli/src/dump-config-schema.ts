@@ -26,8 +26,9 @@ export async function runDumpConfigSchema(
   profile: string,
   patches: readonly string[],
   fromDefaultProfile?: string,
+  installAnchor = INSTALL_ANCHOR,
 ): Promise<void> {
-  const loaded = prepareProfile(profile, true, fromDefaultProfile)
+  const loaded = prepareProfile(profile, true, fromDefaultProfile, installAnchor)
   const layers = collectConfigDumpLayers(loaded, false, patches)
   // oxlint-disable-next-line typescript/unbound-method -- Saved only for exact restoration, never called unbound.
   const stdoutWrite = process.stdout.write
@@ -35,7 +36,7 @@ export async function runDumpConfigSchema(
   // Trusted module diagnostics must not precede the JSON document on stdout.
   process.stdout.write = process.stderr.write.bind(process.stderr)
   try {
-    dump = await generateConfigSchema(loaded, layers.map(layer => layer.patches), INSTALL_ANCHOR)
+    dump = await generateConfigSchema(loaded, layers.map(layer => layer.patches), installAnchor)
   } finally {
     process.stdout.write = stdoutWrite
   }

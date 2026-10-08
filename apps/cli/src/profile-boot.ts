@@ -164,9 +164,11 @@ export function initializeProfileFromDefault(
  * @returns the loaded profile.
  * @throws when explicit initialization names an unknown template or an existing profile.
  */
-export function prepareProfile(name: string, userLayer = true, fromDefaultProfile?: string): Profile {
+export function prepareProfile(
+  name: string, userLayer = true, fromDefaultProfile?: string, installAnchor = INSTALL_ANCHOR,
+): Profile {
   if (fromDefaultProfile !== undefined) initializeProfileFromDefault(name, fromDefaultProfile)
-  const profile = loadProfile(NAME, name, INSTALL_ANCHOR, undefined, { userLayer })
+  const profile = loadProfile(NAME, name, installAnchor, undefined, { userLayer })
   reportSkippedBundles(NAME, profile)
   writeFileSync(join(profile.dir, PROFILE_ROOT_FILENAME), PROFILE_ROOT_CONFIG)
   return profile
@@ -199,10 +201,12 @@ async function composeProfile(
   patchFiles: readonly string[],
   fromDefaultProfile?: string,
   resolvedProfile?: ResolvedProfileRuntime,
+  installAnchor = INSTALL_ANCHOR,
 ): Promise<ComposedProfile> {
-  const profile = resolvedProfile?.profile ?? prepareProfile(name, true, fromDefaultProfile)
+  const selectedAnchor = resolvedProfile?.installAnchor ?? installAnchor
+  const profile = resolvedProfile?.profile ?? prepareProfile(name, true, fromDefaultProfile, selectedAnchor)
   if (resolvedProfile !== undefined) writeFileSync(join(profile.dir, PROFILE_ROOT_FILENAME), PROFILE_ROOT_CONFIG)
-  const resolutionOptions = { installAnchor: resolvedProfile?.installAnchor ?? INSTALL_ANCHOR, profile }
+  const resolutionOptions = { installAnchor: selectedAnchor, profile }
   const resolution = await createRuntimeResolution(resolutionOptions)
   const overlays = patchFiles.flatMap(file => loadOverlayPatches(NAME, resolve(file)))
   return { profile, resolution, overlays }
@@ -232,6 +236,8 @@ export interface RunProfileOptions {
   args: readonly string[]
   /** Application-owned package runtime, scoped to plugin package operations. */
   packageManager?: ProfileContext['packageManager']
+  /** Application-owned package manifest used as the runtime package graph root. */
+  installAnchor?: string
 }
 
 /**
@@ -263,7 +269,7 @@ export async function runProfile(options: RunProfileOptions): Promise<{ ctx: Con
   })()
   try {
     const composed = await composeProfile(
-      options.profile, options.patchFiles, options.fromDefaultProfile, options.resolvedProfile,
+      options.profile, options.patchFiles, options.fromDefaultProfile, options.resolvedProfile, options.installAnchor,
     )
     const appReady = createAppReady()
     const shutdown = createProcessShutdown(dispose)
@@ -288,7 +294,7 @@ export async function runProfile(options: RunProfileOptions): Promise<{ ctx: Con
       name: options.profile,
       ...(options.packageManager === undefined ? {} : { packageManager: options.packageManager }),
       dir: composed.profile.dir, patchPath: composed.profile.patchPath,
-      installAnchor: options.resolvedProfile?.installAnchor ?? INSTALL_ANCHOR,
+      installAnchor: options.resolvedProfile?.installAnchor ?? options.installAnchor ?? INSTALL_ANCHOR,
       startedBundles: composed.profile.layers.map(layer => layer.packageName),
       cwd: process.cwd(), home: resolveDshHome(),
       overlays: composed.overlays, telemetryDisabledEnv: process.env.DSH_TELEMETRY_DISABLED,

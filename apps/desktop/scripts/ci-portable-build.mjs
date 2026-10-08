@@ -46,14 +46,16 @@ if (mode === 'replay') {
 }
 run(['--dir', 'native/system/packages/entry', 'run', 'build:js'])
 run(['exec', 'vitest', 'run', ...[
-  'npm-environment', 'project-manager', 'distribution', 'login-shell-environment', 'plugin-seed', 'package-target',
-  'prepare-plugin-seed', 'host-process', 'main-startup', 'prepare-package-set', 'locale', 'icons', 'profile-core-cleanup', 'preload-app', 'node-environment',
+  'npm-environment', 'project-manager', 'distribution', 'login-shell-environment', 'bundled-plugins', 'package-target',
+  'prepare-plugin-archives', 'host-process', 'main-startup', 'prepare-package-set', 'locale', 'icons', 'profile-core-cleanup', 'preload-app', 'node-environment',
   'desktop-build-paths', 'development-project', 'installed-update-package-content', 'welcome-startup', 'windows-asar-unpack',
-  'portable-config', 'smoke-portable', 'tray-icon', 'quit-confirmation', 'background-notice', 'tray',
+  'portable-config', 'smoke-portable', 'tray-icon', 'quit-confirmation', 'background-notice', 'tray', 'verify-portable-tag',
 ].map(name => `apps/desktop/tests/${name}.spec.ts`),
-...['plugin-compatibility', 'profile-compatibility', 'compatibility-preflight']
+...['plugin-compatibility', 'profile-compatibility', 'compatibility-preflight', 'profile-resolution']
   .map(name => `packages/boot/app-boot/tests/${name}.spec.ts`),
-'packages/boot/plugin-manager/tests/operations.spec.ts'])
+'packages/boot/plugin-manager/tests/operations.spec.ts',
+'apps/desktop-host/tests/install-anchor.spec.ts', 'apps/desktop-host/tests/cli.spec.ts',
+'apps/cli/tests/plugin.spec.ts', 'apps/cli/tests/resolved-profile-boot.spec.ts', '--maxWorkers=2'])
 run(['--dir', 'apps/desktop', 'run', target === 'mac-arm64' ? 'package:portable:mac:arm64' : 'package:portable:win:x64'])
 readFileSync('packages/client/ui-chat/lib/client.js')
 run(['exec', 'vitest', 'run', 'packages/client/ui-chat/tests/running-whale-tail.client.spec.tsx'])

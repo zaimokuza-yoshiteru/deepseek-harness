@@ -34,6 +34,7 @@ function pkg(overrides: Partial<PackageView> = {}): PackageView {
     version: '0.16.0',
     installed: true,
     optional: false,
+    removable: true,
     enabled: true,
     rows: [],
     ...overrides,
@@ -449,7 +450,7 @@ describe('PluginManagerPage', () => {
   it('opens an official bundle\'s page with its beta tag and no uninstall, and switches it on', () => {
     const title = 'Agent Teams'
     const { actions } = renderTab({
-      packages: [pkg({ name: '@deepseek-ai/dsh-experimental-agent-team-profile', meta: { title }, installed: false, optional: true, enabled: false })],
+      packages: [pkg({ name: '@deepseek-ai/dsh-experimental-agent-team-profile', meta: { title }, installed: false, optional: true, removable: false, enabled: false })],
     })
     fireEvent.click(screen.getByRole('button', { name: en.openDetail.replace('{name}', title) }))
     const detail = document.querySelector('[data-plugin-detail]') as HTMLElement
@@ -457,6 +458,28 @@ describe('PluginManagerPage', () => {
     expect(within(detail).queryByRole('button', { name: en.uninstallLabel.replace('{name}', title) })).toBeNull()
     fireEvent.click(within(detail).getByRole('switch', { name: en.enableToggle.replace('{name}', title) }))
     expect(actions.setEnabled).toHaveBeenCalledExactlyOnceWith('@deepseek-ai/dsh-experimental-agent-team-profile', true)
+  })
+
+  it('shows app-bundled packages in their own group even when off, with settings and no uninstall', () => {
+    const names = ['@zaimokuza/dsh-acp-adapter', '@zaimokuza/dsh-agent-teams-office', 'dsh-boot-ocbc', 'dsh-atlassian-kanban']
+    const packages = names.map(name => pkg({ name, installed: false, bundled: true, removable: false, enabled: false }))
+    const { actions } = renderTab(
+      { packages },
+      { bundles: new Set(['dsh-atlassian-kanban']) },
+      { 'plugins.bundle.config:dsh-atlassian-kanban': view => view === 'page' ? <form aria-label="Atlassian settings" /> : null },
+    )
+    const group = document.querySelector('[data-plugin-group="bundled"]') as HTMLElement
+    expect(within(group).getAllByRole('listitem')).toHaveLength(4)
+    expect(document.querySelector('[data-plugin-group="official"]')).toBeNull()
+    expect(document.querySelector('[data-plugin-group="bundles"]')).toBeNull()
+    const target = packages.at(-1)!
+    fireEvent.click(within(group).getByRole('button', { name: en.openDetail.replace('{name}', target.name) }))
+    const detail = document.querySelector(`[data-plugin-detail="${target.name}"]`) as HTMLElement
+    expect(within(detail).getByText(en.bundledHint)).toBeTruthy()
+    expect(within(detail).queryByRole('button', { name: en.uninstallLabel.replace('{name}', target.name) })).toBeNull()
+    fireEvent.click(within(detail).getByRole('switch', { name: en.enableToggle.replace('{name}', target.name) }))
+    expect(actions.setEnabled).toHaveBeenCalledExactlyOnceWith(target.name, true)
+    expect(within(detail).getByRole('form', { name: 'Atlassian settings' })).toBeTruthy()
   })
 
   it.each([
@@ -863,7 +886,7 @@ describe('PluginManagerPage', () => {
     })
 
     it('leaves the version out of a bundle the Host reports none for', () => {
-      const unversioned: PackageView = { name: 'dsh-better-sidebar', installed: true, optional: false, enabled: true, rows: [] }
+      const unversioned: PackageView = { name: 'dsh-better-sidebar', installed: true, optional: false, removable: true, enabled: true, rows: [] }
       renderTab({ packages: [unversioned] }, {}, bodies)
       fireEvent.click(screen.getByRole('button', { name: en.openDetail.replace('{name}', 'dsh-better-sidebar') }))
       expect(subjects.at(-1)).toEqual({ kind: 'bundle', pkg: { name: 'dsh-better-sidebar', installed: true, enabled: true, rows: [] } })

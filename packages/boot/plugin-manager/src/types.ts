@@ -60,6 +60,8 @@ export interface BundleInfo {
    * held by the installation's dependencies, selected by no shipped template, and never removable.
    */
   optional: boolean
+  /** The installation owns this package as an application-bundled plugin; its version follows the app. */
+  bundled?: boolean
   removable: boolean
   readOnlyReason?: ReadOnlyReason
   error?: ManagementError
@@ -105,6 +107,8 @@ export interface PackageResult {
   timedOut?: boolean
   /** Present when a compatibility check refused the run: the packages the running DSH version rejects. */
   incompatible?: IncompatiblePlugin[]
+  /** Present when installation resolved to a package whose name is owned by the application. */
+  blockedBundle?: string
 }
 
 /** Persisted change and independently observed application outcome. */
