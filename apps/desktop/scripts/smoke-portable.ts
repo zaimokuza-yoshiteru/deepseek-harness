@@ -243,7 +243,9 @@ try {
       const acpSmokeEvidence = JSON.parse(readFileSync(evidence, 'utf8')) as {
         cases: Array<{ id: string; methods: string[]; argvPreserved: boolean }>
       }
-      assert.deepEqual(acpSmokeEvidence.cases.map(item => item.id), ['bare-exe', 'bare-cmd', 'relative-spaces', 'absolute-spaces'])
+      assert.deepEqual(acpSmokeEvidence.cases.map(item => item.id), [
+        'bare-exe', 'bare-cmd', 'relative-spaces', 'relative-spaces-no-extension', 'absolute-spaces', 'absolute-spaces-no-extension',
+      ])
       assert.ok(acpSmokeEvidence.cases.every(item => item.argvPreserved && item.methods.includes('initialize') && item.methods.includes('session/new')))
     }
   }

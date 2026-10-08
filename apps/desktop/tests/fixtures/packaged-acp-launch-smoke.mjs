@@ -39,6 +39,11 @@ copyFileSync(fixture, join(scratch, 'devin-acp-handshake.mjs'))
 const marker = 'value with spaces & percent% caret^ quotes "double" and (parens)'
 const trace = (id) => join(scratch, `${id}.jsonl`)
 const outcomes = []
+function saveProgress(status, currentCase) {
+  mkdirSync(dirname(evidencePath), { recursive: true })
+  writeFileSync(evidencePath, `${JSON.stringify({ schemaVersion: 1, adapter: 'packaged', desktopRuntime: 'packaged',
+    subprocess: 'managed-local', status, ...(currentCase === undefined ? {} : { currentCase }), cases: outcomes }, null, 2)}\n`)
+}
 
 function installExe(directory, name = 'devin.exe') {
   mkdirSync(directory, { recursive: true })
@@ -59,6 +64,8 @@ function installCmd(directory) {
 }
 
 async function run(id, command, searchPath) {
+  process.stdout.write(`ACP launch fixture: starting ${id}\n`)
+  saveProgress('running', id)
   const output = trace(id)
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toUpperCase() !== 'PATH'))
   Object.assign(env, {
@@ -81,9 +88,12 @@ async function run(id, command, searchPath) {
   assert.deepEqual(records.map((record) => record.method), ['initialize', 'session/new'])
   assert.ok(records.every((record) => record.argv.join('\0') === ['acp', '--marker', marker].join('\0')))
   outcomes.push({ id, configuredCommand: command, resolvedCommand: launch.argv[0], methods: records.map((record) => record.method), argvPreserved: true })
+  saveProgress('running')
+  process.stdout.write(`ACP launch fixture: passed ${id}\n`)
 }
 
 try {
+  saveProgress('running', 'initializing')
   const exePath = installExe(join(scratch, 'bare exe PATH with spaces'))
   await run('bare-exe', 'devin', dirname(exePath))
 
@@ -92,16 +102,22 @@ try {
 
   const relativePath = installExe(join(scratch, 'Agent Tools'))
   await run('relative-spaces', '.\\Agent Tools\\devin.exe', dirname(relativePath))
+  await run('relative-spaces-no-extension', '.\\Agent Tools\\devin', dirname(relativePath))
 
   const absoluteDirectory = join(scratch, 'absolute Agent path with spaces & parens')
   mkdirSync(absoluteDirectory, { recursive: true })
   const absolute = join(absoluteDirectory, 'devin.exe')
   copyFileSync(exePath, absolute)
   await run('absolute-spaces', absolute, dirname(absolute))
+  const absoluteExtensionlessDirectory = join(scratch, 'absolute extensionless Agent path with spaces & parens')
+  mkdirSync(absoluteExtensionlessDirectory, { recursive: true })
+  const absoluteExtensionless = join(absoluteExtensionlessDirectory, 'devin')
+  copyFileSync(exePath, `${absoluteExtensionless}.exe`)
+  await run('absolute-spaces-no-extension', absoluteExtensionless, dirname(absoluteExtensionless))
 
-  const evidence = { schemaVersion: 1, adapter: 'packaged', desktopRuntime: 'packaged', subprocess: 'managed-local', cases: outcomes }
-  mkdirSync(dirname(evidencePath), { recursive: true })
-  writeFileSync(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`)
+  const evidence = { schemaVersion: 1, adapter: 'packaged', desktopRuntime: 'packaged', subprocess: 'managed-local',
+    status: 'passed', cases: outcomes }
+  saveProgress('passed')
   process.stdout.write(`${JSON.stringify(evidence)}\n`)
 } finally {
   await subprocessFiber.dispose()

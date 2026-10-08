@@ -3,7 +3,7 @@ import os from 'node:os'
 import { syncBuiltinESMExports } from 'node:module'
 import { describe, expect, it, vi } from 'vitest'
 import { basename, dirname, join, relative, resolve } from 'node:path'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { chmodSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { Context } from '@deepseek-ai/cordis'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
@@ -280,6 +280,24 @@ describe('LocalSubprocessRuntime', () => {
         .toEqual([resolve('/explicit', 'tool.EXE')])
       expect(candidates('tool.exe', {})).toEqual([resolve(process.cwd(), 'tool.exe')])
       expect(candidates('tool', { PATH: '/bin' })).toHaveLength(4)
+      const directory = mkdtempSync(join(tmpdir(), 'dsh-extensionless-win-exe-'))
+      const extensionless = join(directory, 'devin')
+      const withExtension = `${extensionless}.EXE`
+      try {
+        expect(candidates(extensionless, { PATHEXT: '.EXE;.CMD' }))
+          .toEqual([extensionless, withExtension, `${extensionless}.CMD`])
+        writeFileSync(extensionless, 'literal executable')
+        chmodSync(extensionless, 0o755)
+        writeFileSync(withExtension, 'PATHEXT executable')
+        chmodSync(withExtension, 0o755)
+        await expect(ctx.subprocess.resolveExecutable(extensionless, { PATHEXT: '.EXE;.CMD' }))
+          .resolves.toBe(extensionless)
+        unlinkSync(extensionless)
+        await expect(ctx.subprocess.resolveExecutable(extensionless, { PATHEXT: '.EXE;.CMD' }))
+          .resolves.toBe(withExtension)
+      } finally {
+        rmSync(directory, { recursive: true, force: true })
+      }
       await expect(ctx.subprocess.resolveExecutable(String.raw`bin\server.exe`))
         .rejects.toThrow('is a relative path')
     } finally {

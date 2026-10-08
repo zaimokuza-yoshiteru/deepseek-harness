@@ -151,7 +151,7 @@ export class LocalSubprocessRuntime extends SubprocessRuntime {
         `subprocess-local: command ${JSON.stringify(command)} is a relative path; use an absolute path or a bare PATH name`,
       )
     }
-    const candidates = absolute ? [command] : this.executableCandidates(command, environment)
+    const candidates = this.executableCandidates(command, environment)
     for (const candidate of candidates) {
       signal?.throwIfAborted()
       try {
@@ -171,10 +171,15 @@ export class LocalSubprocessRuntime extends SubprocessRuntime {
   }
 
   private executableCandidates(command: string, env: NodeJS.ProcessEnv): string[] {
-    const path = environmentValue(env, 'PATH') ?? ''
     const extensions = process.platform === 'win32' && extname(command) === ''
       ? (environmentValue(env, 'PATHEXT') ?? '.COM;.EXE;.BAT;.CMD').split(';')
       : ['']
+    if (isAbsolute(command)) {
+      // Absolute Windows commands can omit their executable extension. Keep an
+      // exact path first, then apply the same PATHEXT sequence as PATH lookup.
+      return ['', ...extensions.filter(extension => extension !== '')].map(extension => command + extension)
+    }
+    const path = environmentValue(env, 'PATH') ?? ''
     return path.split(delimiter).flatMap(directory =>
       extensions.map(extension => resolve(process.cwd(), directory, command + extension)))
   }
