@@ -15,17 +15,27 @@ on:
         description: Existing desktop tag at the verified run commit
         required: true
         type: string
+      release_id:
+        description: Existing draft release ID (required only for rc26-transfer)
+        required: false
+        type: string
+      mode:
+        description: Promotion mode; rc26-transfer is restricted to one verified Windows artifact
+        required: true
+        type: choice
+        options: [full, rc26-transfer]
+        default: full
 
 permissions:
   contents: read
 
 concurrency:
-  group: desktop-promote-${{ inputs.tag }}
+  group: desktop-promote-${{ inputs.mode }}-${{ inputs.tag }}
   cancel-in-progress: false
 
 jobs:
   promote:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'full' && github.ref == 'refs/heads/desktop'
     runs-on: ubuntu-24.04
     permissions:
       actions: read
@@ -234,3 +244,332 @@ jobs:
             gh release create "$DESKTOP_TAG" --verify-tag --draft --prerelease --title "DSH Desktop $DESKTOP_TAG" --notes "Verified source and application artifacts; release review pending."
           fi
           gh release upload "$DESKTOP_TAG" ./*.zip ./*.tar.gz ./*.manifest.json ./*.sha256 SHA256SUMS.txt --clobber
+
+  rc26-transfer:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'rc26-transfer' && github.ref == 'refs/heads/codex/rc26-transfer'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      SOURCE_RUN: ${{ inputs.source_run }}
+      DESKTOP_TAG: ${{ inputs.tag }}
+      RELEASE_ID: ${{ inputs.release_id }}
+      EXPECTED_BUILD_SHA: 23072715fd7c7915c0376786e96bd6816d8e1e33
+      EXPECTED_SOURCE_SHA: 21559c6d31d022aceb8dbc082008fe2e4d3274d9
+      EXPECTED_RELEASE_ID: '407045112'
+      EXPECTED_WRAPPER_SHA256: ecf7218ac86071263d0bd81e7ef12379f07a85293bd78c7fa9765151df4359e1
+      EXPECTED_WRAPPER_BYTES: '417549686'
+      EXPECTED_WINDOWS_ZIP_SHA256: 84f406e24c43e088ae5f29983406e4ba2c6e6ecddc68f5446dc0c64b7e70337f
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify the fixed transfer run, source tag, and existing draft
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == refs/heads/codex/rc26-transfer ]]
+          [[ "$SOURCE_RUN" == 37803157225 ]]
+          [[ "$DESKTOP_TAG" == 0.2.0.rc.2.6 ]]
+          [[ "$RELEASE_ID" == "$EXPECTED_RELEASE_ID" ]]
+          TAG_SHA="$(git rev-parse "refs/tags/$DESKTOP_TAG^{commit}")"
+          [[ "$TAG_SHA" == "$EXPECTED_SOURCE_SHA" ]]
+          DIFF="$(git diff --name-status "$EXPECTED_BUILD_SHA" "$EXPECTED_SOURCE_SHA")"
+          [[ "$DIFF" == $'M\tscripts/export-source.mjs' ]]
+          gh api "repos/$GH_REPO/actions/runs/$SOURCE_RUN" > "$RUNNER_TEMP/source-run.json"
+          gh api "repos/$GH_REPO/releases/$RELEASE_ID" > "$RUNNER_TEMP/release-before.json"
+          export SOURCE_RUN_FILE="$RUNNER_TEMP/source-run.json"
+          export RELEASE_FILE="$RUNNER_TEMP/release-before.json"
+          python3 - <<'PY'
+          import json, os
+          run = json.load(open(os.environ['SOURCE_RUN_FILE']))
+          assert run['id'] == 37803157225
+          assert run['status'] == 'completed' and run['conclusion'] == 'success'
+          assert run['head_sha'] == os.environ['EXPECTED_BUILD_SHA']
+          assert run['event'] in ['push', 'workflow_dispatch']
+          assert run['head_branch'] == 'codex/builtin-desktop-plugins'
+          assert run['path'] == '.github/workflows/desktop-portable.yml'
+          assert run['repository']['full_name'] == os.environ['GH_REPO']
+          release = json.load(open(os.environ['RELEASE_FILE']))
+          assert str(release['id']) == os.environ['EXPECTED_RELEASE_ID']
+          assert release['tag_name'] == '0.2.0.rc.2.6'
+          assert release['draft'] is True and release['prerelease'] is True
+          assert release['target_commitish'] == os.environ['EXPECTED_SOURCE_SHA']
+          PY
+
+      - name: Verify the single Windows artifact wrapper from the successful run
+        id: windows-artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/$GH_REPO/actions/runs/$SOURCE_RUN/artifacts" > "$RUNNER_TEMP/windows-artifacts.json"
+          export ARTIFACTS_FILE="$RUNNER_TEMP/windows-artifacts.json"
+          python3 - <<'PY'
+          import json, os
+          artifacts = json.load(open(os.environ['ARTIFACTS_FILE']))['artifacts']
+          matches = [item for item in artifacts if item['name'] == 'dsh-desktop-win-x64']
+          assert len(matches) == 1
+          artifact = matches[0]
+          assert artifact['digest'] == 'sha256:' + os.environ['EXPECTED_WRAPPER_SHA256']
+          assert artifact['size_in_bytes'] == int(os.environ['EXPECTED_WRAPPER_BYTES'])
+          assert artifact['expired'] is False
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f"artifact_id={artifact['id']}\n")
+          with open(os.environ['GITHUB_ENV'], 'a') as environment:
+              environment.write(f"WINDOWS_ARTIFACT_ID={artifact['id']}\n")
+          PY
+
+      - name: Download and validate the Windows wrapper, ZIP, and runtime provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p incoming evidence
+          gh api "repos/$GH_REPO/actions/artifacts/${{ steps.windows-artifact.outputs.artifact_id }}/zip" > incoming/windows-artifact.zip
+          printf '%s  %s\n' "$EXPECTED_WRAPPER_SHA256" incoming/windows-artifact.zip | sha256sum --check
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, posixpath, re, shutil, zipfile
+
+          incoming = pathlib.Path('incoming')
+          wrapper = incoming / 'windows-artifact.zip'
+          assert wrapper.stat().st_size == int(os.environ['EXPECTED_WRAPPER_BYTES'])
+          expected_zip = 'dsh-desktop-0.2.0.rc.2.6-win-x64.zip'
+          expected_receipt = 'standard-user-win-x64.json'
+          with zipfile.ZipFile(wrapper) as archive:
+              assert archive.testzip() is None
+              infos = archive.infolist()
+              assert {item.filename for item in infos} == {expected_zip, expected_receipt}
+              assert all(not item.is_dir() and '/' not in item.filename and chr(92) not in item.filename for item in infos)
+              for name in [expected_zip, expected_receipt]:
+                  with archive.open(name) as source, (incoming / name).open('wb') as destination:
+                      shutil.copyfileobj(source, destination)
+
+          windows_zip = incoming / expected_zip
+          with windows_zip.open('rb') as source:
+              windows_sha = hashlib.file_digest(source, 'sha256').hexdigest()
+          assert windows_sha == os.environ['EXPECTED_WINDOWS_ZIP_SHA256']
+          standard = json.loads((incoming / expected_receipt).read_text())
+          assert standard['target'] == 'win-x64'
+          assert standard['version'] == '0.2.0.rc.2.6'
+          assert standard['standardUser'] is True
+          assert standard['build'] == 'passed' and standard['packagedSmoke'] == 'passed'
+          assert standard['archive'] == expected_zip and standard['sha256'] == windows_sha
+
+          expected_plugins = {
+              '@zaimokuza/dsh-acp-adapter': ('0.2.0-rc.2.7', 'third_party/plugins/dsh-acp-adapter', '866ed658fc0b8ffea79ae460bd4099bbc8de087ce360e84309f6ef1250c23230'),
+              '@zaimokuza/dsh-agent-teams-office': ('0.1.0-beta.9', 'third_party/plugins/dsh-agent-teams-office', '30294202e5055a5345166ec865c0f0226226fcfa4e798ee95d3a36c846263118'),
+              'dsh-boot-ocbc': ('0.1.8', 'third_party/plugins/dsh-boot-ocbc', 'adf448f1a3f1e37659945faa1c8e5084a8baa3caa2007a72e062563d6231fa10'),
+              'dsh-atlassian-kanban': ('0.1.0-alpha.10', 'third_party/plugins/dsh-atlassian-kanban', '2621d8f02edd42ac7127f687fd92618f3cb97a1ad44744eef1f0d1813c52c9fa'),
+          }
+          with zipfile.ZipFile(windows_zip) as archive:
+              assert archive.testzip() is None
+              paths = archive.namelist()
+              manifests = [path for path in paths if path.lower().endswith('resources/dsh/desktop-plugin-build.json')]
+              assert len(manifests) == 1, manifests
+              manifest_path = manifests[0]
+              assert 'app.asar' not in manifest_path
+              runtime_root = manifest_path[:-len('desktop-plugin-build.json')]
+              manifest = json.loads(archive.read(manifest_path))
+              plugins = manifest['plugins']
+              actual = {plugin['name']: plugin for plugin in plugins}
+              assert len(actual) == len(plugins) == len(expected_plugins)
+              assert set(actual) == set(expected_plugins)
+              for name, (version, source, source_sha) in expected_plugins.items():
+                  plugin = actual[name]
+                  assert plugin['version'] == version
+                  assert plugin['source'] == source
+                  assert plugin['sourceSha256'] == source_sha
+                  assert re.fullmatch(r'[0-9a-f]{64}', plugin['sha256'])
+                  assert plugin['asset'].endswith('.tgz')
+              pathlib.Path('evidence/runtime-plugin-provenance.json').write_text(json.dumps(manifest, indent=2) + '\n')
+
+              def export_targets(value):
+                  if isinstance(value, str):
+                      return [value]
+                  if isinstance(value, dict):
+                      return [target for item in value.values() for target in export_targets(item)]
+                  if isinstance(value, list):
+                      return [target for item in value for target in export_targets(item)]
+                  return []
+
+              installed_payloads = []
+              for name, (version, _, _) in expected_plugins.items():
+                  package_root = runtime_root + 'node_modules/' + name + '/'
+                  package_path = package_root + 'package.json'
+                  assert package_path in paths, f'missing installed plugin manifest: {name}'
+                  package_bytes = archive.read(package_path)
+                  package = json.loads(package_bytes)
+                  assert package['name'] == name and package['version'] == version
+                  patch_path = package.get('dsh', {}).get('bundle', {}).get('patch')
+                  assert isinstance(patch_path, str) and patch_path.startswith('./')
+                  patch_path = package_root + patch_path[2:]
+                  assert patch_path in paths, f'missing installed bundle patch: {name}'
+                  declared = [package.get('main'), *export_targets(package.get('exports'))]
+                  entrypoints = []
+                  for target in declared:
+                      if not isinstance(target, str) or not target.startswith('./') or '*' in target:
+                          continue
+                      if not target.endswith(('.js', '.mjs', '.cjs')):
+                          continue
+                      path = package_root + target[2:]
+                      assert path in paths, f'missing installed plugin entrypoint: {name}:{target}'
+                      content = archive.read(path)
+                      entrypoints.append({'path': path, 'sha256': hashlib.sha256(content).hexdigest(), 'bytes': len(content)})
+                  assert entrypoints, f'plugin has no installed JavaScript entrypoint: {name}'
+                  patch_bytes = archive.read(patch_path)
+                  installed_payloads.append({
+                      'name': name,
+                      'version': package['version'],
+                      'packageManifest': {'path': package_path, 'sha256': hashlib.sha256(package_bytes).hexdigest()},
+                      'entrypoints': entrypoints,
+                      'bundlePatch': {'path': patch_path, 'sha256': hashlib.sha256(patch_bytes).hexdigest()},
+                  })
+              pathlib.Path('evidence/runtime-installed-plugin-payload.json').write_text(json.dumps(installed_payloads, indent=2) + '\n')
+
+              runtime_paths = set(paths)
+              seeds = [path for path in paths if '/plugin-seed/' in path]
+              assert not seeds, seeds
+              starts = [
+                  runtime_root + 'node_modules/@deepseek-ai/dsh-app-boot/lib/index.js',
+                  runtime_root + 'node_modules/@deepseek-ai/dsh/lib/profile-boot.js',
+                  runtime_root + 'node_modules/dsh-boot-ocbc/lib/client.js',
+              ]
+              closure = set()
+              pending = list(starts)
+              import_pattern = re.compile(rb'''(?:\bfrom\s*|\bimport\s*\(|\brequire\s*\()\s*["'](\.[^"']+)["']''')
+              while pending:
+                  path = pending.pop()
+                  if path in closure:
+                      continue
+                  assert path in runtime_paths, f'missing runtime closure file: {path}'
+                  closure.add(path)
+                  source_bytes = archive.read(path)
+                  for match in import_pattern.finditer(source_bytes):
+                      specifier = match.group(1).decode('utf-8')
+                      base = posixpath.normpath(posixpath.join(posixpath.dirname(path), specifier))
+                      candidates = [base] if posixpath.splitext(base)[1] else [base + suffix for suffix in ('.js', '.mjs', '.cjs')]
+                      candidates += [base + '/index.js']
+                      resolved = next((candidate for candidate in candidates if candidate in runtime_paths), None)
+                      if posixpath.splitext(base)[1] in ('.js', '.mjs', '.cjs'):
+                          assert resolved is not None, f'missing relative JavaScript import from {path}: {specifier}'
+                      if resolved:
+                          pending.append(resolved)
+              closure_records = []
+              digest = hashlib.sha256()
+              for path in sorted(closure):
+                  content = archive.read(path)
+                  relative_path = path[len(runtime_root):]
+                  digest.update(f'{len(relative_path.encode())}:{relative_path}{len(content)}:'.encode())
+                  digest.update(content)
+                  closure_records.append({'path': relative_path, 'sha256': hashlib.sha256(content).hexdigest(), 'bytes': len(content)})
+              playback_extensions = {'.js', '.png', '.webp', '.jpg', '.jpeg', '.svg', '.woff', '.woff2', '.ttf', '.otf', '.css', '.webm', '.mp4', '.gif'}
+              ocbc_root = runtime_root + 'node_modules/dsh-boot-ocbc/'
+              ocbc_files = []
+              for path in sorted(paths):
+                  if not path.startswith(ocbc_root) or pathlib.PurePosixPath(path).suffix.lower() not in playback_extensions:
+                      continue
+                  content = archive.read(path)
+                  ocbc_files.append({
+                      'path': 'dsh/node_modules/dsh-boot-ocbc/' + path[len(ocbc_root):],
+                      'bytes': len(content),
+                      'sha256': hashlib.sha256(content).hexdigest(),
+                  })
+              assert len(ocbc_files) == 118, f'Unexpected OCBC playback file count: {len(ocbc_files)}'
+              assert sum(item['bytes'] for item in ocbc_files) == 23193767, 'OCBC playback byte size differs from the verified macOS archive'
+              closure_report = {
+                  'schemaVersion': 1,
+                  'resourceRoot': runtime_root,
+                  'entrypoints': [path[len(runtime_root):] for path in starts],
+                  'files': closure_records,
+                  'sha256': digest.hexdigest(),
+                  'ocbcPlaybackFiles': ocbc_files,
+              }
+              pathlib.Path('evidence/runtime-closure-fingerprint.json').write_text(json.dumps(closure_report, indent=2) + '\n')
+
+          with wrapper.open('rb') as source:
+              wrapper_sha = hashlib.file_digest(source, 'sha256').hexdigest()
+          pathlib.Path('evidence/standard-user-win-x64.json').write_text(json.dumps(standard, indent=2) + '\n')
+          receipt = {
+              'schemaVersion': 1,
+              'runId': int(os.environ['SOURCE_RUN']),
+              'runHeadSha': os.environ['EXPECTED_BUILD_SHA'],
+              'sourceTag': os.environ['DESKTOP_TAG'],
+              'tagCommitSha': os.environ['EXPECTED_SOURCE_SHA'],
+              'releaseId': int(os.environ['RELEASE_ID']),
+              'wrapper': {'artifactId': int(os.environ['WINDOWS_ARTIFACT_ID']), 'artifactName': 'dsh-desktop-win-x64',
+                          'apiDigest': 'sha256:' + os.environ['EXPECTED_WRAPPER_SHA256'],
+                          'sha256': wrapper_sha, 'bytes': wrapper.stat().st_size},
+              'windows': {'archive': expected_zip, 'sha256': windows_sha, 'bytes': windows_zip.stat().st_size, 'crc': 'passed'},
+              'standardUser': standard,
+              'runtimePlugins': [{'name': item['name'], 'version': item['version'], 'sourceSha256': item['sourceSha256']} for item in plugins],
+              'installedPluginPayloadCount': len(installed_payloads),
+              'runtimeClosureSha256': closure_report['sha256'],
+          }
+          pathlib.Path('evidence/transfer-receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
+          print(json.dumps({'wrapperSha256': wrapper_sha, 'wrapperBytes': wrapper.stat().st_size,
+                            'windowsSha256': windows_sha, 'windowsBytes': windows_zip.stat().st_size,
+                            'pluginCount': len(plugins), 'runtimeClosureSha256': closure_report['sha256']}))
+          PY
+
+      - name: Recheck the draft and upload only the verified Windows ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/$GH_REPO/releases/$RELEASE_ID" > "$RUNNER_TEMP/release-before-upload.json"
+          export RELEASE_FILE="$RUNNER_TEMP/release-before-upload.json"
+          python3 - <<'PY'
+          import json, os
+          release = json.load(open(os.environ['RELEASE_FILE']))
+          assert str(release['id']) == os.environ['EXPECTED_RELEASE_ID']
+          assert release['tag_name'] == '0.2.0.rc.2.6'
+          assert release['draft'] is True and release['prerelease'] is True
+          assert release['target_commitish'] == os.environ['EXPECTED_SOURCE_SHA']
+          assert not any(asset['name'] == 'dsh-desktop-0.2.0.rc.2.6-win-x64.zip' for asset in release['assets'])
+          PY
+          curl --fail --silent --show-error --request POST \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header 'Accept: application/vnd.github+json' \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            --header 'Content-Type: application/zip' \
+            --data-binary '@incoming/dsh-desktop-0.2.0.rc.2.6-win-x64.zip' \
+            "https://uploads.github.com/repos/$GH_REPO/releases/$RELEASE_ID/assets?name=dsh-desktop-0.2.0.rc.2.6-win-x64.zip" \
+            > "$RUNNER_TEMP/uploaded-asset.json"
+          gh api "repos/$GH_REPO/releases/$RELEASE_ID" > "$RUNNER_TEMP/release-after-upload.json"
+          export UPLOADED_ASSET_FILE="$RUNNER_TEMP/uploaded-asset.json"
+          export RELEASE_FILE="$RUNNER_TEMP/release-after-upload.json"
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib
+          uploaded = json.load(open(os.environ['UPLOADED_ASSET_FILE']))
+          release = json.load(open(os.environ['RELEASE_FILE']))
+          assert str(release['id']) == os.environ['EXPECTED_RELEASE_ID']
+          assert release['tag_name'] == '0.2.0.rc.2.6'
+          assert release['draft'] is True and release['prerelease'] is True
+          assert release['target_commitish'] == os.environ['EXPECTED_SOURCE_SHA']
+          matches = [asset for asset in release['assets'] if asset['name'] == 'dsh-desktop-0.2.0.rc.2.6-win-x64.zip']
+          assert len(matches) == 1
+          asset = matches[0]
+          path = pathlib.Path('incoming/dsh-desktop-0.2.0.rc.2.6-win-x64.zip')
+          with path.open('rb') as source:
+              digest = hashlib.file_digest(source, 'sha256').hexdigest()
+          assert uploaded['id'] == asset['id']
+          assert uploaded['size'] == asset['size'] == path.stat().st_size
+          assert asset['digest'] == 'sha256:' + digest
+          evidence = pathlib.Path('evidence/transfer-receipt.json')
+          receipt = json.loads(evidence.read_text())
+          receipt['uploadedAsset'] = {'id': asset['id'], 'name': asset['name'], 'digest': asset['digest'], 'size': asset['size']}
+          evidence.write_text(json.dumps(receipt, indent=2) + '\n')
+          print(json.dumps(receipt['uploadedAsset']))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: desktop-rc26-windows-transfer-evidence
+          path: evidence/
+          if-no-files-found: warn
+          include-hidden-files: true
