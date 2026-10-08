@@ -27,6 +27,8 @@ export interface ProfileContext {
   readonly overlays: readonly PatchOptions[]
   /** Launch-time DSH_TELEMETRY_DISABLED value; any non-empty value opts out. */
   readonly telemetryDisabledEnv: string | undefined
+  /** Whether this process launched the desktop profile with intranet policy enabled. */
+  readonly desktopIntranet?: boolean
 }
 
 declare module '@deepseek-ai/cordis' {
@@ -37,6 +39,20 @@ declare module '@deepseek-ai/cordis' {
 }
 
 const TELEMETRY_ROW_ID = 'session-telemetry-otel'
+const DESKTOP_INTRANET_DISABLED_ROWS = [
+  'desktop-product-telemetry',
+  'product-analytics',
+  'deepseek-account',
+  'llm-deepseek',
+  'llm-deepseek-account',
+  'ui-settings-account',
+  'account-controller',
+  'ui-settings-session-log',
+  'session-telemetry-otel',
+  'session-log-deepseek',
+  'plugin-package-inventory-deepseek',
+  'web-search-deepseek',
+] as const
 
 /**
  * Resolve the telemetry opt-out switch into its boot patch. ANY non-empty
@@ -54,11 +70,11 @@ export function resolveTelemetryPatch(disabledEnv: string | undefined, hasRow: b
   return { id: TELEMETRY_ROW_ID, disabled: true }
 }
 
-/** Read current bundle and user layers with the launch-time overlays.
+/** Read current bundle and user layers with launch-time enforcement patches.
  * @param binName Diagnostic prefix for malformed or missing configuration.
  * @param context Data supplied by the profile launcher.
  * @param initialProfile Already loaded startup profile; omitted reads the current files.
- * @returns Detached ordered patches; this function does not update the Loader.
+ * @returns Detached ordered patches, with telemetry opt-out and desktop intranet policy last; this function does not update the Loader.
  */
 export function readProfilePatches(binName: string, context: ProfileContext, initialProfile?: Profile): PatchOptions[] {
   const profile = initialProfile ?? loadProfileDirectory(binName, context.dir, context.installAnchor, { userLayer: false })
@@ -68,8 +84,23 @@ export function readProfilePatches(binName: string, context: ProfileContext, ini
     ...(loadOptionalPatches(binName, join(context.home, PROFILE_PATCH_FILENAME)) ?? []),
     ...context.overlays,
   ])
+  const rows = composeEntries([patches])
   const telemetryPatch = resolveTelemetryPatch(context.telemetryDisabledEnv,
-    composeEntries([patches]).some(row => row.id === TELEMETRY_ROW_ID))
+    rows.some(row => row.id === TELEMETRY_ROW_ID))
   if (telemetryPatch !== undefined) patches.push(telemetryPatch)
+  if (context.name === 'desktop' && context.desktopIntranet === true) {
+    const presentIds = new Set(rows.map(row => row.id))
+    for (const id of DESKTOP_INTRANET_DISABLED_ROWS) {
+      if (presentIds.has(id)) patches.push({ id, disabled: true })
+    }
+    const models = rows.find(row => row.id === 'ui-settings-models')
+    if (models !== undefined) {
+      const config = models.config as Record<string, unknown> | undefined
+      patches.push({
+        id: 'ui-settings-models',
+        config: { ...config, credentialOnboarding: false },
+      })
+    }
+  }
   return patches
 }

@@ -10,6 +10,7 @@ import {
 import { tmpdir } from 'node:os'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { pathToFileURL } from 'node:url'
 import { afterAll, describe, expect, it, onTestFinished, vi } from 'vitest'
 import {
@@ -17,6 +18,7 @@ import {
   createRuntimeResolution,
   getDshRuntimeVersion,
   initProfile,
+  loadOverlayPatches,
   loadProfile,
   loadProfileDirectory,
   PROFILE_COMPATIBILITY_FILENAME,
@@ -205,6 +207,74 @@ it('composes current files from profile data and retains launch overlay and tele
   expect(composeEntries([readProfilePatches('test', { ...enabled, overlays: [] })])[0]?.disabled).toBe(true)
   writeFileSync(patchPath, '- id: session-telemetry-otel\n  disabled: false\n')
   expect(composeEntries([readProfilePatches('test', { ...enabled, overlays: [] })])[0]?.disabled).toBe(false)
+})
+
+it('applies desktop intranet privacy policy after real bundle, profile, home, and command layers', () => {
+  const home = tmp()
+  const dir = join(home, 'profiles', 'desktop')
+  mkdirSync(dir, { recursive: true })
+  const profilePatch = join(dir, PROFILE_PATCH_FILENAME)
+  writeFileSync(profilePatch, JSON.stringify([
+    { id: 'desktop-product-telemetry', disabled: false },
+    { id: 'product-analytics', disabled: false, config: { enabled: true } },
+    { id: 'session-log-deepseek', disabled: false, config: { enabled: true } },
+    { id: 'ui-settings-models', config: { credentialOnboarding: true, userSetting: 'retained' } },
+  ]))
+  writeFileSync(join(home, PROFILE_PATCH_FILENAME), JSON.stringify([
+    { id: 'desktop-product-telemetry', disabled: false },
+    { id: 'product-analytics', disabled: false, config: { enabled: true } },
+    { id: 'session-telemetry-otel', disabled: false, config: { mode: 'FEEDBACK_ONLY' } },
+    { id: 'session-log-deepseek', disabled: false, config: { enabled: true } },
+  ]))
+  const basePatches = loadOverlayPatches('test', fileURLToPath(new URL('../../../bundle/base/cordis.patch.yml', import.meta.url)))
+  const webPatches = loadOverlayPatches('test', fileURLToPath(new URL('../../../bundle/web-app/cordis.patch.yml', import.meta.url)))
+  const profile: Profile = {
+    name: 'desktop', dir, patchPath: profilePatch,
+    layers: [
+      { packageName: '@deepseek-ai/dsh-base', packageDir: '', patchPaths: [], patches: basePatches },
+      { packageName: '@deepseek-ai/dsh-web-app', packageDir: '', patchPaths: [], patches: webPatches },
+    ],
+    patches: loadOverlayPatches('test', profilePatch), skippedBundles: [],
+  }
+  const overlays = [
+    { id: 'desktop-product-telemetry', disabled: false },
+    { id: 'product-analytics', disabled: false, config: { enabled: true } },
+    { id: 'session-telemetry-otel', disabled: false, config: { mode: 'FEEDBACK_ONLY' } },
+    { id: 'session-log-deepseek', disabled: false, config: { enabled: true } },
+    { id: 'ui-settings-models', config: { credentialOnboarding: true, commandSetting: 'retained' } },
+    { id: 'agent-default-model', config: { provider: 'custom-provider', model: 'custom-model' } },
+    { insert: [{ id: 'custom-provider', name: 'user/custom-provider' }, { id: 'custom-model', name: 'user/custom-model' }] },
+  ]
+  const context = {
+    name: 'desktop', dir, patchPath: profilePatch, installAnchor: '', home, cwd: home,
+    startedBundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'], overlays,
+    telemetryDisabledEnv: undefined, desktopIntranet: true,
+  }
+  const rows = composeEntries([readProfilePatches('test', context, profile)])
+  const byId = new Map(rows.map(row => [row.id, row]))
+  for (const id of [
+    'desktop-product-telemetry', 'product-analytics', 'deepseek-account', 'llm-deepseek',
+    'llm-deepseek-account', 'ui-settings-account', 'account-controller', 'ui-settings-session-log',
+    'session-telemetry-otel', 'session-log-deepseek', 'plugin-package-inventory-deepseek', 'web-search-deepseek',
+  ]) expect(byId.get(id)?.disabled).toBe(true)
+  expect(byId.get('ui-settings-models')?.config).toMatchObject({ credentialOnboarding: false, commandSetting: 'retained' })
+  expect(byId.get('agent-default-model')?.config).toMatchObject({ provider: 'custom-provider', model: 'custom-model' })
+  expect(byId.has('custom-provider')).toBe(true)
+  expect(byId.has('custom-model')).toBe(true)
+  expect(byId.get('web')?.config).toMatchObject({ searchProvider: 'deepseek-official' })
+  expect(byId.get('otel')?.disabled).not.toBe(true)
+  expect(byId.get('session-log-download')?.disabled).not.toBe(true)
+
+  const nonIntranet = composeEntries([readProfilePatches('test', { ...context, desktopIntranet: false }, profile)])
+  expect(nonIntranet.find(row => row.id === 'product-analytics')?.disabled).toBe(false)
+  expect(nonIntranet.find(row => row.id === 'session-log-deepseek')?.disabled).toBe(false)
+  expect(nonIntranet.find(row => row.id === 'web-search-deepseek')?.disabled).not.toBe(true)
+
+  const minimalProfile: Profile = { ...profile, layers: [], patches: [] }
+  const minimal = composeEntries([readProfilePatches('test', {
+    ...context, overlays: [{ insert: [{ id: 'custom-only', name: 'user/custom-only' }] }],
+  }, minimalProfile)])
+  expect(minimal.map(row => row.id)).toEqual(['custom-only'])
 })
 
 describe('initProfile', () => {

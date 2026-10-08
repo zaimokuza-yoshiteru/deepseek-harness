@@ -1784,6 +1784,11 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Launch-time DSH_TELEMETRY_DISABLED value; any non-empty value opts out.',
         parameters: [],
       },
+      {
+        signature: 'readonly desktopIntranet?: boolean',
+        description: 'Whether this process launched the desktop profile with intranet policy enabled.',
+        parameters: [],
+      },
     ],
   },
   {

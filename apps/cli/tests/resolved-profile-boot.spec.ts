@@ -100,6 +100,7 @@ describe('runProfile with an application-owned profile', () => {
     writeFileSync(join(localPackageDir, 'index.cjs'), 'module.exports = "profile"\n')
     vi.stubEnv('DSH_HOME', home)
     vi.stubEnv('DSH_TELEMETRY_DISABLED', '1')
+    vi.stubEnv('DSH_DESKTOP_INTRANET', '1')
     vi.spyOn(process, 'on').mockReturnValue(process)
     const oldExitCode = process.exitCode
     const ctx = new Context()
@@ -117,18 +118,25 @@ describe('runProfile with an application-owned profile', () => {
     const homePatch = join(home, 'cordis.patch.yml')
     const profilePatch = join(home, 'profile.patch.yml')
     const overlay = join(home, 'desktop.patch.yml')
-    writeFileSync(homePatch, '- id: target\n  config: { home: true, priority: home }\n')
-    writeFileSync(profilePatch, '- id: target\n  config: { profile: true, priority: profile }\n')
-    writeFileSync(overlay, '- id: target\n  config: { overlay: true, priority: overlay }\n')
+    writeFileSync(homePatch, '- id: target\n  config: { home: true, priority: home }\n- id: product-analytics\n  disabled: false\n- id: session-log-deepseek\n  disabled: false\n')
+    writeFileSync(profilePatch, '- id: target\n  config: { profile: true, priority: profile }\n- id: product-analytics\n  disabled: false\n')
+    writeFileSync(overlay, '- id: target\n  config: { overlay: true, priority: overlay }\n- id: product-analytics\n  disabled: false\n- id: session-log-deepseek\n  disabled: false\n- id: ui-settings-models\n  config: { credentialOnboarding: true, retained: true }\n')
     writeFileSync(join(home, 'cordis.yml'), '- id: stale\n')
     const profile: Profile = { skippedBundles: [],
       name: 'desktop', dir: home, patchPath: profilePatch,
-      patches: [{ id: 'target', config: { profile: true, priority: 'profile' } }],
+      patches: [
+        { id: 'target', config: { profile: true, priority: 'profile' } },
+        { id: 'product-analytics', disabled: false },
+      ],
       layers: [{
         packageName: 'test-bundle', packageDir: home, patchPaths: [join(home, 'bundle.yml')],
         patches: [{ insert: [
           { id: 'target', name: 'target', config: { bundle: true, priority: 'bundle' } },
           { id: 'session-telemetry-otel', name: 'telemetry' },
+          { id: 'product-analytics', name: 'analytics' },
+          { id: 'session-log-deepseek', name: 'session log' },
+          { id: 'web-search-deepseek', name: 'DeepSeek search' },
+          { id: 'ui-settings-models', name: 'model settings', config: { credentialOnboarding: true, retained: true } },
         ] }],
       }],
     }
@@ -156,14 +164,20 @@ describe('runProfile with an application-owned profile', () => {
       expect(ready).toHaveBeenCalledOnce()
       const patches = vi.mocked(boot).mock.calls[0]![2]!
       const rows = composeEntries([patches])
-      expect(patches.slice(1, 4)).toEqual([
+      expect(patches.filter(patch => patch.id === 'target')).toEqual([
         { id: 'target', config: { profile: true, priority: 'profile' } },
         { id: 'target', config: { home: true, priority: 'home' } },
         { id: 'target', config: { overlay: true, priority: 'overlay' } },
       ])
       expect(rows.find(row => row.id === 'target')?.config).toEqual({ overlay: true, priority: 'overlay' })
       expect(rows.find(row => row.id === 'session-telemetry-otel')?.disabled).toBe(true)
-      expect(ctx.profileContext).toMatchObject({ dir: home, patchPath: profilePatch, installAnchor: runtime.installAnchor })
+      expect(rows.find(row => row.id === 'product-analytics')?.disabled).toBe(true)
+      expect(rows.find(row => row.id === 'session-log-deepseek')?.disabled).toBe(true)
+      expect(rows.find(row => row.id === 'web-search-deepseek')?.disabled).toBe(true)
+      expect(rows.find(row => row.id === 'ui-settings-models')?.config).toEqual({ credentialOnboarding: false, retained: true })
+      expect(ctx.profileContext).toMatchObject({
+        dir: home, patchPath: profilePatch, installAnchor: runtime.installAnchor, desktopIntranet: true,
+      })
       await shutdown.shutdown(0)
       expect(dispose).toHaveBeenCalledOnce()
       expect(disposeProxy).toHaveBeenCalledOnce()
