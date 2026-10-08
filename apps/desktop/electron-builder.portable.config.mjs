@@ -1,7 +1,6 @@
 /** Internal ZIP distribution; no npm publication, installer, or automatic updater. */
 import { desktopTargetPlatform, resolveDesktopBuildTarget, resolveDesktopTargetBuildPaths } from './scripts/desktop-build-paths.mjs'
 import { join } from 'node:path'
-import { verifyDesktopRuntime } from './lib/types/runtime-tree.js'
 import { fileURLToPath } from 'node:url'
 import { readFileSync } from 'node:fs'
 import { resolveDesktopDistributionVersion } from '../../scripts/desktop-distribution-version.mjs'
@@ -22,6 +21,9 @@ export default {
   electronFuses: { runAsNode: true },
   npmRebuild: false,
   afterPack: async context => {
+    // The source config is imported by tests before the desktop TypeScript build
+    // has produced lib/. The hook runs during packaging, after that build.
+    const { verifyDesktopRuntime } = await import('./lib/types/runtime-tree.js')
     await verifyDesktopRuntime(join(context.packager.getResourcesDir(context.appOutDir), 'dsh'),
       JSON.parse(readFileSync(join(paths.dsh, 'package.json'), 'utf8')).version,
       desktopTargetPlatform(target))

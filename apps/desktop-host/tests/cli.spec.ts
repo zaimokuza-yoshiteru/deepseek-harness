@@ -1,4 +1,5 @@
 import { expect, it, vi } from 'vitest'
+import { join } from 'node:path'
 
 const { runCli } = vi.hoisted(() => ({ runCli: vi.fn(async () => {}) }))
 vi.mock('@deepseek-ai/dsh/lib/bin.js', () => ({ runCli }))
@@ -12,7 +13,7 @@ it('supplies the physical runtime manifest as the Desktop CLI package graph anch
   await runDesktopCli(runtime, support)
   expect(runCli).toHaveBeenCalledWith(expect.objectContaining({
     manageDesktopProfile: true,
-    installAnchor: `${runtime}/package.json`,
+    installAnchor: join(runtime, 'package.json'),
     packageManager: expect.objectContaining({ command: process.execPath }),
   }))
 })
