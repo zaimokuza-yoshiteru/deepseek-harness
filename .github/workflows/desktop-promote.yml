@@ -288,7 +288,7 @@ jobs:
           assert artifact['digest'] == 'sha256:' + os.environ['EXPECTED_WINDOWS_ARTIFACT_SHA256']
           assert artifact['expired'] is False
           PY
-          gh api "repos/$GH_REPO/releases/tags/$DESKTOP_TAG" > "$RUNNER_TEMP/release.json"
+          gh api "repos/$GH_REPO/releases/406690206" > "$RUNNER_TEMP/release.json"
           python3 - <<'PY'
           import json, os
           release = json.load(open(os.environ['RUNNER_TEMP'] + '/release.json'))
@@ -413,7 +413,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh api "repos/$GH_REPO/releases/tags/$DESKTOP_TAG" > "$RUNNER_TEMP/release-before-upload.json"
+          gh api "repos/$GH_REPO/releases/406690206" > "$RUNNER_TEMP/release-before-upload.json"
           python3 - <<'PY'
           import json, os
           release = json.load(open(os.environ['RUNNER_TEMP'] + '/release-before-upload.json'))
@@ -431,7 +431,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p evidence
-          gh api "repos/$GH_REPO/releases/tags/$DESKTOP_TAG" > "$RUNNER_TEMP/release-assets.json"
+          gh api "repos/$GH_REPO/releases/406690206" > "$RUNNER_TEMP/release-assets.json"
           python3 scripts/write-rc25-transfer-receipt.py \
             --manifest incoming/mac/rc25-transfer-mac-arm64.manifest.json \
             --mac-zip incoming/mac/dsh-desktop-0.2.0.rc.2.5-mac-arm64.zip \
