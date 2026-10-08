@@ -27,10 +27,12 @@ import type { Readable, Writable } from 'node:stream'
  * 逐行脱敏环），由 {@link narrowSubprocessSeam} 的适配器在调用点固定填入。
  */
 export interface AcpSubprocessSpawnSpec {
-  /** 完整 argv（`argv[0]` 为可执行文件）；绝不拼 shell 字符串。 */
+  /** 完整 argv（`argv[0]` 为可执行文件）；只有准备好的 Windows cmd shim 才会携带转义命令行。 */
   readonly argv: readonly string[]
   /** 子进程工作目录。 */
   readonly cwd: string
+  /** Windows-only pre-escaped argv for a cmd.exe shim; ordinary agents leave this unset. */
+  readonly windowsVerbatimArguments?: boolean
   /**
    * 显式环境条目（合并于 provider scrub 底座之后）：string = 放行/覆盖
    * （credential 形名也可经此显式穿透）；`undefined` = tombstone 删除一个

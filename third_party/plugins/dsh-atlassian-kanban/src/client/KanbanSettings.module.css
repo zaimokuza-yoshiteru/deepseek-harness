@@ -1,4 +1,6 @@
 .settings { box-sizing: border-box; display: grid; gap: 20px; width: min(100%, 900px); max-width: 100%; min-width: 0; color: var(--dsw-alias-label-primary); font: var(--dsw-font-s-14); }
+.settings :global(button) { font: var(--dsw-font-xs-13); }
+.settings :global(input) { font-family: var(--dsw-font-family); }
 .product { display: grid; gap: 12px; min-width: 0; padding: 0 0 20px; border-bottom: 0.5px solid var(--dsw-alias-border-l2); }
 .sectionTitle { margin: 0; font: var(--dsw-font-m-18); }
 .toggleRow { display: flex; align-items: center; justify-content: space-between; gap: 16px; color: var(--dsw-alias-label-primary); font: var(--dsw-font-xs-13); }

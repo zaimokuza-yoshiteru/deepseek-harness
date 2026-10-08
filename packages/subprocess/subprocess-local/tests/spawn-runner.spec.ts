@@ -131,6 +131,8 @@ describe('closed runner protocol', () => {
     expect(consumeLinuxLaunchRequest(files.requestPath)).toEqual({ cwd: '/target', env: {}, control: 'pipe' })
     expect(parseWindowsStartRequest({ type: 'start', cwd: 'C:\\target', env: {}, control: 'pipe' }))
       .toEqual({ type: 'start', cwd: 'C:\\target', env: {}, control: 'pipe' })
+    expect(parseWindowsStartRequest({ type: 'start', cwd: 'C:\\target', env: {}, windowsVerbatimArguments: true }))
+      .toEqual({ type: 'start', cwd: 'C:\\target', env: {}, windowsVerbatimArguments: true })
     const invalid = track(createLinuxLaunchFiles({ cwd: '/target', env: {} }))
     writeFileSync(invalid.requestPath, JSON.stringify({ cwd: '/target', env: {}, control: 'ipc' }))
     expect(() => consumeLinuxLaunchRequest(invalid.requestPath)).toThrow('invalid Linux launch request')
@@ -202,6 +204,7 @@ describe('closed runner protocol', () => {
     expect(parseWindowsStartRequest({ type: 'start', cwd: 'C:\\x', env: { A: '1' } })).toEqual({
       type: 'start', cwd: 'C:\\x', env: { A: '1' },
     })
+    expect(() => parseWindowsStartRequest({ type: 'start', cwd: 'C:\\x', env: {}, windowsVerbatimArguments: 'true' })).toThrow()
     expect(() => parseWindowsStartRequest({ type: 'start', cwd: 'C:\\x', env: {}, extra: 1 })).toThrow()
     expect(isWindowsTerminateRequest({ type: 'terminate' })).toBe(true)
     expect(isWindowsTerminateRequest({ type: 'terminate', reason: 'no' })).toBe(false)
@@ -726,6 +729,19 @@ describe('Windows Job runner protocol owner', () => {
     expect(host.sent).toEqual([{ type: 'target-exit', exitCode: 0 }])
     expect(host.exitCode).toBe(0)
     expect(host.env).toEqual({ SAFE: 'bootstrap' })
+  })
+
+  it('preserves pre-escaped cmd.exe arguments through the native managed Job launch', async () => {
+    const host = new FakeRunnerHost()
+    const native = internals()
+    await runWindows(host, native, {
+      type: 'start', cwd: 'C:\\target', env: {}, windowsVerbatimArguments: true,
+    }, ['C:\\Windows\\System32\\cmd.exe', '/d', '/s', '/c', '"escaped^ command"'])
+    expect(native.spawnCurrentTokenJobProcess).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      command: 'C:\\Windows\\System32\\cmd.exe',
+      args: ['/d', '/s', '/c', '"escaped^ command"'],
+      windowsVerbatimArguments: true,
+    }))
   })
 
   it.each([undefined, 'pipe'] as const)('closes every target carrier with control %s before the first Windows poll', async (control) => {

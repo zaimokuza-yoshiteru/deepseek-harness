@@ -20,6 +20,7 @@ import {
   net,
   protocol,
   session,
+  screen,
   shell,
   type IpcMainInvokeEvent,
   type MenuItemConstructorOptions,
@@ -61,6 +62,11 @@ import { DesktopUpdateOverlays } from './update-overlay.ts'
 import { DesktopQuitConfirmation } from './quit-confirmation.ts'
 import { DesktopTray } from './tray.ts'
 import { DesktopBackgroundNotice } from './background-notice.ts'
+import {
+  DesktopWindowStateFlushTimeoutError,
+  DesktopWindowStatePersistence,
+  type DesktopWindowBounds,
+} from './window-state.ts'
 
 app.setPath('userData', configureDesktopDistribution())
 const intranet = process.env.DSH_DESKTOP_INTRANET === '1'
@@ -211,10 +217,11 @@ function platformLoginUrl(authorizeUrl: string): string {
   return url.href
 }
 
-function createWindow(preload: string, show = false, primary = false): BrowserWindow {
+function createWindow(preload: string, show = false, primary = false, bounds?: DesktopWindowBounds): BrowserWindow {
   const window = new BrowserWindow({
     width: 1280,
     height: 820,
+    ...(bounds ?? {}),
     minWidth: 520,
     minHeight: 600,
     show,
@@ -348,6 +355,8 @@ async function main(): Promise<void> {
     return result.environment
   })
   const selectedHome = process.env.DSH_HOME
+  const windowState = new DesktopWindowStatePersistence(join(app.getPath('userData'), 'window-state.json'),
+    () => screen.getAllDisplays())
   const fallbackNode = app.isPackaged
     ? join(process.resourcesPath, 'runtime', 'primary-runtime', 'dependencies', 'node', 'bin', process.platform === 'win32' ? 'node.exe' : 'node')
     : process.execPath
@@ -645,6 +654,12 @@ async function main(): Promise<void> {
         const stillActive = await host.updateTasks('lock')
         if (stillActive && !active) throw new DesktopUpdatePreparationError('tasks-changed', locale.messages.updateTasksChanged)
         mandatoryUI?.preparingRestart(stillActive)
+        // Persist window geometry before any irreversible handoff step. A flush timeout must leave
+        // the Host running so the user can continue working and retry the installation.
+        try { await windowState.flush() } catch (error) {
+          console.warn('desktop window state: could not persist state before installer handoff', error)
+          if (error instanceof DesktopWindowStateFlushTimeoutError) throw error
+        }
         // The embedded Platform document holds credentials issued by the Host that is about to stop.
         await platformView.closeAndWait()
         requireCleanStop = true
@@ -664,12 +679,12 @@ async function main(): Promise<void> {
       }
       return true
     },
-    undefined, undefined, undefined,
+    undefined, intranet ? () => false : undefined, undefined,
     (success, reason) => { void track('desktop_upgrade_download_result', { is_success: success, ...reason === undefined ? {} : { error_reason: reason } }) },
 
   )
 
-  const updateSchedule = new DesktopUpdateSchedule(updates, resolveDesktopUpdateScheduleConfig(process.env))
+  const updateSchedule = new DesktopUpdateSchedule(updates, resolveDesktopUpdateScheduleConfig(intranet ? {} : process.env))
 
   const downloadUpdate = async (version: string): Promise<DesktopUpdateState> => {
     void track('desktop_upgrade_click', {})
@@ -827,6 +842,9 @@ async function main(): Promise<void> {
   let promptOperation: Promise<void> | undefined
   let policyAuthenticationQueued = false
   const openUpdatePrompt = (manual = false): Promise<void> => {
+    // The intranet distribution has no reachable update source. Keep every entry point inert,
+    // including IPC callers that bypass the native application menu.
+    if (intranet) return Promise.resolve()
     if (authenticationOperation !== undefined) {
       policyAuth?.focus(); updateDialog.focus()
     }
@@ -944,6 +962,7 @@ async function main(): Promise<void> {
   }
 
   const automaticCheck = (): void => {
+    if (intranet) return
     if (!quitting) void mandatoryPolicy?.check('foreground-or-resume').catch((error: unknown) => { console.error(error) })
     if (!quitting) void updateSchedule.check().catch((error: unknown) => { console.error(error) })
   }
@@ -983,12 +1002,14 @@ async function main(): Promise<void> {
       ? { label: currentDesktopLocale().messages.aboutMenu,
         click: () => { void showAbout().catch((error: unknown) => { console.error(error) }) } }
       : { label: currentDesktopLocale().messages.aboutMenu, role: 'about' },
-    { type: 'separator' },
-    { label: currentDesktopLocale().messages.checkUpdatesMenu, click: () => { void openUpdatePrompt(true) } },
-    ...(!intranet && (process.platform === 'darwin' || process.platform === 'win32')
-      ? [{ label: currentDesktopLocale().messages.cliCommandMenu, click: () => { void commandManager.show() } }] : []),
-    ...development ? [
+    ...(!intranet ? [
       { type: 'separator' as const },
+      { label: currentDesktopLocale().messages.checkUpdatesMenu, click: () => { void openUpdatePrompt(true) } },
+      ...(process.platform === 'darwin' || process.platform === 'win32'
+        ? [{ label: currentDesktopLocale().messages.cliCommandMenu, click: () => { void commandManager.show() } }] : []),
+    ] : []),
+    ...development ? [
+      ...(!intranet ? [{ type: 'separator' as const }] : []),
       { label: currentDesktopLocale().messages.reloadPageMenu, role: 'reload' as const },
       { label: currentDesktopLocale().messages.restartAppHostMenu, click: () => {
         if (quitting) return
@@ -1088,6 +1109,7 @@ async function main(): Promise<void> {
   const hideMainWindow = (window: BrowserWindow): void => {
     if (process.platform === 'darwin' && window.isFullScreen()) {
       // Hiding a fullscreen window leaves an empty black space; leave fullscreen first.
+      windowState.prepareForHide(window)
       window.once('leave-full-screen', () => { if (!window.isDestroyed()) window.hide() })
       window.setFullScreen(false)
     } else {
@@ -1095,7 +1117,7 @@ async function main(): Promise<void> {
     }
   }
   const createMainWindow = (): BrowserWindow => {
-    const window = createWindow(appPreload, false, true)
+    const window = createWindow(appPreload, false, true, windowState.initialBounds)
     mainWindow = window
     browserGuests.bind(window, (guest, name) => shortcuts.attachGuest(window, guest, name))
     shortcuts.attach(window)
@@ -1121,7 +1143,10 @@ async function main(): Promise<void> {
       window.on('focus', () => { sessionEnding = false })
       window.on('show', () => { sessionEnding = false })
     }
-    window.on('closed', () => { if (mainWindow === window) mainWindow = undefined })
+    window.on('closed', () => {
+      void windowState.close(window).catch((error: unknown) => { console.warn('desktop window state: could not persist state', error) })
+      if (mainWindow === window) mainWindow = undefined
+    })
     window.webContents.on('console-message', (details) => {
       if (details.level !== 'error') return
       rendererConsole.push(`${details.sourceId}:${String(details.lineNumber)} ${details.message}`)
@@ -1147,6 +1172,7 @@ async function main(): Promise<void> {
     const window = mainWindow ?? createMainWindow()
     await navigateMain(applicationUrl)
     if (isQuitting() || recovery.active || window.isDestroyed()) return
+    windowState.activate(window)
     if (activate) window.show()
     else window.showInactive()
     enteredWorkspace = true
@@ -1293,7 +1319,8 @@ async function main(): Promise<void> {
     updateSchedule.dispose()
     updateDialog.dispose()
     mandatoryUI?.dispose()
-    void Promise.all([Promise.resolve(mandatoryPolicy?.dispose()).then(() => policyAuth?.dispose()), backend.close(),
+    void Promise.all([windowState.flush().catch((error: unknown) => { console.warn('desktop window state: could not persist state', error) }),
+      Promise.resolve(mandatoryPolicy?.dispose()).then(() => policyAuth?.dispose()), backend.close(),
       // A Platform cleanup failure is logged without cutting the remaining Host shutdown short.
       platformView.dispose().catch((error: unknown) => { console.error(error) })])
       .catch((error: unknown) => { console.error(error) }).finally(() => { app.quit() })
@@ -1323,46 +1350,48 @@ async function main(): Promise<void> {
   })
 
   mainWindow = createMainWindow()
-  const manifest: unknown = JSON.parse(await readFile(join(app.getAppPath(), 'package.json'), 'utf8'))
-  if (typeof manifest !== 'object' || manifest === null) throw new Error('desktop policy: invalid application manifest')
-  const developmentPolicy = app.isPackaged ? undefined : process.env.DSH_DESKTOP_MANDATORY_UPDATE_CONFIG
-  const policyInput: unknown = app.isPackaged
-    ? ('dshMandatoryUpdatePolicy' in manifest ? manifest.dshMandatoryUpdatePolicy : undefined)
-    : developmentPolicy === undefined ? undefined : JSON.parse(developmentPolicy) as unknown
-  const policyConfig = resolveDesktopPolicyConfig(policyInput, !app.isPackaged)
-  if (policyConfig !== undefined) {
-    if (policyConfig.authentication === 'feishu-test') {
-      policyAuth = new DesktopPolicyTestAuth(policyConfig.origin, policyConfig.allowedAuthOrigins, locale,
-        () => mandatoryUI?.confirmationWindow ?? currentDialogWindow(),
-        (event) => { console.info(`desktop policy authentication: ${event}`); updateJournal?.action(`policy-login-${event}`) })
-    }
-    if (!['win32', 'darwin'].includes(process.platform) || !['x64', 'arm64'].includes(process.arch)) throw new Error('desktop policy: unsupported platform')
-    let wasBlocking = false
-    mandatoryPolicy = new DesktopMandatoryUpdatePolicy(policyConfig, {
-      platform: process.platform as 'win32' | 'darwin', arch: process.arch as 'x64' | 'arm64',
-      bundledDshVersion: app.isPackaged ? readDesktopRuntime(resources.dsh).release.version : app.getVersion(),
-    }, (state) => {
-      if (state.error !== 'authentication-required') policyAuthenticationQueued = false
-      if (state.blocking) {
-        for (const controller of ordinaryDialogs) controller.abort()
-        if (!wasBlocking) updateDialog.cancel()
+  if (!intranet) {
+    const manifest: unknown = JSON.parse(await readFile(join(app.getAppPath(), 'package.json'), 'utf8'))
+    if (typeof manifest !== 'object' || manifest === null) throw new Error('desktop policy: invalid application manifest')
+    const developmentPolicy = app.isPackaged ? undefined : process.env.DSH_DESKTOP_MANDATORY_UPDATE_CONFIG
+    const policyInput: unknown = app.isPackaged
+      ? ('dshMandatoryUpdatePolicy' in manifest ? manifest.dshMandatoryUpdatePolicy : undefined)
+      : developmentPolicy === undefined ? undefined : JSON.parse(developmentPolicy) as unknown
+    const policyConfig = resolveDesktopPolicyConfig(policyInput, !app.isPackaged)
+    if (policyConfig !== undefined) {
+      if (policyConfig.authentication === 'feishu-test') {
+        policyAuth = new DesktopPolicyTestAuth(policyConfig.origin, policyConfig.allowedAuthOrigins, locale,
+          () => mandatoryUI?.confirmationWindow ?? currentDialogWindow(),
+          (event) => { console.info(`desktop policy authentication: ${event}`); updateJournal?.action(`policy-login-${event}`) })
       }
-      mandatoryUI?.sync()
-      if (state.blocking && !wasBlocking) void updateSchedule.check(false, true).catch((error: unknown) => { console.error(error) })
-      wasBlocking = state.blocking
-    }, policyAuth?.request, () => desktopClientMetadata(locale.id))
-    const policy = mandatoryPolicy
-    mandatoryUI = new DesktopMandatoryUpdateWindow({
-      overlays: updateOverlays,
-      preload: fileURLToPath(new URL('./preload-mandatory.cjs', import.meta.url)), locale,
-      allowedPageOrigins: policyConfig.allowedPageOrigins, parent: () => mainWindow,
-      policy: () => policy.state, update: () => updates.state,
-      refresh: async () => { await Promise.all([checkPolicyManually(), updateSchedule.check(true)]) },
-      download: downloadUpdate, install: version => updates.install(version),
-    })
-    void mandatoryPolicy.check('launch').then((state) => {
-      if (app.isPackaged && state.error === 'authentication-required' && !isQuitting()) queuePolicyAuthentication()
-    }).catch((error: unknown) => { console.error(error) })
+      if (!['win32', 'darwin'].includes(process.platform) || !['x64', 'arm64'].includes(process.arch)) throw new Error('desktop policy: unsupported platform')
+      let wasBlocking = false
+      mandatoryPolicy = new DesktopMandatoryUpdatePolicy(policyConfig, {
+        platform: process.platform as 'win32' | 'darwin', arch: process.arch as 'x64' | 'arm64',
+        bundledDshVersion: app.isPackaged ? readDesktopRuntime(resources.dsh).release.version : app.getVersion(),
+      }, (state) => {
+        if (state.error !== 'authentication-required') policyAuthenticationQueued = false
+        if (state.blocking) {
+          for (const controller of ordinaryDialogs) controller.abort()
+          if (!wasBlocking) updateDialog.cancel()
+        }
+        mandatoryUI?.sync()
+        if (state.blocking && !wasBlocking) void updateSchedule.check(false, true).catch((error: unknown) => { console.error(error) })
+        wasBlocking = state.blocking
+      }, policyAuth?.request, () => desktopClientMetadata(locale.id))
+      const policy = mandatoryPolicy
+      mandatoryUI = new DesktopMandatoryUpdateWindow({
+        overlays: updateOverlays,
+        preload: fileURLToPath(new URL('./preload-mandatory.cjs', import.meta.url)), locale,
+        allowedPageOrigins: policyConfig.allowedPageOrigins, parent: () => mainWindow,
+        policy: () => policy.state, update: () => updates.state,
+        refresh: async () => { await Promise.all([checkPolicyManually(), updateSchedule.check(true)]) },
+        download: downloadUpdate, install: version => updates.install(version),
+      })
+      void mandatoryPolicy.check('launch').then((state) => {
+        if (app.isPackaged && state.error === 'authentication-required' && !isQuitting()) queuePolicyAuthentication()
+      }).catch((error: unknown) => { console.error(error) })
+    }
   }
   automaticCheck()
   await reconcileBackend().catch(() => undefined)

@@ -4,7 +4,8 @@
  * The frame owns the right column's geometry; this package owns one content
  * tree at the column width or spanning the viewport. A shown wide panel
  * retains its track in fullscreen, preserving the conversation width. Below
- * 768px fullscreen is derived from viewport width, without changing manual mode.
+ * 768px, or when normal columns cannot fit, fullscreen is derived without
+ * changing manual mode.
  *
  * Docked content stays mounted while collapsed, translated off the frame's right
  * edge, so opening and closing are one gesture in both presentations: a slide
@@ -89,7 +90,7 @@ export interface SidebarRightInjected {
    *
    * The fullscreen command reads the latest report: while it holds, the command
    * closes the panel instead of switching its recorded mode.
-   * @param autoFullscreen - whether the frame is narrower than the automatic fullscreen width.
+   * @param autoFullscreen - whether the frame is below the automatic fullscreen width or normal side-by-side columns cannot fit.
    */
   readonly reportAutoFullscreen: (autoFullscreen: boolean) => void
   /**
@@ -359,7 +360,7 @@ export function RightbarSeat({
   const shortcuts = useShortcuts(entries => entries)
   const surface = useStore(state => state.bySession[sessionId])
   const shown = active && surface !== undefined && surface.layout.expanded
-  const autoFullscreen = viewportWidth < 768
+  const autoFullscreen = viewportWidth < 768 || !canShow
   const fullscreen = autoFullscreen || surface?.layout.mode === 'fullscreen'
   const panelRef = useRef<HTMLDivElement | null>(null)
   // A reading never re-renders anything: the service applies it when it splits.
@@ -371,10 +372,6 @@ export function RightbarSeat({
   useEffect(() => {
     if (active && surface === undefined) actions.open(sessionId)
   }, [actions, sessionId, surface, active])
-
-  useLayoutEffect(() => {
-    if (shown && !fullscreen && !canShow) actions.setExpanded(sessionId, false)
-  }, [actions, sessionId, shown, fullscreen, canShow])
 
   // Read only when the fullscreen command runs, after this commit has settled.
   useLayoutEffect(() => { reportAutoFullscreen(autoFullscreen) }, [reportAutoFullscreen, autoFullscreen])

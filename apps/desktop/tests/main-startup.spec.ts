@@ -3,7 +3,7 @@ import { WINDOWS_TITLEBAR_HEIGHT } from '../src/windows-layout.ts'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { IpcMainInvokeEvent } from 'electron'
 import { join } from 'node:path'
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import type { MenuItemConstructorOptions, MessageBoxOptions } from 'electron'
 import { DESKTOP_IPC, type DesktopUpdateState } from '../src/ipc.ts'
@@ -12,9 +12,11 @@ import { DesktopHostFatalError, DesktopHostUncleanExitError } from '../src/host-
 import { en, zh } from '../src/locale.ts'
 import { DesktopUpdatePreparationError } from '../src/update-error.ts'
 import { writeCrashReport } from '../src/crash-report.ts'
+import { WELCOME_IPC } from '../src/welcome-api.ts'
 
 type InvokeEvent = { sender?: unknown; senderFrame: { url: string } }
 type InvokeHandler = (event: InvokeEvent, ...args: unknown[]) => unknown
+let testUserData = ''
 
 vi.mock('../src/distribution.ts', () => ({ configureDesktopDistribution: () => '/test/electron-user-data' }))
 vi.mock('../src/npm-environment.ts', () => ({ desktopNpmEnvironment: (env: NodeJS.ProcessEnv) => ({ env }) }))
@@ -26,6 +28,16 @@ vi.mock('../src/crash-report.ts', async importOriginal => ({
   writeCrashReport: vi.fn(async () => 'desktop-test-logs/crash-test.log'),
   pruneCrashReports: vi.fn(async () => {}),
 }))
+vi.mock('@deepseek-ai/dsh-atomic-write', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@deepseek-ai/dsh-atomic-write')>()
+  return {
+    ...actual,
+    writeFileAtomic: vi.fn(async (path: string, content: string, options: { mode: number; dirMode?: number }) => {
+      await harness.beforeAtomicWrite(path)
+      return actual.writeFileAtomic(path, content, options)
+    }),
+  }
+})
 
 const harness = await vi.hoisted(async () => {
   const { EventEmitter } = await import('node:events')
@@ -42,6 +54,7 @@ const harness = await vi.hoisted(async () => {
   const handlers = new Map<string, InvokeHandler>()
   let pluginsEnabled = false
   let prepareUpdate: (() => Promise<boolean>) | undefined
+  let updateEnabled: (() => boolean) | undefined
   let publishUpdate: ((state: DesktopUpdateState) => DesktopUpdateState) | undefined
   let preparing = deferred()
   let prepared = deferred()
@@ -58,6 +71,10 @@ const harness = await vi.hoisted(async () => {
   // each quit can control when that cleanup settles.
   const platformDispose = vi.fn(() => platformDisposeDeferred?.promise ?? Promise.resolve())
   let platformCloseDeferred: ReturnType<typeof deferred> | undefined
+  let welcomeNeeded = false
+  let welcomeOpened = deferred()
+  let windowStateWriteGate: ReturnType<typeof deferred> | undefined
+  let windowStateWriteStarted = deferred()
   const platformCloseAndWait = vi.fn(() => platformCloseDeferred?.promise ?? Promise.resolve())
   const readLoginShell = async (base: NodeJS.ProcessEnv) => ({
     environment: { ...base, DSH_TEST_LOGIN_SHELL: 'login' }, failures: [{ shell: '/account/shell', reason: 'timeout' }],
@@ -97,18 +114,24 @@ const harness = await vi.hoisted(async () => {
     readonly setAlwaysOnTop = vi.fn()
     readonly restore = vi.fn()
     readonly setSize = vi.fn()
-    readonly getBounds = vi.fn(() => ({ x: 0, y: 0, width: 800, height: 700 }))
+    bounds = { x: 0, y: 0, width: 800, height: 700 }
+    readonly getBounds = vi.fn(() => ({ ...this.bounds }))
+    readonly getNormalBounds = vi.fn(() => ({ ...this.bounds }))
     readonly setMinimumSize = vi.fn()
     readonly setTitleBarOverlay = vi.fn()
     readonly setVibrancy = vi.fn()
     readonly setBackgroundColor = vi.fn()
-    constructor(readonly options: { show: boolean; modal?: boolean }) {
+    constructor(readonly options: { show: boolean; modal?: boolean; resizable?: boolean; width?: number; height?: number }) {
       super(); if (windowFailure !== undefined) throw windowFailure; windows.push(this)
+      if (options.resizable === false) welcomeOpened.resolve()
     }
     isDestroyed() { return this.destroyed }
     fullscreen = false
     isFullScreen() { return this.fullscreen }
     readonly setFullScreen = vi.fn((flag: boolean) => { this.fullscreen = flag; this.emit(flag ? 'enter-full-screen' : 'leave-full-screen') })
+    maximized = false
+    isMaximized() { return this.maximized }
+    readonly maximize = vi.fn(() => { this.maximized = true; this.emit('maximize') })
     minimized = false
     isMinimized() { return this.minimized }
     visible = true
@@ -119,6 +142,7 @@ const harness = await vi.hoisted(async () => {
       this.webContents.mainFrame.url = url
       if (url === 'dsh-app://app/') navigated.resolve()
     }
+    async loadFile(path: string) { this.urls.push(path); this.webContents.mainFrame.url = `file://${path}` }
     static getAllWindows() { return windows.filter(window => !window.destroyed) }
     setMenu() {}
     getContentBounds() { return { x: 0, y: 0, width: 900, height: 650 } }
@@ -135,7 +159,7 @@ const harness = await vi.hoisted(async () => {
     readonly updateTasks = vi.fn(async (_action: 'inspect' | 'lock' | 'unlock') => false)
     readonly inspectQuit = vi.fn(async () => ({ activeTasks: false, scheduledTasks: false }))
     url = 'http://127.0.0.1:3080/?token=test'
-    fetch = vi.fn(async () => Response.json({ hasApiKey: true, writable: true, localePreference: null }))
+    fetch = vi.fn(async () => Response.json({ hasApiKey: !welcomeNeeded, writable: true, localePreference: null }))
     readonly ready = deferred()
     readonly exited = deferred()
     readonly stopping = deferred()
@@ -216,6 +240,8 @@ const harness = await vi.hoisted(async () => {
     set updateState(value: DesktopUpdateState) { updateState = value },
     get prepareUpdate() { return prepareUpdate! },
     set prepareUpdate(value: () => Promise<boolean>) { prepareUpdate = value },
+    get updateEnabled() { return updateEnabled },
+    set updateEnabled(value: (() => boolean) | undefined) { updateEnabled = value },
     get publishUpdate() { return publishUpdate! },
     set publishUpdate(value: (state: DesktopUpdateState) => DesktopUpdateState) { publishUpdate = value },
     dialog: { showOpenDialog: vi.fn(), showErrorBox: vi.fn(), showMessageBox: vi.fn() },
@@ -230,6 +256,20 @@ const harness = await vi.hoisted(async () => {
     get hostStarted() { return hostStarted }, get navigated() { return navigated },
     get dialogShown() { return dialogShown }, get quitCompleted() { return quitCompleted },
     get policyBlocked() { return policyBlocked },
+    get welcomeOpened() { return welcomeOpened },
+    set welcomeNeeded(value: boolean) { welcomeNeeded = value },
+    get windowStateWriteStarted() { return windowStateWriteStarted.promise },
+    deferWindowStateWrite() {
+      windowStateWriteGate = deferred()
+      windowStateWriteStarted = deferred()
+      return { started: windowStateWriteStarted.promise, resolve: () => { windowStateWriteGate?.resolve() } }
+    },
+    async beforeAtomicWrite(path: string) {
+      if (!path.endsWith('window-state.json') || windowStateWriteGate === undefined) return
+      windowStateWriteStarted.resolve()
+      await windowStateWriteGate.promise
+      windowStateWriteGate = undefined
+    },
     get embeddedPolicy() { return embeddedPolicy },
     set embeddedPolicy(value: unknown) { embeddedPolicy = value },
     nextNavigation() { navigated = deferred(); return navigated.promise },
@@ -251,6 +291,7 @@ const harness = await vi.hoisted(async () => {
       pluginsEnabled = false
       closeWindowsOnQuit = false
       prepareUpdate = undefined
+      updateEnabled = undefined
       publishUpdate = undefined
       updateState = { phase: 'idle' }
       updateCheck.mockReset().mockImplementation(async () => updateState)
@@ -262,6 +303,11 @@ const harness = await vi.hoisted(async () => {
       navigated = deferred(); dialogShown = deferred(); quitCompleted = deferred()
       policyBlocked = deferred()
       embeddedPolicy = undefined
+      welcomeNeeded = false
+      welcomeOpened = deferred()
+      windowStateWriteGate = undefined
+      windowStateWriteStarted = deferred()
+      testUserData = ''
       platformDisposeDeferred = undefined
       platformCloseDeferred = undefined
     },
@@ -283,6 +329,7 @@ vi.mock('electron', () => ({
   dialog: harness.dialog,
   shell: { openExternal: harness.openExternal },
   nativeTheme: harness.nativeTheme,
+  screen: { getAllDisplays: () => [{ workArea: { x: 0, y: 0, width: 1920, height: 1080 } }] },
   net: { fetch: vi.fn() },
   ipcMain: {
     on: harness.ipcOn,
@@ -342,8 +389,10 @@ vi.mock('../src/update-dialog.ts', () => ({ DesktopUpdateDialog: class {
   dispose() {}
 } }))
 vi.mock('../src/update-coordinator.ts', () => ({ DesktopUpdateCoordinator: class {
-  constructor(publish: (state: DesktopUpdateState) => DesktopUpdateState, beforeRestart: () => Promise<boolean>) {
+  constructor(publish: (state: DesktopUpdateState) => DesktopUpdateState, beforeRestart: () => Promise<boolean>,
+    _updater: unknown, enabled?: () => boolean) {
     harness.prepareUpdate = beforeRestart
+    harness.updateEnabled = enabled
     harness.publishUpdate = publish
   }
   get state() { return harness.updateState }
@@ -401,9 +450,9 @@ beforeEach(() => {
   testAuth.login.mockResolvedValue('cancelled')
   vi.useFakeTimers()
   harness.reset()
-  const userData = mkdtempSync(join(tmpdir(), 'dsh-main-user-data-'))
-  onTestFinished(() => { rmSync(userData, { recursive: true, force: true }) })
-  harness.app.getPath.mockImplementation(name => name === 'userData' ? userData : `desktop-test-${name}`)
+  testUserData = mkdtempSync(join(tmpdir(), 'dsh-main-user-data-'))
+  onTestFinished(() => { rmSync(testUserData, { recursive: true, force: true }) })
+  harness.app.getPath.mockImplementation(name => name === 'userData' ? testUserData : `desktop-test-${name}`)
   harness.dialog.showMessageBox.mockImplementation((options: { title?: string }) => {
     if (options.title !== en.startupFailed) return Promise.resolve({ response: 1 })
     harness.dialogShown.resolve()
@@ -763,6 +812,46 @@ describe('desktop main startup', () => {
     expect(window.webContents.send.mock.calls.filter(([channel]) => channel === DESKTOP_IPC.windowFullscreen)).toHaveLength(0)
   })
 
+  it('keeps saved presentation off the fixed welcome window until the primary workspace is entered', async () => {
+    writeFileSync(join(testUserData, 'window-state.json'), JSON.stringify({ version: 1,
+      bounds: { x: 75, y: 90, width: 1180, height: 760 }, maximized: true, fullscreen: true }))
+    harness.welcomeNeeded = true
+    await readyForUpdate()
+    await harness.welcomeOpened.promise
+    const primary = harness.windows[0]!
+    const welcome = harness.windows[1]!
+    expect(primary.options).toMatchObject({ x: 75, y: 90, width: 1180, height: 760 })
+    expect(primary.maximize).not.toHaveBeenCalled()
+    expect(primary.setFullScreen).not.toHaveBeenCalled()
+    expect(welcome.options).toMatchObject({ width: 600, height: 700, resizable: false, maximizable: false })
+    expect(welcome.maximize).not.toHaveBeenCalled()
+    expect(welcome.setFullScreen).not.toHaveBeenCalled()
+    expect(JSON.parse(readFileSync(join(testUserData, 'window-state.json'), 'utf8'))).toMatchObject({ fullscreen: true })
+
+    const skip = harness.handlers.get(WELCOME_IPC.skip)!
+    await skip({ sender: welcome.webContents, senderFrame: welcome.webContents.mainFrame })
+    await primary.shown.promise
+    expect(primary.maximize).toHaveBeenCalledOnce()
+    expect(primary.setFullScreen).toHaveBeenCalledWith(true)
+    expect(welcome.maximize).not.toHaveBeenCalled()
+    expect(welcome.setFullScreen).not.toHaveBeenCalled()
+  })
+
+  it('flushes the last primary workspace geometry before a confirmed quit completes', async () => {
+    const host = await readyWorkspace()
+    const primary = harness.windows[0]!
+    primary.bounds = { x: 165, y: 115, width: 1120, height: 730 }
+    primary.emit('move')
+    primary.emit('resize')
+    harness.app.quit()
+    await host.stopping.promise
+    host.exited.resolve()
+    await harness.quitCompleted.promise
+    expect(JSON.parse(readFileSync(join(testUserData, 'window-state.json'), 'utf8'))).toMatchObject({
+      version: 1, bounds: { x: 165, y: 115, width: 1120, height: 730 }, maximized: false, fullscreen: false,
+    })
+  })
+
   it('covers the macOS vibrancy reattach gap with an opaque base while minimized or hidden', async () => {
     vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin')
     await import('../src/main.ts')
@@ -888,6 +977,81 @@ describe('desktop main startup', () => {
       ? ['about', 'separator', en.checkUpdatesMenu, en.cliCommandMenu, 'separator', 'hide', 'hideOthers', 'unhide', 'separator', 'quit']
       : ['about', 'separator', en.checkUpdatesMenu, 'separator', 'quit'])
     expect(harness.menu.setApplicationMenu).toHaveBeenCalledOnce()
+  })
+
+  it.each(['win32', 'darwin'] as const)('keeps updater paths inert in the intranet distribution on %s', async (platform) => {
+    vi.stubEnv('DSH_DESKTOP_INTRANET', '1')
+    vi.stubGlobal('process', { ...process, platform })
+    harness.embeddedPolicy = { origin: 'https://policy.example.com', allowedPageOrigins: ['https://downloads.example.com'],
+      intervalMs: 1000, jitter: 0 }
+    const request = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ code: 40005, data: {
+      show_content: { title: 'Required update', detail: 'Intranet policy must not apply' },
+      desktop_app_link: 'https://downloads.example.com/desktop',
+    } }))
+    vi.stubGlobal('fetch', request)
+
+    await readyForUpdate()
+    const application = applicationMenuItems()
+    expect(application.some(item => item.label === en.checkUpdatesMenu)).toBe(false)
+    expect(application.some((item, index) => item.type === 'separator' && application[index - 1]?.type === 'separator')).toBe(false)
+    if (platform === 'win32') {
+      const trayMenu = harness.menu.buildFromTemplate.mock.calls.map(([items]) => items)
+        .find(items => items.some(item => item.label === en.openApplication))
+      expect(trayMenu?.some(item => item.label === en.checkUpdatesMenu)).toBe(false)
+      expect(trayMenu?.some((item, index) => item.type === 'separator' && trayMenu[index - 1]?.type === 'separator')).toBe(false)
+    }
+
+    harness.windows[0]!.emit('focus')
+    harness.powerMonitor.emit('resume')
+    await invoke(DESKTOP_IPC.updatesOpen, 'app')
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(harness.updateCheck).not.toHaveBeenCalled()
+    expect(harness.updateDownload).not.toHaveBeenCalled()
+    expect(harness.updateInstall).not.toHaveBeenCalled()
+    expect(harness.updateEnabled?.()).toBe(false)
+    expect(request).not.toHaveBeenCalled()
+    expect(harness.dialog.showMessageBox).not.toHaveBeenCalled()
+  })
+
+  it('ignores malformed development update policy configuration in the intranet distribution', async () => {
+    vi.stubEnv('DSH_DESKTOP_INTRANET', '1')
+    vi.stubEnv('DSH_DESKTOP_MANDATORY_UPDATE_CONFIG', '{malformed')
+    harness.app.isPackaged = false
+
+    await expect(readyForUpdate()).resolves.toBeDefined()
+    const application = applicationMenuItems()
+    expect(application.some((item, index) => item.type === 'separator' && application[index - 1]?.type === 'separator')).toBe(false)
+    expect(harness.updateCheck).not.toHaveBeenCalled()
+    expect(harness.dialog.showMessageBox).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['interval', 'DSH_DESKTOP_UPDATE_CHECK_INTERVAL_MS', 'not-a-duration'],
+    ['maximum backoff', 'DSH_DESKTOP_UPDATE_CHECK_MAX_BACKOFF_MS', 'not-a-duration'],
+    ['jitter', 'DSH_DESKTOP_UPDATE_CHECK_JITTER', '2'],
+  ] as const)('ignores invalid ordinary updater %s configuration in the intranet distribution', async (_name, variable, value) => {
+    vi.stubEnv('DSH_DESKTOP_INTRANET', '1')
+    vi.stubEnv('DSH_DESKTOP_UPDATE_CHECK_INTERVAL_MS', undefined)
+    vi.stubEnv('DSH_DESKTOP_UPDATE_CHECK_MAX_BACKOFF_MS', undefined)
+    vi.stubEnv('DSH_DESKTOP_UPDATE_CHECK_JITTER', undefined)
+    vi.stubEnv(variable, value)
+
+    await expect(readyForUpdate()).resolves.toBeDefined()
+    expect(harness.updateCheck).not.toHaveBeenCalled()
+  })
+
+  it('keeps the updater available when intranet mode is explicitly disabled', async () => {
+    vi.stubEnv('DSH_DESKTOP_INTRANET', '0')
+    await readyForUpdate()
+    expect(harness.updateEnabled).toBeUndefined()
+
+    const checkUpdates = applicationMenuItems().find(item => item.label === en.checkUpdatesMenu)
+    expect(checkUpdates).toBeDefined()
+    ;(checkUpdates!.click as () => void)()
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(harness.updateCheck).toHaveBeenCalledWith(true)
   })
 
   it.each(['en-US', 'zh-CN'])('localizes macOS application commands without changing the application name (%s)', async (locale) => {
@@ -1666,6 +1830,52 @@ describe('desktop main startup', () => {
     expect(host.stop).toHaveBeenCalledWith(true)
     host.exited.resolve()
     await expect(preparing).resolves.toBe(true)
+  })
+
+  it('waits for the atomic window-state write before releasing installer handoff', async () => {
+    const host = await readyWorkspace()
+    const primary = harness.windows[0]!
+    primary.bounds = { x: 210, y: 140, width: 1080, height: 720 }
+    primary.emit('move')
+    const write = harness.deferWindowStateWrite()
+    harness.dialog.showMessageBox.mockResolvedValueOnce({ response: 0 })
+    const preparing = harness.prepareUpdate()
+    await write.started
+    expect(host.stop).not.toHaveBeenCalled()
+    let settled = false
+    void preparing.then(() => { settled = true }, () => { settled = true })
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    expect(() => readFileSync(join(testUserData, 'window-state.json'), 'utf8')).toThrow()
+    write.resolve()
+    await host.stopping.promise
+    host.exited.resolve()
+    await expect(preparing).resolves.toBe(true)
+    expect(JSON.parse(readFileSync(join(testUserData, 'window-state.json'), 'utf8'))).toMatchObject({
+      bounds: { x: 210, y: 140, width: 1080, height: 720 },
+    })
+  })
+
+  it('keeps the Host running when window-state flush times out before installer handoff', async () => {
+    const host = await readyWorkspace()
+    const write = harness.deferWindowStateWrite()
+    harness.dialog.showMessageBox.mockResolvedValueOnce({ response: 0 })
+    const preparing = harness.prepareUpdate()
+    await write.started
+    expect(host.stop).not.toHaveBeenCalled()
+    expect(harness.platformCloseAndWait).not.toHaveBeenCalled()
+
+    const rejected = expect(preparing).rejects.toMatchObject({ name: 'DesktopWindowStateFlushTimeoutError' })
+    try {
+      await vi.advanceTimersByTimeAsync(1_000)
+      await rejected
+    } finally {
+      write.resolve()
+    }
+
+    expect(host.updateTasks.mock.calls).toEqual([['inspect'], ['lock'], ['unlock']])
+    expect(host.stop).not.toHaveBeenCalled()
+    expect(harness.hosts).toHaveLength(1)
   })
 
   it.each(['accepted', 'failed'] as const)('settles analytics intake before locking API admission and continues after intake failure: %s', async (outcome) => {

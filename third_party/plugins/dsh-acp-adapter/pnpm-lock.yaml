@@ -20,6 +20,9 @@ importers:
       '@modelcontextprotocol/server':
         specifier: 2.3.0
         version: 2.3.0
+      cross-spawn:
+        specifier: 7.0.6
+        version: 7.0.6
       yaml:
         specifier: 2.9.0
         version: 2.9.0

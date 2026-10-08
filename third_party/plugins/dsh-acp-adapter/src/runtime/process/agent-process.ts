@@ -79,7 +79,13 @@ export class AcpAgentProcess {
   private closePromise: Promise<void> | undefined
 
   constructor(
-    args: { argv: readonly string[]; cwd: string; env: Record<string, string>; subprocess: SubprocessSeam },
+    args: {
+      argv: readonly string[]
+      cwd: string
+      env: Record<string, string>
+      subprocess: SubprocessSeam
+      windowsVerbatimArguments?: boolean
+    },
     options: AcpProcessOptions = {},
   ) {
     const command = args.argv[0]
@@ -113,6 +119,7 @@ export class AcpAgentProcess {
         argv: args.argv,
         cwd: args.cwd,
         env: args.env,
+        ...(args.windowsVerbatimArguments === true ? { windowsVerbatimArguments: true } : {}),
         graceMs: this.termGraceMs,
       })
       // seam 契约：pipe/pipe/pipe 由窄化适配器固定，流恒在场；缺场 = 实现违约，

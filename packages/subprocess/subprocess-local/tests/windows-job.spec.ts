@@ -191,6 +191,16 @@ describe('Windows parent runner contract', () => {
     expect(result.stderr).toBe(child.targetStderr)
   })
 
+  it('forwards an explicit verbatim command-line marker to the native runner only when requested', () => {
+    const request = { ...spec, windowsVerbatimArguments: true }
+    const { child } = launch(new FakeChild(), request)
+    expect(child.sent).toEqual([{
+      type: 'start', cwd: 'C:\\target', env: { TARGET: 'yes' }, windowsVerbatimArguments: true,
+    }])
+    const ordinary = launch()
+    expect(ordinary.child.sent).toEqual([{ type: 'start', cwd: 'C:\\target', env: { TARGET: 'yes' } }])
+  })
+
   it('carries a null-device fd 4 for ignored stdin and closes the parent descriptor after spawn', () => {
     const child = new FakeChild()
     const ignored = {

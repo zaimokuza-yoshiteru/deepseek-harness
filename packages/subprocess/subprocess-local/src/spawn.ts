@@ -468,6 +468,7 @@ export function spawnSubprocess(spec: SubprocessSpawnSpec, internals: SpawnInter
     cwd: spec.cwd,
     env: controlEnvironment(childEnv(spec.env), spec.stdio.control),
     stdio,
+    ...(spec.windowsVerbatimArguments === true ? { windowsVerbatimArguments: true } : {}),
     detached: platform !== 'win32',
     windowsHide: platform === 'win32',
   })

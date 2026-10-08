@@ -38,6 +38,7 @@ export interface WindowsStartRequest {
   type: 'start'
   cwd: string
   env: Record<string, string>
+  windowsVerbatimArguments?: boolean
   control?: 'pipe'
 }
 
@@ -174,12 +175,17 @@ export function readLinuxStartupError(path: string): LinuxStartupError | undefin
  * @returns validated target start request.
  */
 export function parseWindowsStartRequest(value: unknown): WindowsStartRequest {
-  if (!isRecord(value) || !hasExactKeys(value, ['type', 'cwd', 'env'], ['control'])
+  if (!isRecord(value) || !hasExactKeys(value, ['type', 'cwd', 'env'], ['control', 'windowsVerbatimArguments'])
     || value.type !== 'start' || typeof value.cwd !== 'string' || !isStringRecord(value.env)
+    || (value.windowsVerbatimArguments !== undefined && typeof value.windowsVerbatimArguments !== 'boolean')
     || (value.control !== undefined && value.control !== 'pipe')) {
     throw new Error('subprocess runner received an invalid Windows start request')
   }
-  return { type: 'start', cwd: value.cwd, env: value.env, ...value.control === 'pipe' ? { control: 'pipe' as const } : {} }
+  return {
+    type: 'start', cwd: value.cwd, env: value.env,
+    ...value.windowsVerbatimArguments === true ? { windowsVerbatimArguments: true } : {},
+    ...value.control === 'pipe' ? { control: 'pipe' as const } : {},
+  }
 }
 
 /**

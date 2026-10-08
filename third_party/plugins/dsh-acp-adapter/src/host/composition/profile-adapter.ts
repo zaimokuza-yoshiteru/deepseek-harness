@@ -40,6 +40,7 @@ import {
   profileLaunchIdentityHash,
 } from '../../domain/session/launch-fingerprint.ts'
 import { prepareAgentLaunch } from './agent-launch.ts'
+import { prepareAcpCommandLaunch } from '../../runtime/process/command-launch.ts'
 import { buildAcpSpawnPlan } from '../../domain/policy/sandbox.ts'
 import { effectiveRuntimeOf } from '../../contract/agent-config.ts'
 import { reasoningRequestIsCurrent, sessionProtocolExtensions } from '../../domain/session/agent-compatibility.ts'
@@ -244,10 +245,13 @@ function createNativeProfileProbe(
     subprocess,
     prepareProbe: async ({ config: probeConfig, argv }) => {
       const env = await acpLaunchEnvironment({ config: probeConfig })
+      if (!subprocess.ok) throw new Error(subprocess.message)
+      const commandLaunch = await prepareAcpCommandLaunch(subprocess.seam, argv, process.cwd(), env)
       const plan = buildAcpSpawnPlan({
         mode: 'danger-full-access',
-        argv,
+        argv: commandLaunch.argv,
         env,
+        ...(commandLaunch.windowsVerbatimArguments === true ? { windowsVerbatimArguments: true } : {}),
       })
       return {
         plan,

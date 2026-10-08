@@ -30,25 +30,16 @@ const REVIEWED_SECRET_TEST_FIXTURES = new Map([
 ])
 
 const TOOLING_EXTENSIONS = ['.ts', '.tsx', '.js', '.mjs', '.cjs', '.mts', '.cts', '.sh', '.ps1', '.py']
-const BUILD_SCRIPT_NAMES = /^(?:build(?::.*)?|bundle|gen(?::.*)?|clean|prepack|postinstall|prepare:primary-runtime|prepare:runtime|prepare:packages|prepare:dsh|sign:primary-runtime|verify:mac-signature|package(?::.*)?|pack|release:pack|export:source|dev|start)$/u
-const ROOT_BUILD_SCRIPT_NAMES = /^(?:build|build:(?:lib(?::.*)?|web|desktop|native-system|plugins|official)|prepare:primary-runtime|dev:desktop|start:desktop|prepare:desktop|package:desktop(?::.*)?|release:pack|export:source|package:source)$/u
-const CONFIG_FILE = /(?:^|\/)(?:tsconfig(?:\.[^/]+)?|tsdown\.config|vite\.config|electron-builder(?:\.[^/]+)?|rollup\.config|postcss\.config|tailwind\.config|webpack\.config)[^/]*\.(?:json|[cm]?[jt]s)$/u
-const PORTABLE_SMOKE_ENTRIES = new Set(['apps/desktop/scripts/smoke-portable.ts'])
-const PORTABLE_SMOKE_FIXTURES = new Set([
-  'apps/desktop/tests/fixtures/runtime-payload-smoke.mjs',
-  'apps/desktop/tests/fixtures/office-conversion-inputs.py',
-  'apps/desktop/tests/fixtures/plugin-metadata-smoke.mjs',
-  'apps/desktop/tests/fixtures/devin-config-smoke.mjs',
-  'apps/desktop/tests/fixtures/devin-cli.mjs',
-  'apps/desktop/tests/fixtures/packaged-profile.mjs',
-])
-const PORTABLE_RUNTIME_ASSETS = new Set([
-  'apps/desktop/scripts/node-bin/node',
-  'apps/desktop/scripts/node-bin/node.cmd',
-])
+const BUILD_SCRIPT_NAMES = /^(?:build(?::.*)?|bundle|gen(?::.*)?|clean|prepack|postinstall|prepare:primary-runtime|prepare:runtime|prepare:packages|prepare:dsh|sign:primary-runtime|verify:mac-signature|package(?::.*)?|pack|export:source|dev|start)$/u
+const ROOT_BUILD_SCRIPT_NAMES = /^(?:build|build:(?:lib(?::.*)?|web|desktop|native-system|plugins|official))$/u
+const DESKTOP_BUILD_SCRIPT_NAMES = /^(?:build|bundle)$/u
+const CONFIG_FILE = /(?:^|\/)(?:tsconfig(?:\.[^/]+)?|tsdown\.config|vite\.config|rollup\.config|postcss\.config|tailwind\.config|webpack\.config)[^/]*\.(?:json|[cm]?[jt]s)$/u
+const DESKTOP_INSTALLER_CONFIG = /^apps\/desktop\/electron-builder(?:\.portable)?\.config(?:\.d)?\.(?:mjs|mts|js|ts)$/u
 const IS_SUBPROCESS_LOCAL = path => path.split(sep).join('/').replace(/\\/g, '/').replace(/^\.\//, '') === 'packages/subprocess/subprocess-local'
-function keepBuildScript(name, rootManifest = false) {
-  return rootManifest ? ROOT_BUILD_SCRIPT_NAMES.test(name) : BUILD_SCRIPT_NAMES.test(name)
+function keepBuildScript(name, rootManifest = false, packagePath = '') {
+  if (rootManifest) return ROOT_BUILD_SCRIPT_NAMES.test(name)
+  if (packagePath === 'apps/desktop') return DESKTOP_BUILD_SCRIPT_NAMES.test(name)
+  return BUILD_SCRIPT_NAMES.test(name)
 }
 const BUILD_ASSET_EXTENSIONS = ['nsh', 'plist', 'cmd', 'ps1', 'ico', 'icns', 'png', 'svg', 'py', 'json', 'yml', 'yaml', 'txt']
 
@@ -85,7 +76,7 @@ export function collectBuildToolingFiles(root) {
     let manifest
     try { manifest = JSON.parse(readFileSync(resolve(root, path), 'utf8')) } catch { continue }
     const base = dirname(path) === '.' ? '' : dirname(path)
-    const selected = Object.entries(manifest.scripts ?? {}).filter(([name]) => keepBuildScript(name, base === ''))
+    const selected = Object.entries(manifest.scripts ?? {}).filter(([name]) => keepBuildScript(name, base === '', base))
     manifestScripts.set(base, new Map(selected))
     for (const [name, command] of selected) {
       if (name === 'postinstall' && !IS_SUBPROCESS_LOCAL(base)) continue
@@ -96,15 +87,11 @@ export function collectBuildToolingFiles(root) {
       }
     }
   }
-  entries.push(...PORTABLE_SMOKE_ENTRIES)
   const included = new Set()
   // tsconfig.base.client.json resolves this ambient declaration through its
   // configured typeRoots, so it is not reachable from a source import.
   const buildSupport = 'scripts/types/client-build-environment/index.d.ts'
   if (existsSync(resolve(root, buildSupport))) included.add(buildSupport)
-  for (const asset of PORTABLE_RUNTIME_ASSETS) {
-    if (existsSync(resolve(root, asset))) included.add(asset)
-  }
   const pending = [...entries]
   const importPattern = /(?:import|export)\s+(?:[^'";]*?\s+from\s*)?['"](\.[^'"]+)['"]|import\(\s*['"](\.[^'"]+)['"]\s*\)|require\(\s*['"](\.[^'"]+)['"]\s*\)/gu
   const enqueuePackageScript = (base, name) => {
@@ -173,22 +160,27 @@ function sourceAllowed(path, withTests, buildTooling = null) {
     const testFixtureCertificate = withTests && parts.includes('fixtures') && /\.(?:key|pem|p12|pfx|crt|cer)$/i.test(normalized)
     if (!testFixtureCertificate) return false
   }
+  // Keep the build and packaging closure, but never ship standalone CI,
+  // upload, test, fixture, or portable-smoke entry points in the default archive.
+  if (!withTests && parts[0] === 'scripts' && /^(?:test-|coverage-|session-snapshot-corpus)/u.test(parts.at(-1) ?? '')) return false
+  if (!withTests && DESKTOP_INSTALLER_CONFIG.test(normalized)) return false
+  if (!withTests && parts[0] === 'apps' && parts[1] === 'desktop' && parts[2] === 'scripts'
+    && /^(?:ci-|upload-|smoke-|replay-portable-smoke\.)/u.test(parts.at(-1) ?? '')) return false
   if (/\.(?:log|tsbuildinfo)$/i.test(normalized) || parts.at(-1) === '.DS_Store') return false
   if (parts[0] === '.maintenance' && !(withTests && parts[1] === 'tests')) return false
   if ((parts[0] === '.github' || parts[0] === '.maintenance') && !withTests) return false
   if (parts[0] === 'docs' || (parts[0] === 'snapshots' && !withTests)) return false
   if (!withTests && (parts[0] === '.github' || (parts[0] === 'benchmarks' && normalized !== 'benchmarks/package.json'))) return false
   if (!withTests && /(?:^|\/)(?:README|AGENTS|CONTRIBUTING|CHANGELOG|architecture)(?:\.[^/]*)?$/i.test(normalized)) return false
-  if (!withTests && (parts.includes('testing') || parts.includes('benchmarks') && normalized !== 'benchmarks/package.json' || parts.includes('fixtures') && !PORTABLE_SMOKE_FIXTURES.has(normalized) || parts.includes('__snapshots__')
+  if (!withTests && (parts.includes('testing') || parts.includes('benchmarks') && normalized !== 'benchmarks/package.json' || parts.includes('fixtures') || parts.includes('__snapshots__')
     || /(?:^|[-_.])(?:benchmark|benchmarks)(?:[-_.]|$)/i.test(parts.at(-1) ?? '')
     || normalized === 'native/system/scripts/build-test-oracle.mjs')) return false
   if (!withTests && parts[0] === 'scripts' && buildTooling && !buildTooling.has(normalized)) return false
   if (!withTests && /(?:^|\/)(?:scripts|tools)\//.test(normalized) && buildTooling && !buildTooling.has(normalized) && parts.some(part => ['native', 'apps', 'third_party'].includes(part))) return false
   if (!withTests && parts.at(-1)?.toLowerCase().startsWith('readme.')) return false
-  if (!withTests && PORTABLE_SMOKE_FIXTURES.has(normalized)) return true
   if (!withTests && CONFIG_FILE.test(normalized) && /(?:test|bench|e2e|snapshot|stress|perf)/i.test(parts.at(-1) ?? '')) return false
   if (!withTests && (/^vitest\.(?:bench|e2e|expected|snapshot|web-stress|web-perf)\.config\.ts$/.test(normalized) || normalized === 'tsconfig.desktop-keyboard-tests.json')) return false
-  if (!withTests && ((!PORTABLE_SMOKE_FIXTURES.has(normalized) && parts.some(part => ['tests', 'test', 'stress-tests', 'fixtures', '__tests__'].includes(part))) || /\.(?:spec|test|e2e)\.[cm]?[jt]sx?$/i.test(normalized))) return false
+  if (!withTests && (parts.some(part => ['tests', 'test', 'stress-tests', 'fixtures', '__tests__'].includes(part)) || /\.(?:spec|test|e2e)\.[cm]?[jt]sx?$/i.test(normalized))) return false
   if (parts.length === 1) return ROOT_FILES.has(normalized) || (withTests && OPTIONAL_TEST_ROOT_FILES.has(normalized)) || SOURCE_DIRS.includes(normalized)
   if (!withTests && normalized === 'benchmarks/package.json') return true
   const testRoots = withTests && (parts[0] === '.github' || parts[0] === 'benchmarks' || parts[0] === 'snapshots' || (parts[0] === '.maintenance' && parts[1] === 'tests'))
@@ -277,7 +269,7 @@ function cleanPackageManifest(target, relativePath, withTests, rootManifest = fa
   if (!withTests && manifest.scripts) {
     for (const [name, command] of Object.entries(manifest.scripts)) {
       const packageBase = dirname(relativePath) === '.' ? '' : dirname(relativePath)
-      const keep = keepBuildScript(name, rootManifest)
+      const keep = keepBuildScript(name, rootManifest, packageBase)
         && !(name === 'postinstall' && !IS_SUBPROCESS_LOCAL(packageBase))
       if (testOnlyScript(name, String(command)) || !keep) {
         delete manifest.scripts[name]

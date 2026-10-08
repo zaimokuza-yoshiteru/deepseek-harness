@@ -43,8 +43,8 @@ export function KanbanPage(props: KanbanPageProps) {
       <header className={css.head}>
         <h1 className={css.heading}>{t('panel')}</h1>
         <div className={css.tools}>
-          <Button size="sm" variant="outline" disabled={!configured || state.status === 'loading'} onClick={() => { void controller.refresh() }}>{t('refresh')}</Button>
-          <Button size="sm" variant="ghost" onClick={openConfig}>{t('configure')}</Button>
+          {!(configured && state.status === 'error') && <Button size="sm" variant="outline" className={css.actionButton} disabled={!configured || state.status === 'loading'} onClick={() => { void controller.refresh() }}>{t('refresh')}</Button>}
+          <Button size="sm" variant="ghost" className={css.actionButton} onClick={openConfig}>{t('configure')}</Button>
         </div>
       </header>
       <SegmentedTabs items={productTabs} value={state.product} onChange={product => { void controller.selectProduct(product) }} label={t('panel')} className={css.segmented} />
@@ -54,17 +54,16 @@ export function KanbanPage(props: KanbanPageProps) {
         </Tooltip>)}
       </nav>}
       {state.product === 'bitbucket' && options.length > 0 && <div className={css.filters} role="group" aria-label={t('state')}>
-        {(['all', 'open', 'merged'] as const).map(value => <Button key={value} size="sm" variant={state.pullRequestState === value ? 'outline' : 'ghost'} aria-pressed={state.pullRequestState === value} onClick={() => { void controller.setPullRequestState(value) }}>{t(value)}</Button>)}
+        {(['all', 'open', 'merged'] as const).map(value => <Button key={value} size="sm" variant={state.pullRequestState === value ? 'outline' : 'ghost'} className={css.actionButton} aria-pressed={state.pullRequestState === value} onClick={() => { void controller.setPullRequestState(value) }}>{t(value)}</Button>)}
       </div>}
       <div id={panelId} role="tabpanel" aria-labelledby={`atlassian-kanban-${state.product}`} tabIndex={0} className={css.body}>
         {settings === null && state.status === 'loading' && <Loading label={t('loading')} />}
-        {settings === null && state.status === 'error' && <div className={css.errorArea} role="alert"><ErrorNotice error={state.error} label={t('error')} /><Button size="sm" variant="ghost" onClick={() => { void controller.loadSettings() }}>{t('retry')}</Button></div>}
-        {settings !== null && !connected && <div className={css.status}>{t('notConfigured')} <Button size="sm" variant="ghost" className={css.link} onClick={openConfig}>{t('configure')}</Button></div>}
-        {settings !== null && connected && options.length === 0 && <div className={css.status}>{t('notConfigured')} <Button size="sm" variant="ghost" className={css.link} onClick={openConfig}>{t('configure')}</Button></div>}
+        {settings === null && state.status === 'error' && <div className={css.errorArea} role="alert"><ErrorNotice error={state.error} label={t('error')} /><Button size="sm" variant="ghost" className={css.actionButton} onClick={() => { void controller.loadSettings() }}>{t('retry')}</Button></div>}
+        {settings !== null && !configured && <p className={css.status}>{t('notConfigured')}</p>}
         {configured && state.status === 'loading' && state.result === null && <Loading label={t('loading')} />}
         {configured && state.status === 'loading' && state.result !== null && <div className={css.refreshing} role="status"><IconLoadingOutlineRegular size={14} /><span>{t('refreshing')}</span></div>}
         {configured && state.result !== null && <ResultList state={state} controller={controller} t={t} />}
-        {configured && state.status === 'error' && <div className={css.errorArea} role="alert"><ErrorNotice error={state.error} label={t('error')} /><Button size="sm" variant="ghost" onClick={() => { void controller.refresh() }}>{t('retry')}</Button></div>}
+        {configured && state.status === 'error' && <div className={css.errorArea} role="alert"><ErrorNotice error={state.error} label={t('error')} /><Button size="sm" variant="ghost" className={css.actionButton} onClick={() => { void controller.refresh() }}>{t('retry')}</Button></div>}
       </div>
     </section>
   )
@@ -117,7 +116,7 @@ function ResultList({ state, controller, t }: { readonly state: KanbanSnapshot; 
     </div>}
     {state.loadingMore && <div className={css.loadingMore} role="status"><StateDot state="ongoing" size={13} /><span>{t('loading')}</span></div>}
     {state.error !== null && state.status !== 'error' && <ErrorNotice error={state.error} label={t('error')} />}
-    {state.result?.nextCursor !== null && <div className={css.more}><Button size="sm" variant="outline" disabled={state.loadingMore} onClick={() => { void controller.loadMore() }}>{t('loadMore')}</Button></div>}
+    {state.result?.nextCursor !== null && <div className={css.more}><Button size="sm" variant="outline" className={css.actionButton} disabled={state.loadingMore} onClick={() => { void controller.loadMore() }}>{t('loadMore')}</Button></div>}
   </>
 }
 

@@ -7,6 +7,21 @@ import { tmpdir } from 'node:os'
 import { parseArgs } from 'node:util'
 import { collectSourceInventory, exportSource, writeSourceMetadata } from './export-source.mjs'
 
+const BUILDABLE_SOURCE_README = `# DSH source build archive
+
+This archive contains the DSH workspace and plugin source needed to rebuild the desktop host, renderer, and workspace plugins. It omits GitHub Actions, installer packaging and signing tools, CI and upload/release commands, unit/spec/e2e tests and fixtures, and smoke verification entry points. Test-support workspace helper libraries remain where required by the frozen workspace graph.
+
+Use Node.js 22.19 or newer with pnpm 11.23.0:
+
+\`\`\`sh
+pnpm install --frozen-lockfile
+pnpm build
+pnpm build:plugins
+\`\`\`
+
+The build commands compile the desktop host and renderer and build the workspace plugins. The portable ZIP packaging and distribution workflow remains in the GitHub repository.
+`
+
 function distributionVersion(root) {
   if (process.env.DSH_DESKTOP_DISTRIBUTION_VERSION) return process.env.DSH_DESKTOP_DISTRIBUTION_VERSION
   const deliveryPath = resolve(root, 'delivery.json')
@@ -33,6 +48,11 @@ export function packageSource({ root, output, version, withTests = false }) {
     const inventory = collectSourceInventory(root, withTests)
     const { files } = inventory
     exportSource(root, stage, files, withTests)
+    let deliveredFiles = files
+    if (!withTests) {
+      writeFileSync(join(stage, 'README.md'), BUILDABLE_SOURCE_README)
+      deliveredFiles = [...files, 'README.md'].sort()
+    }
     const deliveryPath = join(stage, 'delivery.json')
     if (existsSync(deliveryPath)) {
       const delivery = JSON.parse(readFileSync(deliveryPath, 'utf8'))
@@ -40,7 +60,7 @@ export function packageSource({ root, output, version, withTests = false }) {
         writeFileSync(deliveryPath, JSON.stringify({ ...delivery, version }, null, 2) + '\n')
       }
     }
-    writeSourceMetadata(root, stage, files, withTests, undefined, inventory.excludedSensitiveFiles, version)
+    writeSourceMetadata(root, stage, deliveredFiles, withTests, undefined, inventory.excludedSensitiveFiles, version)
     createTar({ file: output, cwd: stageParent, gzip: true, portable: true, sync: true }, [basename(stage)])
     const manifestPath = `${output}.manifest.json`
     const checksumPath = `${output}.sha256`

@@ -313,6 +313,7 @@ class WindowsJobRunner {
         args,
         cwd: request.cwd,
         env: request.env,
+        ...request.windowsVerbatimArguments === true ? { windowsVerbatimArguments: true } : {},
         stdio: { stdin: 4, stdout: 5, stderr: 6, ...request.control === 'pipe' ? { control: SUBPROCESS_CONTROL_FD } : {} },
       })
       this.processHandle = spawned.process

@@ -7,6 +7,7 @@ import type { AcpRuntimeLaunch } from '../../runtime/session/session-runtime.ts'
 import type { SubprocessSeam } from '../../runtime/process/subprocess.ts'
 import type { AcpMcpLease } from '../../runtime/session/mcp-lease.ts'
 import { prepareDevinMcp } from '../teams/devin-config.ts'
+import { prepareAcpCommandLaunch } from '../../runtime/process/command-launch.ts'
 
 export async function prepareAgentLaunch(
   runtime: AcpAgentId | undefined,
@@ -16,6 +17,7 @@ export async function prepareAgentLaunch(
   createMcpLease: ((capabilities: acp.AgentCapabilities) => Promise<AcpMcpLease | undefined>) | undefined,
 ): Promise<AcpRuntimeLaunch> {
   let env = await acpLaunchEnvironment({ config })
+  const commandLaunch = await prepareAcpCommandLaunch(subprocess, [config.command, ...config.args], cwd, env)
   let mcpLease: AcpMcpLease | undefined
   // Devin reads MCP servers from its config at process startup, before ACP initialize.
   if (runtime === 'devin') {
@@ -37,8 +39,9 @@ export async function prepareAgentLaunch(
     const plan = buildAcpSpawnPlan({
       mode: 'danger-full-access',
       workspaceRoot: cwd,
-      argv: [config.command, ...config.args],
+      argv: commandLaunch.argv,
       env,
+      ...(commandLaunch.windowsVerbatimArguments === true ? { windowsVerbatimArguments: true } : {}),
     })
     return { argv: plan.argv, env: plan.env, spawnPlan: plan, ...(mcpLease === undefined ? {} : { mcpLease }) }
   } catch (error) {

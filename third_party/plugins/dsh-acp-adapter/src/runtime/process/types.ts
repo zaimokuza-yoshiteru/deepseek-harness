@@ -16,6 +16,8 @@ import type { SubprocessSeam } from './subprocess.ts'
 export interface AcpSpawnPlanView {
   /** Final argv; the process layer does not add a shell or wrapper. */
   readonly argv: readonly string[]
+  /** Set only when argv already contains cross-spawn's escaped cmd.exe command line. */
+  readonly windowsVerbatimArguments?: boolean
   /** Profile 显式环境覆盖；宿主会把它合并到已清理的父环境。 */
   readonly env: Record<string, string>
 }
@@ -27,6 +29,8 @@ export interface AcpConnectionSpec {
    * 绝不拼成 shell 字符串。
    */
   argv: string[]
+  /** Pre-escaped cmd.exe argv from the shared Windows command preparation path. */
+  windowsVerbatimArguments?: boolean
   /** 子进程工作目录，兼作 `session/new`/`session/load` 的默认 cwd。 */
   cwd: string
   /**

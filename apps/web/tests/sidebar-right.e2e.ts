@@ -626,7 +626,7 @@ describe('web e2e: shipped right Sidebar', () => {
       expect(tripwire.warnings).toEqual([])
     })
 
-    it('keeps a capacity-closed panel closed after widening and uses fullscreen on a narrow viewport', async () => {
+    it('uses fullscreen when the sidebars do not fit, then returns to push when space is restored', async () => {
       const viewport = page.viewportSize()
       if (viewport === null) throw new Error('expected a fixed viewport')
       const frame = page.locator('[class*="frame"]').first()
@@ -639,14 +639,15 @@ describe('web e2e: shipped right Sidebar', () => {
         const grip = await centre(leftGrip)
         await dragElement(page, leftGrip, { x: 420, y: grip.y })
         await expect.poll(async () => await width(sidebar)).toBe(420)
-        await expect.poll(async () => await column.locator('[data-sidebar-right-open]').count()).toBe(0)
+        await expect.poll(async () => await column.locator('[data-sidebar-right-open]').count()).toBe(1)
+        await expect.poll(async () => await panel.getAttribute('data-sidebar-right-panel')).toBe('fullscreen')
         await page.setViewportSize(viewport)
         await expect.poll(async () => await width(sidebar)).toBe(420)
-        expect(await column.locator('[data-sidebar-right-open]').count()).toBe(0)
-        await expandOf(page).click()
         await expect.poll(async () => await column.locator('[data-sidebar-right-open]').count()).toBe(1)
+        await expect.poll(async () => await panel.getAttribute('data-sidebar-right-panel')).toBe('push')
 
         await page.setViewportSize({ width: 767, height: viewport.height })
+        await expect.poll(async () => await column.locator('[data-sidebar-right-open]').count()).toBe(1)
         await expect.poll(async () => await panel.getAttribute('data-sidebar-right-panel')).toBe('fullscreen')
         await expect.poll(async () => await width(panel)).toBe(767)
         await expect.poll(() => frame.getAttribute('data-rightbar-fullscreen')).toBe('true')

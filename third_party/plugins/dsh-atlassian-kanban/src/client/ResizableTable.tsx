@@ -112,7 +112,7 @@ export function ResizableTable({ product, t, children }: { readonly product: Pro
   }
 
   return <div ref={container} className={css.tableContainer}>
-    <div className={css.tableToolbar}><Button size="sm" variant="ghost" onClick={() => { finish(false); persist(null) }}>{t('resetColumnWidths')}</Button></div>
+    <div className={css.tableToolbar}><Button size="sm" variant="ghost" className={css.actionButton} onClick={() => { finish(false); persist(null) }}>{t('resetColumnWidths')}</Button></div>
     <table ref={table} className={css.table} style={{ width: widths.reduce((sum, width) => sum + width, 0) }}>
       <colgroup>{columns.map((column, index) => <col key={column.key} style={{ width: widths[index] }} />)}</colgroup>
       <thead><tr>{columns.map((column, index) => <th key={column.key} scope="col">

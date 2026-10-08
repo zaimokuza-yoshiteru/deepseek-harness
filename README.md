@@ -20,4 +20,4 @@
 12. 当前便携桌面基线集成 dsh-acp-adapter、dsh-agent-teams-office、dsh-boot-ocbc 和 dsh-atlassian-kanban，统一从仓库内源码构建。
 13. 内网禁用新版桌面产品事件采集与导出，并继续保留 `DSH_TELEMETRY_MODE=DISABLED`；非内网配置保持上游装配行为。
 
-默认源码归档保留完整工作区和插件源码、冻结依赖锁、运行提示/技能、许可证以及实际构建和便携包验证脚本；仅便携包验证直接使用的少量 fixture 会保留，其他测试、普通文档、CI 和维护/发布工具不进入归档。提取后在支持的 Node.js 22.19+ 环境运行 `pnpm install --frozen-lockfile` 和 `pnpm build`。需要开发测试源码时可显式执行 `pnpm package:source --with-tests`。
+默认源码归档保留完整工作区和插件源码、冻结依赖锁、运行提示/技能、许可证，以及编译主桌面 host/renderer 和插件所需的最小脚本与素材；单元测试、spec/e2e 用例、fixtures、GitHub Actions、CI 调度、上传/发布工具、安装器封装和 smoke 验证入口不进入默认归档。冻结 workspace 图仍需要的 test-support 辅助库源码会保留。提取后在支持的 Node.js 22.19+ 环境运行 `pnpm install --frozen-lockfile`、`pnpm build` 和 `pnpm build:plugins`。便携 ZIP 封装和发行流程仍在 GitHub 仓库中；从仓库 checkout 生成含测试源码的包可执行 `pnpm package:source --with-tests`。

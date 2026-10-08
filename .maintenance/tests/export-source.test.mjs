@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, symlinkSync, rmSync, statSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, symlinkSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
@@ -80,40 +80,51 @@ test('collects production source and only build-script closure without git', () 
   } finally { rmSync(tmp, { recursive: true, force: true }) }
 })
 
-test('buildable desktop payload keeps only portable packaging smoke fixtures and signing closure', () => {
+test('buildable desktop payload excludes test and CI tooling while keeping the desktop and plugin build closure', () => {
   const root = process.cwd()
   const inventory = new Set(collectSourceFiles(root))
-  const smokeFixtures = [
+  for (const path of inventory) {
+    assert.ok(!path.startsWith('.github/'), `CI workflow must not ship: ${path}`)
+    assert.ok(!/(^|\/)(?:tests?|fixtures|__tests__)(\/|$)/u.test(path), `test payload must not ship: ${path}`)
+    assert.ok(!/(?:^|\/)[^/]+\.(?:spec|test|e2e)\.[cm]?[jt]sx?$/iu.test(path), `test source must not ship: ${path}`)
+  }
+  for (const path of ['apps/desktop/tsdown.config.ts', 'native/system/scripts/build.ts']) {
+    assert.ok(inventory.has(path), `desktop/native build configuration must remain: ${path}`)
+  }
+  for (const path of [
     'apps/desktop/tests/fixtures/runtime-payload-smoke.mjs',
-    'apps/desktop/tests/fixtures/office-conversion-inputs.py',
-    'apps/desktop/tests/fixtures/plugin-metadata-smoke.mjs',
-    'apps/desktop/tests/fixtures/devin-config-smoke.mjs',
-    'apps/desktop/tests/fixtures/devin-cli.mjs',
-    'apps/desktop/tests/fixtures/packaged-profile.mjs',
-  ]
-  for (const path of smokeFixtures) assert.ok(inventory.has(path), `portable packaging smoke requires ${path}`)
-  assert.ok(!inventory.has('apps/desktop/tests/fixtures/unrelated-ui-fixture.json'))
+    'apps/desktop/scripts/smoke-portable.ts',
+    'apps/desktop/scripts/ci-portable-build.mjs',
+    'apps/desktop/scripts/upload-target.ts',
+  ]) assert.ok(!inventory.has(path), `test or CI-only path must be omitted: ${path}`)
 
   const tooling = collectBuildToolingFiles(root)
   for (const path of [
-    'scripts/release/pack.ts',
-    'apps/desktop/scripts/package-target.ts',
-    'apps/desktop/scripts/sign-primary-runtime.ts',
-    'apps/desktop/scripts/smoke-prepared-runtime.ts',
-    'apps/desktop/scripts/smoke-runtime.ts',
-    'apps/desktop/scripts/smoke-portable.ts',
-    ...smokeFixtures,
+    'scripts/build.ts',
+    'scripts/build-plugins.mjs',
   ]) assert.ok(tooling.has(path), `packaging command closure requires ${path}`)
-  for (const path of ['apps/desktop/scripts/node-bin/node', 'apps/desktop/scripts/node-bin/node.cmd']) {
-    assert.ok(inventory.has(path), `portable runtime preparation requires ${path}`)
-    assert.ok(tooling.has(path), `portable runtime build closure requires ${path}`)
-  }
-  if (process.platform !== 'win32') {
-    assert.equal(statSync(join(root, 'apps/desktop/scripts/node-bin/node')).mode & 0o777, 0o755,
-      'the POSIX node wrapper must remain executable in portable source')
-  }
-  assert.ok(tooling.has('apps/desktop/scripts/windows-sign.cmd'))
-  assert.ok(tooling.has('apps/desktop/scripts/verify-macos-signature.mjs'))
+  for (const path of [
+    'apps/desktop/scripts/dev.ts',
+    'apps/desktop/scripts/prepare-primary-runtime.ts',
+    'scripts/primary-runtime/smoke.py',
+    'apps/desktop/scripts/package-target.ts',
+    'apps/desktop/scripts/smoke-packaged-runtime.ts',
+    'apps/desktop/scripts/smoke-portable.ts',
+    'apps/desktop/scripts/sign-primary-runtime.ts',
+    'apps/desktop/electron-builder.config.mjs',
+    'apps/desktop/electron-builder.portable.config.mjs',
+    'apps/desktop/electron-builder.config.d.mts',
+    'apps/desktop/scripts/electron-builder-config.mjs',
+    'apps/desktop/scripts/windows-asar-unpack.mjs',
+    'apps/desktop/scripts/ci-portable-build.mjs',
+    'apps/desktop/scripts/upload-target.ts',
+    'scripts/release/pack.ts',
+    'native/system/scripts/pack-release.mjs',
+    'scripts/test-invariants.ts',
+    'scripts/test-fixture-cleanup.ts',
+    'scripts/coverage-partitions.ts',
+  ]) assert.ok(!inventory.has(path), `test or CI-only source must be omitted: ${path}`)
+  assert.ok(!tooling.has('apps/desktop/scripts/verify-macos-signature.mjs'))
 })
 
 test('packages an independently rebuildable source archive with an adjacent manifest and checksum', () => {
@@ -246,6 +257,22 @@ test('filters missing tests and their scripts while preserving production build 
     assert.equal(existsSync(join(testOutput, 'packages/a/tests/fixtures/test.pem')), true)
     assert.ok(JSON.parse(readFileSync(join(testOutput, 'package.json'))).scripts.test)
 
+    mkdirSync(join(source, 'apps/desktop/scripts'), { recursive: true })
+    writeFileSync(join(source, 'apps/desktop/package.json'), JSON.stringify({ scripts: {
+      build: 'tsx scripts/build.ts', bundle: 'tsdown', package: 'tsx scripts/package-target.ts',
+      'upload:mac:arm64': 'tsx scripts/upload-target.ts mac-arm64', test: 'vitest run',
+    } }))
+    writeFileSync(join(source, 'apps/desktop/scripts/build.ts'), 'build desktop')
+    writeFileSync(join(source, 'apps/desktop/scripts/package-target.ts'), 'package desktop')
+    writeFileSync(join(source, 'apps/desktop/scripts/upload-target.ts'), 'upload desktop')
+    const desktopOutput = join(tmp, 'desktop-output')
+    exportSource(source, desktopOutput, collectSourceFiles(source))
+    const desktopScripts = JSON.parse(readFileSync(join(desktopOutput, 'apps/desktop/package.json'))).scripts
+    assert.deepEqual(desktopScripts, { build: 'tsx scripts/build.ts', bundle: 'tsdown' })
+    assert.equal(existsSync(join(desktopOutput, 'apps/desktop/scripts/build.ts')), true)
+    assert.equal(existsSync(join(desktopOutput, 'apps/desktop/scripts/package-target.ts')), false)
+    assert.equal(existsSync(join(desktopOutput, 'apps/desktop/scripts/upload-target.ts')), false)
+
     const workspaceRoot = join(tmp, 'workspace')
     mkdirSync(join(workspaceRoot, 'packages/subprocess/subprocess-local/scripts'), { recursive: true })
     mkdirSync(join(workspaceRoot, 'packages/subprocess/subprocess-local/src'), { recursive: true })
@@ -266,6 +293,8 @@ test('default source package is buildable payload and records distinct full plug
     mkdirSync(join(root, 'packages/a/src'), { recursive: true })
     mkdirSync(join(root, 'packages/a/tests'), { recursive: true })
     mkdirSync(join(root, 'third_party/plugins/example/src'), { recursive: true })
+    mkdirSync(join(root, '.github/workflows'), { recursive: true })
+    mkdirSync(join(root, 'apps/desktop/tests/fixtures'), { recursive: true })
     writeFileSync(join(root, 'package.json'), JSON.stringify({ scripts: { build: 'tsx scripts/build.ts', test: 'vitest run' } }))
     writeFileSync(join(root, 'scripts/build.ts'), 'import { helper } from "./helper.ts"; void helper')
     writeFileSync(join(root, 'scripts/helper.ts'), 'export const helper = true')
@@ -279,6 +308,9 @@ test('default source package is buildable payload and records distinct full plug
     writeFileSync(join(root, 'third_party/plugins/sources.json'), JSON.stringify({ plugins: [{ name: 'fixture', source: 'third_party/plugins/example', version: '1.0.0', sourceSha256: 'a'.repeat(64) }] }))
     writeFileSync(join(root, 'third_party/plugins/example/package.json'), '{}')
     writeFileSync(join(root, 'third_party/plugins/example/src/index.ts'), 'plugin')
+    writeFileSync(join(root, '.github/workflows/release.yml'), 'workflow')
+    writeFileSync(join(root, 'apps/desktop/tests/fixtures/windows-acp-smoke.mjs'), 'fixture')
+    writeFileSync(join(root, 'scripts/test-only.mjs'), 'test-only')
     const minimal = packageSource({ root, version: '1.0.0' })
     const testBuild = packageSource({ root, version: '1.0.1', withTests: true })
     const manifest = JSON.parse(readFileSync(minimal.manifest, 'utf8'))
@@ -292,6 +324,13 @@ test('default source package is buildable payload and records distinct full plug
     assert.match(entries, /scripts\/config\.d\.ts/)
     assert.doesNotMatch(entries, /scripts\/release\.ts/)
     assert.doesNotMatch(entries, /packages\/a\/tests/)
+    assert.doesNotMatch(entries, /\.github\/workflows/)
+    assert.doesNotMatch(entries, /apps\/desktop\/tests\/fixtures/)
+    assert.doesNotMatch(entries, /scripts\/test-only\.mjs/)
+    const archivedReadme = execFileSync('tar', ['-xOzf', minimal.archive, 'dsh-source-1.0.0/README.md'], { encoding: 'utf8' })
+    assert.match(archivedReadme, /pnpm build:plugins/u)
+    assert.match(archivedReadme, /GitHub repository/u)
+    assert.equal(manifest.files.some(file => file.path === 'README.md'), true)
     assert.match(entries, /packages\/a\/SKILL\.md/)
   } finally { rmSync(root, { recursive: true, force: true }) }
 })

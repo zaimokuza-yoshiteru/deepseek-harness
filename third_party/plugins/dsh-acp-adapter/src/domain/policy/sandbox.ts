@@ -16,6 +16,7 @@ export type AcpSandboxMode = 'read-only' | 'workspace-write' | 'danger-full-acce
 export interface AcpSpawnPlan {
   readonly argv: string[]
   readonly env: Record<string, string>
+  readonly windowsVerbatimArguments?: boolean
   readonly mode: 'danger-full-access'
   readonly confined: null
   readonly confinedRoot: null
@@ -40,6 +41,7 @@ export interface AcpSpawnPlanOptions {
   readonly workspaceRoot?: string
   readonly argv: readonly string[]
   readonly env: Record<string, string>
+  readonly windowsVerbatimArguments?: boolean
 }
 
 /** 生成原生启动计划；不包装 argv，也不重定向 Agent data home。 */
@@ -56,6 +58,7 @@ export function buildAcpSpawnPlan(options: AcpSpawnPlanOptions): AcpSpawnPlan {
   return {
     argv: [...options.argv],
     env: { ...options.env },
+    ...(options.windowsVerbatimArguments === true ? { windowsVerbatimArguments: true } : {}),
     mode: options.mode,
     confined: null,
     confinedRoot: null,

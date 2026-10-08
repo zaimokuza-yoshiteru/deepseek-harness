@@ -73,6 +73,7 @@ jobs:
           path: |
             apps/desktop/.desktop-build/targets/${{ matrix.target }}/artifacts/*.zip
             apps/desktop/.desktop-build/targets/${{ matrix.target }}/artifacts/standard-user-*.json
+            .artifacts/acp-windows-smoke/result.json
           if-no-files-found: error
           compression-level: 0
       - name: Upload macOS GUI startup evidence

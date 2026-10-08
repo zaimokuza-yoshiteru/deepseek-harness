@@ -55,7 +55,7 @@ export class DesktopUpdateCoordinator {
     private readonly currentVersion: () => string = () => app.getVersion(),
     private readonly downloadResult?: (success: boolean, reason?: string) => void,
   ) {
-    if (updater === autoUpdater) {
+    if (updater === autoUpdater && enabled()) {
       // electron-updater omits this internal transport property from its public declarations.
       // Real-Electron qualification exercises the pinned dependency integration.
       const transportOwner = updater as AppUpdater & { httpExecutor: DesktopUpdateHttpExecutor }

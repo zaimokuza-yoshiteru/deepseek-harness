@@ -50,7 +50,8 @@ export function quoteArg(argument: string): string {
  * @param args - remaining argv entries.
  * @returns joined Win32 command line.
  */
-export function buildCommandLine(program: string, args: readonly string[]): string {
+export function buildCommandLine(program: string, args: readonly string[], windowsVerbatimArguments = false): string {
+  if (windowsVerbatimArguments) return [program, ...args].join(' ')
   return [program, ...args].map(quoteArg).join(' ')
 }
 
@@ -76,6 +77,8 @@ interface ProcessSpawnOptions {
   args: readonly string[]
   /** Existing child working directory. */
   cwd: string
+  /** Args already escaped for cmd.exe; preserve them exactly in CreateProcess. */
+  windowsVerbatimArguments?: boolean
 }
 
 /** Ordinary process creation inputs used by the local Win32 runner. */
@@ -555,7 +558,7 @@ export function spawnCurrentTokenJobProcess(
   api: CurrentTokenProcessBindings,
   options: CurrentTokenProcessSpawnOptions,
 ): SpawnedJobProcess {
-  const commandLine = buildCommandLine(options.command, options.args)
+  const commandLine = buildCommandLine(options.command, options.args, options.windowsVerbatimArguments)
   const environment = encodeWindowsEnvironment(options.env)
   return spawnJobProcess(api, options, () => targetCarrierHandles(api, options.stdio), 'CreateProcessW', (startupInfo, processInfo) =>
     api.createProcessW(

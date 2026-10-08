@@ -538,18 +538,25 @@ describe('RightbarSeat presentation', () => {
     expect(h.instance.getSnapshot()).toBe(stored)
   })
 
-  it('collapses a normal panel that cannot fit without clearing records or reopening on growth', async () => {
-    const h = await mountSeat()
+  it('opens a collapsed panel fullscreen when normal columns cannot fit, then returns to its width', async () => {
+    const h = await mountSeat(1100, false)
     const tab = h.open()
     const signal = h.bodies.get(tab.id)!.tab.signal
-    h.view.update({ width: 420, viewportWidth: 900, canShow: false })
-    expect(h.layout().expanded).toBe(false)
+    expect(h.layout().expanded).toBe(true)
+    expect(h.layout().mode).toBe('push')
+    expect(element(h.view.container, '[data-sidebar-right-panel]').style.width).toBe('100vw')
+    expect(h.frame.openRightbar).toHaveBeenLastCalledWith(false, true)
     expect(h.layout().tabs[tab.id]).toBeDefined()
     expect(signal.aborted).toBe(false)
-    const stored = h.instance.getSnapshot()
-    h.view.update({ width: 420, viewportWidth: 1440, canShow: true })
-    expect(h.instance.getSnapshot()).toBe(stored)
-    expect(h.layout().expanded).toBe(false)
+    const opened = h.instance.getSnapshot()
+    h.view.update({ width: 420, viewportWidth: 1100, canShow: true })
+    expect(h.layout().expanded).toBe(true)
+    expect(h.layout().mode).toBe('push')
+    expect(element(h.view.container, '[data-sidebar-right-panel]').style.width).toBe('420px')
+    expect(h.frame.openRightbar).toHaveBeenLastCalledWith(true, false)
+    expect(h.instance.getSnapshot()).toBe(opened)
+    expect(h.layout().tabs[tab.id]).toBeDefined()
+    expect(signal.aborted).toBe(false)
   })
 })
 

@@ -388,6 +388,7 @@ export class AcpClientConnection {
         argv,
         cwd: spec.cwd,
         env: spec.spawnPlan !== undefined ? spec.spawnPlan.env : spec.env,
+        ...(spec.spawnPlan?.windowsVerbatimArguments === true ? { windowsVerbatimArguments: true } : {}),
         subprocess: spec.subprocess,
       },
       options,

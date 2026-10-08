@@ -18,6 +18,43 @@ const MOCK_AGENT_PATH = path.join(
 )
 
 describe('ACP profile route launch contract', () => {
+  it('launches a relative executable path with spaces through the native profile probe', async () => {
+    const relativeBase = process.platform === 'win32' ? process.cwd() : os.tmpdir()
+    const root = fs.mkdtempSync(path.join(relativeBase, '.tmp-acp-relative-command-'))
+    const directory = path.join(root, 'Agent Tools (local) & test')
+    fs.mkdirSync(directory)
+    const executable = path.join(directory, process.platform === 'win32' ? 'node.exe' : 'node')
+    let adapter: AcpProfileAdapter | undefined
+    try {
+      fs.copyFileSync(process.execPath, executable, fs.constants.COPYFILE_FICLONE)
+      fs.chmodSync(executable, 0o700)
+      const relativeExecutable = path.relative(relativeBase, executable)
+      const command = relativeExecutable.startsWith('..')
+        ? relativeExecutable
+        : `.${path.sep}${relativeExecutable}`
+      const config = acpSettingsSchema({
+        agents: {
+          'relative-path-test': {
+            name: 'Relative path test',
+            command,
+            args: [MOCK_AGENT_PATH],
+            env: { MOCK_SCENARIO: 'happy', MOCK_LOG: path.join(root, 'agent.log') },
+          },
+        },
+      }).agents['relative-path-test']!
+      const subprocess = (await sharedTestSubprocess()).seam
+      adapter = new AcpProfileAdapter('relative-path-test', () => config, { ok: true, seam: subprocess }, undefined, {
+        begin: async () => undefined,
+        settle: async () => undefined,
+        read: async () => undefined,
+      })
+      expect((await adapter.listModels('acp-relative-path-test')).length).toBeGreaterThan(0)
+    } finally {
+      await adapter?.close()
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('saves and launches an executable path containing spaces and shell punctuation without shell parsing', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-acp-command-path-'))
     const directory = path.join(root, 'Agent Tools (local) & test')

@@ -10,6 +10,7 @@ import type { AcpSubprocessHandle, SubprocessSeam } from '../../runtime/process/
 import { stopSubprocess } from '../../runtime/process/cleanup.ts'
 import { finished } from 'node:stream/promises'
 import type { AcpMcpLease } from '../../runtime/session/mcp-lease.ts'
+import { prepareAcpCommandLaunch } from '../../runtime/process/command-launch.ts'
 
 export const DEVIN_MCP_NAME = 'dsh'
 
@@ -95,8 +96,16 @@ export async function prepareDevinMcp({
         const timer = setTimeout(() => abort.abort(), 10_000)
         let handle: AcpSubprocessHandle
         try {
+          const launch = await prepareAcpCommandLaunch(
+            subprocess,
+            [command, ...prefix, 'mcp', ...parameters],
+            cwd,
+            env,
+            AbortSignal.any([abort.signal, lease.signal]),
+          )
           handle = subprocess.spawn({
-            argv: [command, ...prefix, 'mcp', ...parameters],
+            argv: launch.argv,
+            ...(launch.windowsVerbatimArguments === true ? { windowsVerbatimArguments: true } : {}),
             cwd,
             env,
             graceMs: 500,

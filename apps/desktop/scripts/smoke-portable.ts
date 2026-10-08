@@ -226,6 +226,26 @@ try {
     const acpResult = await acpRpc.json() as { result: { ok: boolean; value?: { providers: unknown[] } } }
     assert.equal(acpResult.result.ok, true, JSON.stringify(acpResult))
     assert.ok(Array.isArray(acpResult.result.value?.providers), 'ACP health must execute successfully')
+    if (target === 'win-x64') {
+      const evidence = join(process.cwd(), '.artifacts', 'acp-windows-smoke', 'result.json')
+      const primaryNode = join(packagedResources, 'runtime', 'primary-runtime', 'dependencies', 'node', 'bin', 'node.exe')
+      const acpSmoke = spawn(runtime.node, [
+        '--expose-internals',
+        join(import.meta.dirname, '../tests/fixtures/packaged-acp-launch-smoke.mjs'),
+        primaryNode,
+        runtime.dsh,
+        paths.profile,
+        evidence,
+      ], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: 'inherit' })
+      const [acpSmokeCode, acpSmokeSignal] = await once(acpSmoke, 'exit')
+      assert.equal(acpSmokeSignal, null)
+      assert.equal(acpSmokeCode, 0, 'Packaged ACP must spawn and handshake through PATH and spaced executable paths')
+      const acpSmokeEvidence = JSON.parse(readFileSync(evidence, 'utf8')) as {
+        cases: Array<{ id: string; methods: string[]; argvPreserved: boolean }>
+      }
+      assert.deepEqual(acpSmokeEvidence.cases.map(item => item.id), ['bare-exe', 'bare-cmd', 'relative-spaces', 'absolute-spaces'])
+      assert.ok(acpSmokeEvidence.cases.every(item => item.argvPreserved && item.methods.includes('initialize') && item.methods.includes('session/new')))
+    }
   }
   await assertOfficeState('unselected')
   await assertBundles()

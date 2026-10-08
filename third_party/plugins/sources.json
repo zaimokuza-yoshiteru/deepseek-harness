@@ -21,12 +21,13 @@
           "Import the upstream v0.2.0-rc.2.1 runtime and regression-test delta while retaining offline registry, source delivery, and host-integration adaptations.",
           "Import official v0.2.0-rc.2.7 runtime and executable regression-test updates through the exact release commit while retaining DSH 0.2.0-rc.2 peers, offline registry, local host-checkout and source-delivery adjustments. Omit ordinary upstream docs/workflows and CI-only Windows scripts; retain runtime and unit coverage.",
           "Bind E2E mock-process and source-probe paths to the exported test root and explicit DSH_UPSTREAM_CHECKOUT, removing cwd assumptions in integrated-host runs.",
-          "Make the native/mock E2E fixture paths independent of process cwd; verify zoom at 200% using computed root zoom and actual rendered-height ratio while retaining recovery focus, bounds and scroll assertions."
+          "Make the native/mock E2E fixture paths independent of process cwd; verify zoom at 200% using computed root zoom and actual rendered-height ratio while retaining recovery focus, bounds and scroll assertions.",
+          "Resolve Windows ACP commands through PATH/PATHEXT and wrap CMD/BAT shims using pinned cross-spawn; preserve escaped arguments through the managed Windows Job runner and native process launch."
         ]
       },
       "sourceIncludesLocalChanges": true,
-      "sourceSha256": "a1b19e43c3c63e3c9933f864e67a2e9abba67113db15cdd4a5d74fde6aac498d",
-      "fileCount": 370,
+      "sourceSha256": "866ed658fc0b8ffea79ae460bd4099bbc8de087ce360e84309f6ef1250c23230",
+      "fileCount": 371,
       "retainedDocuments": [
         {
           "path": "LICENSE",
@@ -140,11 +141,12 @@
           "Build alpha.10 with locked DSH 0.2.0-rc.2 development packages while retaining exact 0.1.7-rc.2 peer compatibility; derive generator target from its pinned dependency. Verify the production Host lifecycle, HMR-backed settings persistence and package; Restore the updated ACP adapter in the desktop bundle and retain native ACP bridge integration coverage.",
           "Pass the real visible tool schemas to the updated ACP bridge in all integration call sites; verify discovery, temporary searches, revision-checked saves and ask/auto decisions against the new adapter.",
           "Preserve selected Atlassian mention labels in a canonical reference envelope while retaining complete model-facing locators; pair with the desktop user-text projector so submitted references render as @ labels without changing ACP prompt admission or session schemas.",
-          "Fix synchronous HTTP request-construction failures without a late timeout callback; preserve complete reference wires in capped queue previews and atomic chip editing, with browser regression coverage."
+          "Fix synchronous HTTP request-construction failures without a late timeout callback; preserve complete reference wires in capped queue previews and atomic chip editing, with browser regression coverage.",
+          "Align Kanban controls, table headings and card details with DSH theme typography; limit selected-tab weight to 500 and remove duplicate configuration and query-retry actions while retaining table resizing and reference behavior."
         ]
       },
       "sourceIncludesLocalChanges": true,
-      "sourceSha256": "ae46fea24a723ebffee163011d637a037fc53ed08faa404b47a3aca1aac65eeb",
+      "sourceSha256": "2621d8f02edd42ac7127f687fd92618f3cb97a1ad44744eef1f0d1813c52c9fa",
       "fileCount": 67,
       "retainedDocuments": [],
       "excluded": [

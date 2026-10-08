@@ -75,10 +75,12 @@ export interface SubprocessStdio {
  * request/spec split is the owning template).
  */
 export interface SubprocessSpawnSpec {
-  /** Executable and arguments; `argv[0]` is the program. Never shell-interpreted here. */
+  /** Executable and arguments; `argv[0]` is the program. */
   argv: readonly string[]
   /** Working directory for the child. */
   cwd: string
+  /** Preserve an already escaped Windows command line unchanged; set only for a prepared cmd.exe shim. */
+  windowsVerbatimArguments?: boolean | undefined
   /** Per-stream stdio dispositions. */
   stdio: SubprocessStdio
   /**

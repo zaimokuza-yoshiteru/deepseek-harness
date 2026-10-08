@@ -2,6 +2,7 @@ import koffi from 'koffi'
 import { describe, expect, it, vi } from 'vitest'
 import {
   Win32Error,
+  buildCommandLine,
   drainPipe,
   spawnInheritedJobProcess,
   spawnPipedProcess,
@@ -11,6 +12,13 @@ import { processInformationType, startupInfoType } from '../src/ffi.ts'
 import type { NativePtr, Win32ProcessBindings } from '../src/index.ts'
 
 const PVOID = koffi.pointer('void')
+
+it('keeps cross-spawn cmd.exe escaping intact for native CreateProcess command lines', () => {
+  const command = 'C:\\Windows\\System32\\cmd.exe'
+  const args = ['/d', '/s', '/c', '"C:\\Program Files\\Devin & Tools\\devin.cmd" "acp" "value^&percent%%"']
+  expect(buildCommandLine(command, args, true)).toBe([command, ...args].join(' '))
+  expect(buildCommandLine(command, args)).not.toBe([command, ...args].join(' '))
+})
 
 function inheritedApi(overrides: Partial<Win32ProcessBindings> = {}): {
   api: Win32ProcessBindings

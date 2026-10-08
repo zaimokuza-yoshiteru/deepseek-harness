@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import electronUpdater from 'electron-updater'
 import type { AppUpdater } from 'electron-updater'
 import { DESKTOP_HOST_PROTOCOL_VERSION } from '../src/host-protocol.ts'
 import { parseDesktopRelease } from '../src/release.ts'
@@ -8,9 +9,17 @@ import { DesktopUpdatePreparationError } from '../src/update-error.ts'
 import { zh } from '../src/locale.ts'
 
 vi.mock('electron', () => ({ app: { isPackaged: false } }))
-vi.mock('electron-updater', () => ({
-  default: { autoUpdater: { autoDownload: true, autoInstallOnAppQuit: true } },
-}))
+vi.mock('electron-updater', async () => {
+  const { EventEmitter: MockEventEmitter } = await import('node:events')
+  const autoUpdater = Object.assign(new MockEventEmitter(), {
+    autoDownload: true,
+    autoInstallOnAppQuit: true,
+    checkForUpdates: vi.fn(async () => ({ isUpdateAvailable: false, updateInfo: { version: '1.0.0' } })),
+    downloadUpdate: vi.fn(async () => []),
+    quitAndInstall: vi.fn(),
+  })
+  return { default: { autoUpdater } }
+})
 
 const { DesktopUpdateCoordinator } = await import('../src/update-coordinator.ts')
 
@@ -45,7 +54,10 @@ describe('desktop release metadata', () => {
 })
 
 const coordinators: InstanceType<typeof DesktopUpdateCoordinator>[] = []
-afterEach(() => { for (const item of coordinators.splice(0)) item.dispose() })
+afterEach(() => {
+  for (const item of coordinators.splice(0)) item.dispose()
+  vi.unstubAllEnvs()
+})
 
 function fixture() {
   const events = new EventEmitter()
@@ -73,6 +85,33 @@ function fixture() {
 }
 
 describe('desktop update coordinator', () => {
+  it('does not construct the real updater transport for a disabled intranet feed', async () => {
+    vi.stubEnv('DSH_DESKTOP_UPDATE_HTTP_IDLE_TIMEOUT_MS', 'not-a-timeout')
+    const updater = electronUpdater.autoUpdater as AppUpdater & { httpExecutor?: unknown }
+    delete updater.httpExecutor
+    const states: DesktopUpdateState[] = []
+    const coordinator = new DesktopUpdateCoordinator(
+      (state) => { states.push(state); return state }, async () => true, updater, () => false,
+    )
+    coordinators.push(coordinator)
+
+    expect(updater.httpExecutor).toBeUndefined()
+    await expect(coordinator.check()).resolves.toMatchObject({ phase: 'error', failedOperation: 'check' })
+    expect(updater.checkForUpdates).not.toHaveBeenCalled()
+    expect(updater.httpExecutor).toBeUndefined()
+    expect(states).toHaveLength(0)
+  })
+
+  it('continues validating the updater transport timeout when its real feed is enabled', () => {
+    vi.stubEnv('DSH_DESKTOP_UPDATE_HTTP_IDLE_TIMEOUT_MS', 'not-a-timeout')
+    const updater = electronUpdater.autoUpdater as AppUpdater & { httpExecutor?: unknown }
+    delete updater.httpExecutor
+
+    expect(() => new DesktopUpdateCoordinator(() => ({ phase: 'idle' }), async () => true, updater, () => true))
+      .toThrow('desktop update: HTTP idle timeout must be an integer from 1000 through 2147483647')
+    expect(updater.httpExecutor).toBeUndefined()
+  })
+
   it('keeps safe preparation diagnostics separate and clears them on an explicit retry', async () => {
     const f = fixture()
     await f.coordinator.check()
