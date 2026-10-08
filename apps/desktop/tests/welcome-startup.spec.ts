@@ -77,8 +77,12 @@ vi.mock('electron', () => ({
     static getAllWindows() { return [] }
     once(name: string, callback: () => void) { if (name === 'ready-to-show') this.ready = callback; return this }
     on() { return this }
+    off() { return this }
     isDestroyed() { return false }
     isMinimized() { return false }
+    isMaximized() { return false }
+    isFullScreen() { return false }
+    getNormalBounds() { return { x: 0, y: 0, width: 1280, height: 820 } }
     restore = vi.fn()
     focus = state.focusWorkspace
     moveTop = state.moveTopWorkspace
@@ -87,6 +91,7 @@ vi.mock('electron', () => ({
     showInactive = state.showInactiveWorkspace
     async loadURL(url: string) { state.contents = this.webContents; await state.loadWorkspace(url); this.ready?.() }
   },
+  screen: { getAllDisplays: () => [{ workArea: { x: 0, y: 0, width: 1440, height: 900 } }] },
   net: { fetch: vi.fn() },
   nativeTheme: state.nativeTheme,
   session: { defaultSession: {
