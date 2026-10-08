@@ -33,7 +33,7 @@ async function requiredRuntimeVersion(preparedRuntime?: string, preparedRuntimeV
   const { createElectronBuilderConfig } = await import('../scripts/electron-builder-config.mjs')
   const config = createElectronBuilderConfig(ENVIRONMENT, 'win32', 'x64', preparedRuntime, preparedRuntimeVersion)
   expect(config.extraResources.some(resource => resource.to === 'dsh')).toBe(true)
-  expect(config.files.some(file => typeof file !== 'string' && file.to === 'dsh')).toBe(false)
+  expect(config.files).not.toContain('dsh')
   await config.afterPack(CONTEXT as never)
   expect(verifyDesktopRuntime.mock.calls[0]?.[0]).toBe(join('out/resources', 'dsh'))
   return verifyDesktopRuntime.mock.calls[0]?.[1]

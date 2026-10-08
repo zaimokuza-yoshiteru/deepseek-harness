@@ -170,7 +170,10 @@ async function recoverInterrupted(profile: string): Promise<void> {
     checkManagedParents(profile, files.flatMap(file => file.path.startsWith('node_modules/')
       ? [file.path.slice('node_modules/'.length)] : []))
     const transactionId = typeof value.transactionId === 'string' ? value.transactionId : undefined
-    const journal: Journal = { transactionId, committed: value.committed === true, files, created }
+    const journal: Journal = {
+      ...(transactionId === undefined ? {} : { transactionId }),
+      committed: value.committed === true, files, created,
+    }
     if (journal.committed) {
       try { cleanupCommittedBackup(backup, journal) } catch { /* Retry cleanup next startup. */ }
       continue

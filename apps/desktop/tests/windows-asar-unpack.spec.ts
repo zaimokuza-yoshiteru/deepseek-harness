@@ -194,7 +194,7 @@ it.each([true, false])('keeps the prepared runtime in resources for unsigned=%s'
     DSH_DESKTOP_WINDOWS_CER_FILE: certificate, DOWNLOAD_TEST_ORIGIN: 'https://updates.example.com', DOWNLOAD_TEST_RELEASE_ID: '0123456789abcdef0123456789abcdef',
   }, 'win32', 'x64', input.source)
   expect(config.extraResources.find(resource => resource.to === 'dsh')).toMatchObject({ from: input.source, to: 'dsh' })
-  expect(config.files.some(file => typeof file !== 'string' && file.to === 'dsh')).toBe(false)
+  expect(config.files).not.toContain('dsh')
   await mkdir(join(input.resources, 'dsh'), { recursive: true })
   await cp(input.source, join(input.resources, 'dsh'), { recursive: true })
   await config.afterPack(input.context)
@@ -246,7 +246,7 @@ it.each([[false, false], [false, true], [true, false], [true, true]])(
       : unsignedWindowsConfig('com.example.office', input.source)
     const bundledRuntime = config.extraResources.find(resource => resource.to === 'dsh')
     expect(bundledRuntime).toMatchObject({ from: input.source, to: 'dsh' })
-    expect(config.files.some(file => typeof file !== 'string' && file.to === 'dsh')).toBe(false)
+    expect(config.files).not.toContain('dsh')
     expect(config.asarUnpack).not.toContain('**/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/**/*')
   },
 )

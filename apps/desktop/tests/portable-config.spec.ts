@@ -13,8 +13,9 @@ it('configures the Windows portable package with the tray entry point and RC2 di
   expect(config.extraMetadata).toEqual({ version: '0.2.0-rc.2.1' })
   expect(config.extraResources).toContainEqual({ from: 'resources/tray-windows.ico', to: 'tray.ico' })
   expect(config.extraResources.some(resource => resource.to === 'dsh')).toBe(true)
-  expect(config.files.some(file => typeof file !== 'string' && file.to === 'dsh')).toBe(false)
-  expect(config.extraResources.some(resource => resource.to === 'plugin-seed')).toBe(false)
+  expect(config.files).not.toContain('dsh')
+  const resourceDestinations: readonly string[] = config.extraResources.map(resource => resource.to)
+  expect(resourceDestinations).not.toContain('plugin-seed')
 })
 
 it('rejects a portable version whose DSH base differs from delivery.json', async () => {

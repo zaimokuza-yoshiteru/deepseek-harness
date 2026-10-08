@@ -59,7 +59,7 @@ describe('desktop macOS release signature', () => {
     expect(portablePath(dshResources!.from)).toContain('/.desktop-build/targets/mac-arm64/dsh')
     const dshModules = config.extraResources.find(resource => resource.to === 'dsh/node_modules')
     expect(portablePath(dshModules!.from)).toContain('/.desktop-build/targets/mac-arm64/dsh/node_modules')
-    expect(config.files.some(file => typeof file !== 'string' && file.to === 'dsh')).toBe(false)
+    expect(config.files).not.toContain('dsh')
     expect(config.asarUnpack).toEqual(expect.arrayContaining([
       '**/*.{node,dylib,dll,so,exe}',
       '**/@vscode/ripgrep-*/bin/rg',

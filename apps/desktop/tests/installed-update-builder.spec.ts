@@ -89,7 +89,7 @@ describe('installed-update application inputs and builder configuration', () => 
         expect(config.directories.output).toBe(join(manifest, '..', versions[index]!, 'installer'))
         const dsh = join(manifest, '..', versions[index]!, 'dsh')
         expect(config.extraResources.find(resource => resource.to === 'dsh')).toMatchObject({ from: dsh, to: 'dsh' })
-        expect(config.files.some(file => typeof file !== 'string' && file.to === 'dsh')).toBe(false)
+        expect(config.files).not.toContain('dsh')
         expect(config.win.forceCodeSigning).toBe(true)
         expect(config.win.signtoolOptions.publisherName).toBe('CN=Fixture,O=Fixture,C=CN')
         expect(typeof config.win.signtoolOptions.sign).toBe('function')

@@ -38,7 +38,7 @@ export async function runCli(options: RunCliOptions = {}): Promise<void> {
           fromDefaultProfile: invocation.fromDefaultProfile,
           patchFiles: invocation.patches,
           args: invocation.args,
-          installAnchor,
+          ...(installAnchor === undefined ? {} : { installAnchor }),
           ...profileOptions,
         })
       } catch (error) {
