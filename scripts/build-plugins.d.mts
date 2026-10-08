@@ -8,15 +8,15 @@ export interface BuiltPluginRecord {
   readonly sha256: string
 }
 
-/** Bundle fields required by the Desktop release archive verifier. */
+/** Fields established by the release archive verifier; other manifest fields remain unvalidated. */
 export interface PluginBundleManifest {
   readonly name: string
   readonly version: string
-  readonly files: readonly string[]
-  readonly main?: string
-  readonly icon?: string
-  readonly exports?: Readonly<Record<string, unknown>>
-  readonly dsh: { readonly bundle: { readonly patch: string } }
+  readonly files?: unknown
+  readonly main?: unknown
+  readonly icon?: unknown
+  readonly exports?: unknown
+  readonly dsh: { readonly bundle: { readonly patch: unknown } }
 }
 
 /** Output directory for release plugin archives. */
